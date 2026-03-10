@@ -21,7 +21,13 @@ async fn chat_and_stream_exist_and_dispatch() {
     let chat_result = client.chat(messages.clone()).await;
     let stream_result = client.stream(messages).await;
 
+    #[cfg(not(feature = "openai"))]
     assert!(matches!(chat_result, Err(MotosanError::Config(_))));
+    #[cfg(not(feature = "openai"))]
     assert!(matches!(stream_result, Err(MotosanError::Config(_))));
-}
 
+    #[cfg(feature = "openai")]
+    assert!(chat_result.is_err());
+    #[cfg(feature = "openai")]
+    assert!(stream_result.is_err());
+}

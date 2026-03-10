@@ -45,4 +45,3 @@ async fn anthropic_chat_maps_response() {
 
     mock.assert_async().await;
 }
-

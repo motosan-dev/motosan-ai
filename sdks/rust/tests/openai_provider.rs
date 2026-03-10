@@ -87,4 +87,3 @@ async fn openai_stream_emits_deltas_and_done() {
 
     mock.assert_async().await;
 }
-

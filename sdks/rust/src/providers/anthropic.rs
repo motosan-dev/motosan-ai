@@ -16,7 +16,11 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    pub fn new(api_key: impl Into<String>, model: Option<String>, base_url: Option<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        model: Option<String>,
+        base_url: Option<String>,
+    ) -> Self {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
@@ -230,34 +234,32 @@ impl ProviderImpl for AnthropicProvider {
         let parsed_stream = response
             .bytes_stream()
             .eventsource()
-            .filter_map(|event| {
-                match event {
-                    Ok(event) => {
-                        let payload: Value = serde_json::from_str(&event.data).ok()?;
-                        let event_type = payload.get("type")?.as_str()?;
+            .filter_map(|event| match event {
+                Ok(event) => {
+                    let payload: Value = serde_json::from_str(&event.data).ok()?;
+                    let event_type = payload.get("type")?.as_str()?;
 
-                        match event_type {
-                            "content_block_delta" => {
-                                let text = payload
-                                    .get("delta")
-                                    .and_then(|delta| delta.get("text"))
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_string();
-                                Some(crate::types::StreamEvent {
-                                    content: text,
-                                    done: false,
-                                })
-                            }
-                            "message_stop" => Some(crate::types::StreamEvent {
-                                content: String::new(),
-                                done: true,
-                            }),
-                            _ => None,
+                    match event_type {
+                        "content_block_delta" => {
+                            let text = payload
+                                .get("delta")
+                                .and_then(|delta| delta.get("text"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            Some(crate::types::StreamEvent {
+                                content: text,
+                                done: false,
+                            })
                         }
+                        "message_stop" => Some(crate::types::StreamEvent {
+                            content: String::new(),
+                            done: true,
+                        }),
+                        _ => None,
                     }
-                    Err(_) => None,
                 }
+                Err(_) => None,
             });
 
         Ok(Box::pin(parsed_stream))
