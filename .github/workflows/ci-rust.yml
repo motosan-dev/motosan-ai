@@ -1,0 +1,31 @@
+name: Rust CI
+
+on:
+  pull_request:
+    paths:
+      - "sdks/rust/**"
+      - ".github/workflows/ci-rust.yml"
+  push:
+    branches: [main]
+    paths:
+      - "sdks/rust/**"
+      - ".github/workflows/ci-rust.yml"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cargo fmt
+        run: cargo fmt --all -- --check
+      - name: Cargo clippy
+        run: cargo clippy --all-features --all-targets -- -D warnings
+      - name: Cargo test
+        run: cargo test --all-features
+
