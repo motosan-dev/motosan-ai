@@ -1,0 +1,25 @@
+[package]
+name = "motosan-ai"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust SDK for multi-provider AI chat"
+repository = "https://github.com/motosan-dev/motosan-ai"
+
+[features]
+default = []
+anthropic = ["dep:reqwest", "dep:serde_json", "dep:eventsource-stream", "dep:tokio-stream"]
+openai = ["dep:reqwest", "dep:serde_json", "dep:eventsource-stream", "dep:tokio-stream"]
+minimax = ["dep:reqwest", "dep:serde_json", "dep:eventsource-stream", "dep:tokio-stream"]
+full = ["anthropic", "openai", "minimax"]
+
+[dependencies]
+async-trait = "0.1"
+futures-core = "0.3"
+serde = { version = "1", features = ["derive"] }
+
+reqwest = { version = "0.12", optional = true, features = ["json", "stream", "rustls-tls"] }
+serde_json = { version = "1", optional = true }
+eventsource-stream = { version = "0.2", optional = true }
+tokio-stream = { version = "0.1", optional = true }
+
