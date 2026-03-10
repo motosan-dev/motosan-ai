@@ -1,28 +1,19 @@
-use std::fmt::{Display, Formatter};
+use thiserror::Error;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum MotosanError {
+    #[error("auth error: {0}")]
     Auth(String),
+    #[error("rate limit error: {0}")]
     RateLimit(String),
+    #[error("invalid request: {0}")]
     InvalidRequest(String),
+    #[error("config error: {0}")]
     Config(String),
+    #[error("provider error: {0}")]
     ProviderError(String),
+    #[error("network error: {0}")]
     Network(String),
+    #[error("stream error: {0}")]
     Stream(String),
 }
-
-impl Display for MotosanError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Auth(message) => write!(f, "auth error: {message}"),
-            Self::RateLimit(message) => write!(f, "rate limit error: {message}"),
-            Self::InvalidRequest(message) => write!(f, "invalid request: {message}"),
-            Self::Config(message) => write!(f, "config error: {message}"),
-            Self::ProviderError(message) => write!(f, "provider error: {message}"),
-            Self::Network(message) => write!(f, "network error: {message}"),
-            Self::Stream(message) => write!(f, "stream error: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for MotosanError {}

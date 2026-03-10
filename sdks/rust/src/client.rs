@@ -28,16 +28,12 @@ impl Client {
     }
 
     pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
-        self.chat_with(ChatRequest {
-            messages,
-            model: self.model.clone(),
-            system: None,
-            temperature: None,
-            max_tokens: None,
-            tools: None,
-            provider_options: None,
-        })
-        .await
+        let mut request_builder = ChatRequest::builder().messages(messages);
+        if let Some(model) = &self.model {
+            request_builder = request_builder.model(model.clone());
+        }
+
+        self.chat_with(request_builder.build()).await
     }
 
     pub async fn chat_with(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -45,16 +41,12 @@ impl Client {
     }
 
     pub async fn stream(&self, messages: Vec<Message>) -> Result<BoxStream, MotosanError> {
-        self.dispatch_stream(ChatRequest {
-            messages,
-            model: self.model.clone(),
-            system: None,
-            temperature: None,
-            max_tokens: None,
-            tools: None,
-            provider_options: None,
-        })
-        .await
+        let mut request_builder = ChatRequest::builder().messages(messages);
+        if let Some(model) = &self.model {
+            request_builder = request_builder.model(model.clone());
+        }
+
+        self.dispatch_stream(request_builder.build()).await
     }
 
     async fn dispatch_chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -62,52 +54,37 @@ impl Client {
             Provider::Anthropic => {
                 #[cfg(feature = "anthropic")]
                 {
-                    use crate::providers::anthropic::AnthropicProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        AnthropicProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.chat(request).await;
+                    return self.build_anthropic_provider().chat(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "anthropic feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("anthropic"));
                 }
             }
             Provider::OpenAI => {
                 #[cfg(feature = "openai")]
                 {
-                    use crate::providers::openai::OpenAIProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.chat(request).await;
+                    return self.build_openai_provider().chat(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "openai feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("openai"));
                 }
             }
             Provider::Minimax => {
                 #[cfg(feature = "minimax")]
                 {
-                    use crate::providers::minimax::MinimaxProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        MinimaxProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.chat(request).await;
+                    return self.build_minimax_provider().chat(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "minimax feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("minimax"));
                 }
             }
         }
@@ -118,55 +95,76 @@ impl Client {
             Provider::Anthropic => {
                 #[cfg(feature = "anthropic")]
                 {
-                    use crate::providers::anthropic::AnthropicProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        AnthropicProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.stream(request).await;
+                    return self.build_anthropic_provider().stream(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "anthropic feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("anthropic"));
                 }
             }
             Provider::OpenAI => {
                 #[cfg(feature = "openai")]
                 {
-                    use crate::providers::openai::OpenAIProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.stream(request).await;
+                    return self.build_openai_provider().stream(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "openai feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("openai"));
                 }
             }
             Provider::Minimax => {
                 #[cfg(feature = "minimax")]
                 {
-                    use crate::providers::minimax::MinimaxProvider;
                     use crate::providers::ProviderImpl;
-                    let provider =
-                        MinimaxProvider::new(self.api_key.clone(), self.model.clone(), None);
-                    return provider.stream(request).await;
+                    return self.build_minimax_provider().stream(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
                     let _ = request;
-                    return Err(MotosanError::Config(
-                        "minimax feature is not enabled".to_string(),
-                    ));
+                    return Err(Self::feature_not_enabled("minimax"));
                 }
             }
         }
+    }
+
+    #[cfg(any(
+        not(feature = "anthropic"),
+        not(feature = "openai"),
+        not(feature = "minimax")
+    ))]
+    fn feature_not_enabled(provider: &str) -> MotosanError {
+        MotosanError::Config(format!("{provider} feature is not enabled"))
+    }
+
+    #[cfg(feature = "anthropic")]
+    fn build_anthropic_provider(&self) -> crate::providers::anthropic::AnthropicProvider {
+        crate::providers::anthropic::AnthropicProvider::new(
+            self.api_key.clone(),
+            self.model.clone(),
+            None,
+        )
+    }
+
+    #[cfg(feature = "openai")]
+    fn build_openai_provider(&self) -> crate::providers::openai::OpenAIProvider {
+        crate::providers::openai::OpenAIProvider::new(
+            self.api_key.clone(),
+            self.model.clone(),
+            None,
+        )
+    }
+
+    #[cfg(feature = "minimax")]
+    fn build_minimax_provider(&self) -> crate::providers::minimax::MinimaxProvider {
+        crate::providers::minimax::MinimaxProvider::new(
+            self.api_key.clone(),
+            self.model.clone(),
+            None,
+        )
     }
 }
 

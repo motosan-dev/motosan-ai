@@ -1,7 +1,7 @@
 use crate::error::MotosanError;
-use crate::providers::ProviderImpl;
+use crate::providers::{extract_error_message, map_http_error, ChatResponseBuilder, ProviderImpl};
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, StopReason, Usage};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -28,23 +28,47 @@ impl AnthropicProvider {
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
         }
     }
+
+    fn endpoint(&self) -> String {
+        format!("{}/v1/messages", self.base_url)
+    }
 }
 
-#[async_trait]
-impl ProviderImpl for AnthropicProvider {
-    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
-        let explicit_system = req.system.clone();
+struct AnthropicRequestBuilder {
+    req: ChatRequest,
+    default_model: String,
+    stream: bool,
+}
+
+impl AnthropicRequestBuilder {
+    fn new(req: ChatRequest, default_model: String) -> Self {
+        Self {
+            req,
+            default_model,
+            stream: false,
+        }
+    }
+
+    fn stream(mut self, stream: bool) -> Self {
+        self.stream = stream;
+        self
+    }
+
+    fn build(self) -> Value {
+        let model = self
+            .req
+            .model
+            .clone()
+            .unwrap_or_else(|| self.default_model.clone());
+        let explicit_system = self.req.system.clone();
         let mut extracted_systems = Vec::new();
         let mut messages = Vec::new();
 
-        for message in &req.messages {
+        for message in &self.req.messages {
             match message.role {
-                crate::types::Role::System => extracted_systems.push(message.content.clone()),
-                crate::types::Role::User => {
-                    messages.push(json!({"role": "user", "content": message.content}))
-                }
-                crate::types::Role::Assistant => {
+                Role::System => extracted_systems.push(message.content.clone()),
+                Role::User => messages.push(json!({"role": "user", "content": message.content})),
+                Role::Assistant => {
                     messages.push(json!({"role": "assistant", "content": message.content}))
                 }
             }
@@ -63,16 +87,19 @@ impl ProviderImpl for AnthropicProvider {
             "messages": messages,
         });
 
+        if self.stream {
+            body["stream"] = json!(true);
+        }
         if let Some(system_prompt) = system {
             body["system"] = json!(system_prompt);
         }
-        if let Some(temperature) = req.temperature {
+        if let Some(temperature) = self.req.temperature {
             body["temperature"] = json!(temperature);
         }
-        if let Some(max_tokens) = req.max_tokens {
+        if let Some(max_tokens) = self.req.max_tokens {
             body["max_tokens"] = json!(max_tokens);
         }
-        if let Some(provider_options) = req.provider_options {
+        if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
                 for (key, value) in map {
                     body[key] = value.clone();
@@ -80,9 +107,18 @@ impl ProviderImpl for AnthropicProvider {
             }
         }
 
+        body
+    }
+}
+
+#[async_trait]
+impl ProviderImpl for AnthropicProvider {
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        let body = AnthropicRequestBuilder::new(req, self.model.clone()).build();
+
         let response = self
             .http
-            .post(format!("{}/v1/messages", self.base_url))
+            .post(self.endpoint())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
@@ -97,18 +133,8 @@ impl ProviderImpl for AnthropicProvider {
             .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
 
         if !status.is_success() {
-            let message = payload
-                .get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
-                .unwrap_or("anthropic request failed")
-                .to_string();
-            return Err(match status.as_u16() {
-                401 => MotosanError::Auth(message),
-                429 => MotosanError::RateLimit(message),
-                400 => MotosanError::InvalidRequest(message),
-                _ => MotosanError::ProviderError(message),
-            });
+            let message = extract_error_message(&payload, "anthropic request failed");
+            return Err(map_http_error(status.as_u16(), message));
         }
 
         let content = payload
@@ -129,18 +155,16 @@ impl ProviderImpl for AnthropicProvider {
             .unwrap_or("claude-sonnet-4-5")
             .to_string();
 
-        let usage = Usage {
-            input_tokens: payload
-                .get("usage")
-                .and_then(|usage| usage.get("input_tokens"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
-            output_tokens: payload
-                .get("usage")
-                .and_then(|usage| usage.get("output_tokens"))
-                .and_then(Value::as_u64)
-                .unwrap_or(0) as u32,
-        };
+        let input_tokens = payload
+            .get("usage")
+            .and_then(|usage| usage.get("input_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
+        let output_tokens = payload
+            .get("usage")
+            .and_then(|usage| usage.get("output_tokens"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32;
 
         let stop_reason = match payload.get("stop_reason").and_then(Value::as_str) {
             Some("end_turn") => StopReason::EndTurn,
@@ -150,66 +174,22 @@ impl ProviderImpl for AnthropicProvider {
             _ => StopReason::Other,
         };
 
-        Ok(ChatResponse {
-            content,
-            model,
-            usage,
-            stop_reason,
-        })
+        Ok(ChatResponseBuilder::new("claude-sonnet-4-5")
+            .content(content)
+            .model(model)
+            .usage(input_tokens, output_tokens)
+            .stop_reason(stop_reason)
+            .build())
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
-        let explicit_system = req.system.clone();
-        let mut extracted_systems = Vec::new();
-        let mut messages = Vec::new();
-
-        for message in &req.messages {
-            match message.role {
-                crate::types::Role::System => extracted_systems.push(message.content.clone()),
-                crate::types::Role::User => {
-                    messages.push(json!({"role": "user", "content": message.content}))
-                }
-                crate::types::Role::Assistant => {
-                    messages.push(json!({"role": "assistant", "content": message.content}))
-                }
-            }
-        }
-
-        let system = explicit_system.or_else(|| {
-            if extracted_systems.is_empty() {
-                None
-            } else {
-                Some(extracted_systems.join("\n"))
-            }
-        });
-
-        let mut body = json!({
-            "model": model,
-            "messages": messages,
-            "stream": true,
-        });
-
-        if let Some(system_prompt) = system {
-            body["system"] = json!(system_prompt);
-        }
-        if let Some(temperature) = req.temperature {
-            body["temperature"] = json!(temperature);
-        }
-        if let Some(max_tokens) = req.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
-        }
-        if let Some(provider_options) = req.provider_options {
-            if let Some(map) = provider_options.as_object() {
-                for (key, value) in map {
-                    body[key] = value.clone();
-                }
-            }
-        }
+        let body = AnthropicRequestBuilder::new(req, self.model.clone())
+            .stream(true)
+            .build();
 
         let response = self
             .http
-            .post(format!("{}/v1/messages", self.base_url))
+            .post(self.endpoint())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body)
@@ -223,12 +203,7 @@ impl ProviderImpl for AnthropicProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "anthropic stream request failed".to_string());
-            return Err(match status.as_u16() {
-                401 => MotosanError::Auth(message),
-                429 => MotosanError::RateLimit(message),
-                400 => MotosanError::InvalidRequest(message),
-                _ => MotosanError::ProviderError(message),
-            });
+            return Err(map_http_error(status.as_u16(), message));
         }
 
         let parsed_stream = response

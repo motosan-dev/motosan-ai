@@ -3,15 +3,9 @@ use motosan_ai::{ChatRequest, Message, MotosanError};
 use serde_json::json;
 
 fn sample_request() -> ChatRequest {
-    ChatRequest {
-        messages: vec![Message::user("hello")],
-        model: None,
-        system: None,
-        temperature: None,
-        max_tokens: None,
-        tools: None,
-        provider_options: None,
-    }
+    ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build()
 }
 
 #[cfg(feature = "anthropic")]
