@@ -1,6 +1,10 @@
 use crate::error::MotosanError;
 use crate::models::DEFAULT_MINIMAX_MODEL;
-use crate::providers::{extract_error_message, map_http_error, ChatResponseBuilder, ProviderImpl};
+use crate::providers::{
+    extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
+    parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
+};
+use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
 use async_trait::async_trait;
@@ -14,6 +18,7 @@ pub struct MinimaxProvider {
     api_key: String,
     model: String,
     base_url: String,
+    retry_policy: RetryPolicy,
 }
 
 impl MinimaxProvider {
@@ -27,7 +32,13 @@ impl MinimaxProvider {
             api_key: api_key.into(),
             model: model.unwrap_or_else(|| DEFAULT_MINIMAX_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.minimax.chat".to_string()),
+            retry_policy: RetryPolicy::default(),
         }
+    }
+
+    pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = retry_policy;
+        self
     }
 
     fn endpoint(&self) -> String {
@@ -106,24 +117,48 @@ impl MinimaxRequestBuilder {
 impl ProviderImpl for MinimaxProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let body = MinimaxRequestBuilder::new(req, self.model.clone()).build();
+        let mut attempt = 0;
+        let payload: Value;
+        loop {
+            let response = match self
+                .http
+                .post(self.endpoint())
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    if attempt < self.retry_policy.max_retries && is_retryable_network_error(&error)
+                    {
+                        attempt += 1;
+                        sleep_before_retry(&self.retry_policy, attempt, None).await;
+                        continue;
+                    }
+                    return Err(MotosanError::Network(error.to_string()));
+                }
+            };
 
-        let response = self
-            .http
-            .post(self.endpoint())
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| MotosanError::Network(error.to_string()))?;
+            let status = response.status();
+            let retry_after = parse_retry_after(response.headers());
+            let current_payload: Value = response
+                .json()
+                .await
+                .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
 
-        let status = response.status();
-        let payload: Value = response
-            .json()
-            .await
-            .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
+            if status.is_success() {
+                payload = current_payload;
+                break;
+            }
 
-        if !status.is_success() {
-            let message = extract_error_message(&payload, "minimax request failed");
+            if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
+                attempt += 1;
+                sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
+                continue;
+            }
+
+            let message = extract_error_message(&current_payload, "minimax request failed");
             return Err(map_http_error(status.as_u16(), message));
         }
 
@@ -178,24 +213,46 @@ impl ProviderImpl for MinimaxProvider {
         let body = MinimaxRequestBuilder::new(req, self.model.clone())
             .stream(true)
             .build();
+        let mut attempt = 0;
+        let response = loop {
+            let response = match self
+                .http
+                .post(self.endpoint())
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .json(&body)
+                .send()
+                .await
+            {
+                Ok(response) => response,
+                Err(error) => {
+                    if attempt < self.retry_policy.max_retries && is_retryable_network_error(&error)
+                    {
+                        attempt += 1;
+                        sleep_before_retry(&self.retry_policy, attempt, None).await;
+                        continue;
+                    }
+                    return Err(MotosanError::Network(error.to_string()));
+                }
+            };
 
-        let response = self
-            .http
-            .post(self.endpoint())
-            .header("authorization", format!("Bearer {}", self.api_key))
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| MotosanError::Network(error.to_string()))?;
+            let status = response.status();
+            if status.is_success() {
+                break response;
+            }
 
-        let status = response.status();
-        if !status.is_success() {
+            let retry_after = parse_retry_after(response.headers());
+            if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
+                attempt += 1;
+                sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
+                continue;
+            }
+
             let message = response
                 .text()
                 .await
                 .unwrap_or_else(|_| "minimax stream request failed".to_string());
             return Err(map_http_error(status.as_u16(), message));
-        }
+        };
 
         let parsed_stream = response
             .bytes_stream()

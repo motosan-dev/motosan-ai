@@ -92,6 +92,27 @@ match client.chat(vec![Message::user("hello")]).await {
 }
 ```
 
+## Retry Policy
+
+Retry is enabled by default for transient failures (`429`, `5xx`, timeout/connect errors).
+
+```rust
+use motosan_ai::{Client, Provider, RetryPolicy};
+
+let retry_policy = RetryPolicy::new()
+    .max_retries(3)
+    .base_delay_ms(100)
+    .max_delay_ms(2_000)
+    .jitter(true)
+    .respect_retry_after(true);
+
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key("...")
+    .retry_policy(retry_policy)
+    .build()?;
+```
+
 Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Model Maintenance (survey process)

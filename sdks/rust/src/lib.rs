@@ -2,6 +2,7 @@ pub mod client;
 pub mod error;
 pub mod models;
 pub mod providers;
+pub mod retry;
 pub mod stream;
 pub mod types;
 
@@ -12,6 +13,7 @@ pub use models::{
     MINIMAX_MODELS, OPENAI_MODELS,
 };
 pub use providers::Provider;
+pub use retry::RetryPolicy;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{
     ChatRequest, ChatRequestBuilder, ChatResponse, Message, Role, StopReason, Tool, Usage,

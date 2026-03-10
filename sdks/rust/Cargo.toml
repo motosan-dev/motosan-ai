@@ -14,9 +14,9 @@ categories = ["api-bindings", "asynchronous"]
 
 [features]
 default = []
-anthropic = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream"]
-openai = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream"]
-minimax = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream"]
+anthropic = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
+openai = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
+minimax = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
 full = ["anthropic", "openai", "minimax"]
 
 [dependencies]
@@ -29,6 +29,7 @@ thiserror = "2"
 reqwest = { version = "0.12", optional = true, features = ["json", "stream", "rustls-tls"] }
 eventsource-stream = { version = "0.2", optional = true }
 tokio-stream = { version = "0.1", optional = true }
+tokio = { version = "1", optional = true, features = ["time"] }
 
 [dev-dependencies]
 serde_json = "1"

@@ -1,4 +1,4 @@
-use motosan_ai::{Client, Message, MotosanError, Provider};
+use motosan_ai::{Client, Message, MotosanError, Provider, RetryPolicy};
 
 #[test]
 fn builder_requires_provider_and_api_key() {
@@ -7,6 +7,48 @@ fn builder_requires_provider_and_api_key() {
 
     let missing_api_key = Client::builder().provider(Provider::OpenAI).build();
     assert!(matches!(missing_api_key, Err(MotosanError::Config(_))));
+}
+
+#[test]
+fn builder_uses_default_retry_policy_and_allows_override() {
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .api_key("k")
+        .build()
+        .expect("build client");
+    assert_eq!(
+        client.retry_policy().max_retries,
+        RetryPolicy::default().max_retries
+    );
+
+    let custom_policy = RetryPolicy::new()
+        .max_retries(5)
+        .base_delay_ms(10)
+        .max_delay_ms(100)
+        .jitter(false)
+        .respect_retry_after(false);
+
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .api_key("k")
+        .retry_policy(custom_policy.clone())
+        .build()
+        .expect("build client");
+
+    assert_eq!(client.retry_policy().max_retries, custom_policy.max_retries);
+    assert_eq!(
+        client.retry_policy().base_delay_ms,
+        custom_policy.base_delay_ms
+    );
+    assert_eq!(
+        client.retry_policy().max_delay_ms,
+        custom_policy.max_delay_ms
+    );
+    assert_eq!(client.retry_policy().jitter, custom_policy.jitter);
+    assert_eq!(
+        client.retry_policy().respect_retry_after,
+        custom_policy.respect_retry_after
+    );
 }
 
 #[tokio::test]
