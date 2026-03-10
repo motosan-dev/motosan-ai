@@ -12,6 +12,7 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 - Provider implementations for chat + streaming on Anthropic/OpenAI/MiniMax.
 - Shared provider mapping utilities and robust SSE parsing behavior.
 - Integration tests for provider happy paths, streaming behavior, and error mapping.
+- Configurable retry policy (`RetryPolicy`) with exponential backoff, optional jitter, and `Retry-After` support.
 - Rust CI workflow (`fmt`, `clippy`, `test`).
 
 ### Changed

@@ -1,11 +1,17 @@
 use crate::error::MotosanError;
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse};
 #[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use crate::types::{StopReason, Usage};
 use async_trait::async_trait;
 #[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+use reqwest::header::HeaderMap;
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use serde_json::Value;
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Provider {
@@ -93,6 +99,38 @@ pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError 
         400 => MotosanError::InvalidRequest(message),
         _ => MotosanError::ProviderError(message),
     }
+}
+
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+pub(crate) fn is_retryable_status(status_code: u16) -> bool {
+    status_code == 429 || status_code >= 500
+}
+
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
+    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
+}
+
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
+    let raw = headers.get("retry-after")?.to_str().ok()?.trim();
+    let seconds = raw.parse::<u64>().ok()?;
+    Some(Duration::from_secs(seconds))
+}
+
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+pub(crate) async fn sleep_before_retry(
+    policy: &RetryPolicy,
+    attempt: u32,
+    retry_after: Option<Duration>,
+) {
+    let delay = if policy.respect_retry_after {
+        retry_after.unwrap_or_else(|| policy.delay_for_attempt(attempt))
+    } else {
+        policy.delay_for_attempt(attempt)
+    };
+
+    tokio::time::sleep(delay).await;
 }
 
 #[cfg(feature = "anthropic")]

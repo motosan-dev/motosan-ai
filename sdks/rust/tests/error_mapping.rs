@@ -1,7 +1,11 @@
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, MotosanError};
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+use motosan_ai::{ChatRequest, Message, MotosanError, RetryPolicy};
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use serde_json::json;
 
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 fn sample_request() -> ChatRequest {
     ChatRequest::builder()
         .message(Message::user("hello"))
@@ -16,7 +20,8 @@ async fn anthropic_maps_401_429_500() {
         "test-key",
         None,
         Some(server.url()),
-    );
+    )
+    .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
         .mock("POST", "/v1/messages")
@@ -65,7 +70,8 @@ async fn anthropic_maps_401_429_500() {
 async fn openai_maps_401_429_500() {
     let mut server = mockito::Server::new_async().await;
     let provider =
-        motosan_ai::providers::openai::OpenAIProvider::new("test-key", None, Some(server.url()));
+        motosan_ai::providers::openai::OpenAIProvider::new("test-key", None, Some(server.url()))
+            .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
         .mock("POST", "/v1/chat/completions")
@@ -114,7 +120,8 @@ async fn openai_maps_401_429_500() {
 async fn minimax_maps_401_429_500() {
     let mut server = mockito::Server::new_async().await;
     let provider =
-        motosan_ai::providers::minimax::MinimaxProvider::new("test-key", None, Some(server.url()));
+        motosan_ai::providers::minimax::MinimaxProvider::new("test-key", None, Some(server.url()))
+            .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
         .mock("POST", "/v1/text/chatcompletion_v2")

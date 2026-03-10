@@ -1,5 +1,6 @@
 use crate::error::MotosanError;
 use crate::providers::Provider;
+use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Message};
 
@@ -8,6 +9,7 @@ pub struct Client {
     provider: Provider,
     api_key: String,
     model: Option<String>,
+    retry_policy: RetryPolicy,
 }
 
 impl Client {
@@ -25,6 +27,10 @@ impl Client {
 
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    pub fn retry_policy(&self) -> &RetryPolicy {
+        &self.retry_policy
     }
 
     pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
@@ -147,6 +153,7 @@ impl Client {
             self.model.clone(),
             None,
         )
+        .with_retry_policy(self.retry_policy.clone())
     }
 
     #[cfg(feature = "openai")]
@@ -156,6 +163,7 @@ impl Client {
             self.model.clone(),
             None,
         )
+        .with_retry_policy(self.retry_policy.clone())
     }
 
     #[cfg(feature = "minimax")]
@@ -165,6 +173,7 @@ impl Client {
             self.model.clone(),
             None,
         )
+        .with_retry_policy(self.retry_policy.clone())
     }
 }
 
@@ -173,6 +182,7 @@ pub struct ClientBuilder {
     provider: Option<Provider>,
     api_key: Option<String>,
     model: Option<String>,
+    retry_policy: Option<RetryPolicy>,
 }
 
 impl ClientBuilder {
@@ -191,6 +201,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
+        self.retry_policy = Some(retry_policy);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -203,6 +218,7 @@ impl ClientBuilder {
             provider,
             api_key,
             model: self.model,
+            retry_policy: self.retry_policy.unwrap_or_default(),
         })
     }
 }
