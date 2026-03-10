@@ -3,8 +3,10 @@ use crate::providers::ProviderImpl;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason, Usage};
 use async_trait::async_trait;
+use eventsource_stream::Eventsource;
 use reqwest::Client;
 use serde_json::{json, Value};
+use tokio_stream::StreamExt;
 
 pub struct AnthropicProvider {
     http: Client,
@@ -152,9 +154,112 @@ impl ProviderImpl for AnthropicProvider {
         })
     }
 
-    async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        Err(MotosanError::ProviderError(
-            "anthropic streaming not implemented".to_string(),
-        ))
+    async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
+        let explicit_system = req.system.clone();
+        let mut extracted_systems = Vec::new();
+        let mut messages = Vec::new();
+
+        for message in &req.messages {
+            match message.role {
+                crate::types::Role::System => extracted_systems.push(message.content.clone()),
+                crate::types::Role::User => {
+                    messages.push(json!({"role": "user", "content": message.content}))
+                }
+                crate::types::Role::Assistant => {
+                    messages.push(json!({"role": "assistant", "content": message.content}))
+                }
+            }
+        }
+
+        let system = explicit_system.or_else(|| {
+            if extracted_systems.is_empty() {
+                None
+            } else {
+                Some(extracted_systems.join("\n"))
+            }
+        });
+
+        let mut body = json!({
+            "model": model,
+            "messages": messages,
+            "stream": true,
+        });
+
+        if let Some(system_prompt) = system {
+            body["system"] = json!(system_prompt);
+        }
+        if let Some(temperature) = req.temperature {
+            body["temperature"] = json!(temperature);
+        }
+        if let Some(max_tokens) = req.max_tokens {
+            body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(provider_options) = req.provider_options {
+            if let Some(map) = provider_options.as_object() {
+                for (key, value) in map {
+                    body[key] = value.clone();
+                }
+            }
+        }
+
+        let response = self
+            .http
+            .post(format!("{}/v1/messages", self.base_url))
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| MotosanError::Network(error.to_string()))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let message = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "anthropic stream request failed".to_string());
+            return Err(match status.as_u16() {
+                401 => MotosanError::Auth(message),
+                429 => MotosanError::RateLimit(message),
+                400 => MotosanError::InvalidRequest(message),
+                _ => MotosanError::ProviderError(message),
+            });
+        }
+
+        let parsed_stream = response
+            .bytes_stream()
+            .eventsource()
+            .filter_map(|event| {
+                match event {
+                    Ok(event) => {
+                        let payload: Value = serde_json::from_str(&event.data).ok()?;
+                        let event_type = payload.get("type")?.as_str()?;
+
+                        match event_type {
+                            "content_block_delta" => {
+                                let text = payload
+                                    .get("delta")
+                                    .and_then(|delta| delta.get("text"))
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string();
+                                Some(crate::types::StreamEvent {
+                                    content: text,
+                                    done: false,
+                                })
+                            }
+                            "message_stop" => Some(crate::types::StreamEvent {
+                                content: String::new(),
+                                done: true,
+                            }),
+                            _ => None,
+                        }
+                    }
+                    Err(_) => None,
+                }
+            });
+
+        Ok(Box::pin(parsed_stream))
     }
 }
