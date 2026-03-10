@@ -36,7 +36,7 @@ jobs:
         working-directory: sdks/rust
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.75.0
+      - uses: dtolnay/rust-toolchain@1.82.0
       - name: Cargo build (no features)
         run: cargo build
       - name: Cargo test (no features)

@@ -17,7 +17,7 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 ### Changed
 - Centralized model defaults and model catalog in `src/models.rs`.
 - Migrated SDK error type to `thiserror`-based `MotosanError`.
+- Set MSRV to Rust `1.82` and added CI lane to validate no-feature builds/tests.
 
 ### Notes
 - Default model baselines are maintained in `src/models.rs` and can be overridden via `ClientBuilder::model(...)` or `ChatRequest::builder().model(...)`.
-
