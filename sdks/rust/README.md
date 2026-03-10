@@ -92,6 +92,8 @@ match client.chat(vec![Message::user("hello")]).await {
 }
 ```
 
+Error handling policy reference: `docs/error-handling-policy.md`.
+
 ## Model Maintenance (survey process)
 
 When updating model defaults, verify against official provider documentation:
