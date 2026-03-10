@@ -1,5 +1,7 @@
 use crate::error::MotosanError;
 use crate::providers::Provider;
+use crate::stream::BoxStream;
+use crate::types::{ChatRequest, ChatResponse, Message};
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -23,6 +25,136 @@ impl Client {
 
     pub fn model(&self) -> Option<&str> {
         self.model.as_deref()
+    }
+
+    pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
+        self.chat_with(ChatRequest {
+            messages,
+            model: self.model.clone(),
+            system: None,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            provider_options: None,
+        })
+        .await
+    }
+
+    pub async fn chat_with(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        self.dispatch_chat(request).await
+    }
+
+    pub async fn stream(&self, messages: Vec<Message>) -> Result<BoxStream, MotosanError> {
+        self.dispatch_stream(ChatRequest {
+            messages,
+            model: self.model.clone(),
+            system: None,
+            temperature: None,
+            max_tokens: None,
+            tools: None,
+            provider_options: None,
+        })
+        .await
+    }
+
+    async fn dispatch_chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        match self.provider {
+            Provider::Anthropic => {
+                #[cfg(feature = "anthropic")]
+                {
+                    use crate::providers::anthropic::AnthropicProvider;
+                    use crate::providers::ProviderImpl;
+                    return AnthropicProvider.chat(request).await;
+                }
+                #[cfg(not(feature = "anthropic"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "anthropic feature is not enabled".to_string(),
+                    ));
+                }
+            }
+            Provider::OpenAI => {
+                #[cfg(feature = "openai")]
+                {
+                    use crate::providers::openai::OpenAIProvider;
+                    use crate::providers::ProviderImpl;
+                    return OpenAIProvider.chat(request).await;
+                }
+                #[cfg(not(feature = "openai"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "openai feature is not enabled".to_string(),
+                    ));
+                }
+            }
+            Provider::Minimax => {
+                #[cfg(feature = "minimax")]
+                {
+                    use crate::providers::minimax::MinimaxProvider;
+                    use crate::providers::ProviderImpl;
+                    return MinimaxProvider.chat(request).await;
+                }
+                #[cfg(not(feature = "minimax"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "minimax feature is not enabled".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    async fn dispatch_stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
+        match self.provider {
+            Provider::Anthropic => {
+                #[cfg(feature = "anthropic")]
+                {
+                    use crate::providers::anthropic::AnthropicProvider;
+                    use crate::providers::ProviderImpl;
+                    return AnthropicProvider.stream(request).await;
+                }
+                #[cfg(not(feature = "anthropic"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "anthropic feature is not enabled".to_string(),
+                    ));
+                }
+            }
+            Provider::OpenAI => {
+                #[cfg(feature = "openai")]
+                {
+                    use crate::providers::openai::OpenAIProvider;
+                    use crate::providers::ProviderImpl;
+                    return OpenAIProvider.stream(request).await;
+                }
+                #[cfg(not(feature = "openai"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "openai feature is not enabled".to_string(),
+                    ));
+                }
+            }
+            Provider::Minimax => {
+                #[cfg(feature = "minimax")]
+                {
+                    use crate::providers::minimax::MinimaxProvider;
+                    use crate::providers::ProviderImpl;
+                    return MinimaxProvider.stream(request).await;
+                }
+                #[cfg(not(feature = "minimax"))]
+                {
+                    let _ = request;
+                    return Err(MotosanError::Config(
+                        "minimax feature is not enabled".to_string(),
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -64,4 +196,3 @@ impl ClientBuilder {
         })
     }
 }
-
