@@ -27,15 +27,12 @@ async fn anthropic_chat_maps_response() {
         .await;
 
     let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
-    let request = ChatRequest {
-        messages: vec![Message::system("rules"), Message::user("hello")],
-        model: None,
-        system: None,
-        temperature: Some(0.2),
-        max_tokens: Some(100),
-        tools: None,
-        provider_options: None,
-    };
+    let request = ChatRequest::builder()
+        .message(Message::system("rules"))
+        .message(Message::user("hello"))
+        .temperature(0.2)
+        .max_tokens(100)
+        .build();
 
     let response = provider.chat(request).await.expect("chat response");
     assert_eq!(response.content, "hello from anthropic");

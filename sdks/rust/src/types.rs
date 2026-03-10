@@ -56,6 +56,77 @@ pub struct ChatRequest {
     pub provider_options: Option<Value>,
 }
 
+impl ChatRequest {
+    pub fn builder() -> ChatRequestBuilder {
+        ChatRequestBuilder::default()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ChatRequestBuilder {
+    messages: Vec<Message>,
+    model: Option<String>,
+    system: Option<String>,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    tools: Option<Vec<Tool>>,
+    provider_options: Option<Value>,
+}
+
+impl ChatRequestBuilder {
+    pub fn messages(mut self, messages: Vec<Message>) -> Self {
+        self.messages = messages;
+        self
+    }
+
+    pub fn message(mut self, message: Message) -> Self {
+        self.messages.push(message);
+        self
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn system(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(system.into());
+        self
+    }
+
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn tools(mut self, tools: Vec<Tool>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    pub fn provider_options(mut self, provider_options: Value) -> Self {
+        self.provider_options = Some(provider_options);
+        self
+    }
+
+    pub fn build(self) -> ChatRequest {
+        ChatRequest {
+            messages: self.messages,
+            model: self.model,
+            system: self.system,
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            tools: self.tools,
+            provider_options: self.provider_options,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub content: String,

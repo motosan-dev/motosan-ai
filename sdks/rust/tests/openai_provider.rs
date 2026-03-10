@@ -25,15 +25,12 @@ async fn openai_chat_maps_response() {
         .await;
 
     let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
-    let request = ChatRequest {
-        messages: vec![Message::system("rules"), Message::user("hello")],
-        model: None,
-        system: None,
-        temperature: Some(0.1),
-        max_tokens: Some(50),
-        tools: None,
-        provider_options: None,
-    };
+    let request = ChatRequest::builder()
+        .message(Message::system("rules"))
+        .message(Message::user("hello"))
+        .temperature(0.1)
+        .max_tokens(50)
+        .build();
 
     let response = provider.chat(request).await.expect("chat response");
     assert_eq!(response.content, "hello from openai");
@@ -63,15 +60,9 @@ async fn openai_stream_emits_deltas_and_done() {
         .await;
 
     let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
-    let request = ChatRequest {
-        messages: vec![Message::user("hello")],
-        model: None,
-        system: None,
-        temperature: None,
-        max_tokens: None,
-        tools: None,
-        provider_options: None,
-    };
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
@@ -84,6 +75,44 @@ async fn openai_stream_emits_deltas_and_done() {
     assert_eq!(events[0].content, "hel");
     assert_eq!(events[1].content, "lo");
     assert!(events[2].done);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_stream_ignores_malformed_chunks() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: not-json\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].content, "ok");
+    assert!(!events[0].done);
+    assert!(events[1].done);
 
     mock.assert_async().await;
 }
