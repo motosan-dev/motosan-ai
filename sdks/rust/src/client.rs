@@ -101,7 +101,9 @@ impl Client {
                 {
                     use crate::providers::minimax::MinimaxProvider;
                     use crate::providers::ProviderImpl;
-                    return MinimaxProvider.chat(request).await;
+                    let provider =
+                        MinimaxProvider::new(self.api_key.clone(), self.model.clone(), None);
+                    return provider.chat(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
@@ -158,7 +160,9 @@ impl Client {
                 {
                     use crate::providers::minimax::MinimaxProvider;
                     use crate::providers::ProviderImpl;
-                    return MinimaxProvider.stream(request).await;
+                    let provider =
+                        MinimaxProvider::new(self.api_key.clone(), self.model.clone(), None);
+                    return provider.stream(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
