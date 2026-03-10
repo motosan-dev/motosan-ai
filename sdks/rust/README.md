@@ -19,6 +19,29 @@ println!("{}", response.content);
 # }
 ```
 
+## Streaming Example
+
+```rust
+use motosan_ai::{Client, Message, Provider};
+use tokio_stream::StreamExt;
+
+# async fn demo_stream() -> Result<(), Box<dyn std::error::Error>> {
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key(std::env::var("OPENAI_API_KEY")?)
+    .build()?;
+
+let mut stream = client.stream(vec![Message::user("stream hello")]).await?;
+while let Some(event) = stream.next().await {
+    if event.done {
+        break;
+    }
+    print!("{}", event.content);
+}
+# Ok(())
+# }
+```
+
 ## Build
 
 ```bash
