@@ -84,7 +84,9 @@ impl Client {
                 {
                     use crate::providers::openai::OpenAIProvider;
                     use crate::providers::ProviderImpl;
-                    return OpenAIProvider.chat(request).await;
+                    let provider =
+                        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None);
+                    return provider.chat(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
@@ -139,7 +141,9 @@ impl Client {
                 {
                     use crate::providers::openai::OpenAIProvider;
                     use crate::providers::ProviderImpl;
-                    return OpenAIProvider.stream(request).await;
+                    let provider =
+                        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None);
+                    return provider.stream(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
