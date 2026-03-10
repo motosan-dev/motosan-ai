@@ -1,8 +1,9 @@
 #![cfg(feature = "openai")]
 
+use mockito::Matcher;
 use motosan_ai::providers::openai::OpenAIProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StopReason};
+use motosan_ai::{ChatRequest, Message, StopReason, DEFAULT_OPENAI_MODEL};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -39,6 +40,65 @@ async fn openai_chat_maps_response() {
     assert!(matches!(response.stop_reason, StopReason::Stop));
 
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_request_uses_default_model_and_allows_override() {
+    let mut server = mockito::Server::new_async().await;
+
+    let default_mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::Regex(format!(
+            r#"\"model\"\s*:\s*\"{}\""#,
+            DEFAULT_OPENAI_MODEL
+        )))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_OPENAI_MODEL,
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+    let _ = provider.chat(request).await.expect("chat response");
+    default_mock.assert_async().await;
+
+    server.reset();
+    let override_model = "gpt-4o";
+    let override_mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::Regex(format!(
+            r#"\"model\"\s*:\s*\"{}\""#,
+            override_model
+        )))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": override_model,
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .model(override_model)
+        .build();
+    let _ = provider.chat(request).await.expect("chat response");
+    override_mock.assert_async().await;
 }
 
 #[tokio::test]
