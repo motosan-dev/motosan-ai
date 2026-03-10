@@ -85,4 +85,3 @@ async fn minimax_stream_emits_content_and_done() {
 
     mock.assert_async().await;
 }
-

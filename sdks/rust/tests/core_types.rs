@@ -17,4 +17,3 @@ fn stop_reason_serializes_to_snake_case() {
     let serialized = serde_json::to_string(&StopReason::EndTurn).expect("serialize stop reason");
     assert_eq!(serialized, "\"end_turn\"");
 }
-

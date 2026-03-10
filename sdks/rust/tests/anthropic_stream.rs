@@ -53,4 +53,3 @@ async fn anthropic_stream_emits_content_and_done_event() {
 
     mock.assert_async().await;
 }
-

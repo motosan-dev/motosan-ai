@@ -16,7 +16,11 @@ pub struct MinimaxProvider {
 }
 
 impl MinimaxProvider {
-    pub fn new(api_key: impl Into<String>, model: Option<String>, base_url: Option<String>) -> Self {
+    pub fn new(
+        api_key: impl Into<String>,
+        model: Option<String>,
+        base_url: Option<String>,
+    ) -> Self {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
