@@ -29,3 +29,15 @@ jobs:
       - name: Cargo test
         run: cargo test --all-features
 
+  rust-msrv-no-features:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.82.0
+      - name: Cargo build (no features)
+        run: cargo build
+      - name: Cargo test (no features)
+        run: cargo test
