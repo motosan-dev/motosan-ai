@@ -5,6 +5,11 @@ edition = "2021"
 license = "MIT"
 description = "Rust SDK for multi-provider AI chat"
 repository = "https://github.com/motosan-dev/motosan-ai"
+homepage = "https://github.com/motosan-dev/motosan-ai"
+documentation = "https://docs.rs/motosan-ai"
+readme = "README.md"
+keywords = ["ai", "llm", "anthropic", "openai", "minimax"]
+categories = ["api-bindings", "asynchronous"]
 
 [features]
 default = []
