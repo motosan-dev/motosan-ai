@@ -1,4 +1,5 @@
 use crate::error::MotosanError;
+use crate::models::DEFAULT_OPENAI_MODEL;
 use crate::providers::{extract_error_message, map_http_error, ChatResponseBuilder, ProviderImpl};
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
@@ -24,7 +25,7 @@ impl OpenAIProvider {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
-            model: model.unwrap_or_else(|| "gpt-4o".to_string()),
+            model: model.unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.openai.com".to_string()),
         }
     }
@@ -152,7 +153,7 @@ impl ProviderImpl for OpenAIProvider {
         let model = payload
             .get("model")
             .and_then(Value::as_str)
-            .unwrap_or("gpt-4o")
+            .unwrap_or(DEFAULT_OPENAI_MODEL)
             .to_string();
         let input_tokens = payload
             .get("usage")
@@ -165,7 +166,7 @@ impl ProviderImpl for OpenAIProvider {
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
 
-        Ok(ChatResponseBuilder::new("gpt-4o")
+        Ok(ChatResponseBuilder::new(DEFAULT_OPENAI_MODEL)
             .content(content)
             .model(model)
             .usage(input_tokens, output_tokens)

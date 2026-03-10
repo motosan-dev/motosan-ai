@@ -1,4 +1,5 @@
 use crate::error::MotosanError;
+use crate::models::DEFAULT_ANTHROPIC_MODEL;
 use crate::providers::{extract_error_message, map_http_error, ChatResponseBuilder, ProviderImpl};
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
@@ -24,7 +25,7 @@ impl AnthropicProvider {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
-            model: model.unwrap_or_else(|| "claude-sonnet-4-5".to_string()),
+            model: model.unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
         }
     }
@@ -174,7 +175,7 @@ impl ProviderImpl for AnthropicProvider {
             _ => StopReason::Other,
         };
 
-        Ok(ChatResponseBuilder::new("claude-sonnet-4-5")
+        Ok(ChatResponseBuilder::new(DEFAULT_ANTHROPIC_MODEL)
             .content(content)
             .model(model)
             .usage(input_tokens, output_tokens)

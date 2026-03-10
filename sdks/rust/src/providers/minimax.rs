@@ -1,4 +1,5 @@
 use crate::error::MotosanError;
+use crate::models::DEFAULT_MINIMAX_MODEL;
 use crate::providers::{extract_error_message, map_http_error, ChatResponseBuilder, ProviderImpl};
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
@@ -24,7 +25,7 @@ impl MinimaxProvider {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
-            model: model.unwrap_or_else(|| "MiniMax-Text-01".to_string()),
+            model: model.unwrap_or_else(|| DEFAULT_MINIMAX_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.minimax.chat".to_string()),
         }
     }
@@ -152,7 +153,7 @@ impl ProviderImpl for MinimaxProvider {
         let model = payload
             .get("model")
             .and_then(Value::as_str)
-            .unwrap_or("MiniMax-Text-01")
+            .unwrap_or(DEFAULT_MINIMAX_MODEL)
             .to_string();
         let input_tokens = payload
             .get("usage")
@@ -165,7 +166,7 @@ impl ProviderImpl for MinimaxProvider {
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
 
-        Ok(ChatResponseBuilder::new("MiniMax-Text-01")
+        Ok(ChatResponseBuilder::new(DEFAULT_MINIMAX_MODEL)
             .content(content)
             .model(model)
             .usage(input_tokens, output_tokens)
