@@ -1,0 +1,25 @@
+name: Python CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["sdks/python/**"]
+  pull_request:
+    paths: ["sdks/python/**"]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/python
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v4
+
+      - name: Install with all optional deps
+        run: uv sync --extra all --extra dev
+
+      - name: Run tests
+        run: uv run pytest tests/ -v --cov=motosan_ai

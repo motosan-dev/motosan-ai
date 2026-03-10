@@ -1,0 +1,43 @@
+[package]
+name = "motosan-ai"
+version = "0.1.0"
+edition = "2021"
+description = "Multi-provider AI SDK — Anthropic, OpenAI, MiniMax with a unified interface"
+license = "MIT"
+repository = "https://github.com/motosan-dev/motosan-ai"
+keywords = ["ai", "llm", "anthropic", "openai", "sdk"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+
+[features]
+default = []
+anthropic = ["dep:eventsource-stream"]
+openai    = ["dep:eventsource-stream"]
+minimax   = ["dep:eventsource-stream"]
+full      = ["anthropic", "openai", "minimax"]
+
+[dependencies]
+async-trait  = "0.1"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+reqwest      = { version = "0.12", features = ["json", "stream"] }
+tokio        = { version = "1", features = ["full"] }
+futures      = "0.3"
+thiserror    = "1"
+eventsource-stream = { version = "0.2", optional = true }
+
+[dev-dependencies]
+tokio-test  = "0.4"
+mockito     = "1"
+
+[[example]]
+name = "basic_chat"
+required-features = ["anthropic"]
+
+[[example]]
+name = "streaming"
+required-features = ["anthropic"]
+
+[[example]]
+name = "tool_calling"
+required-features = ["anthropic"]
