@@ -64,7 +64,12 @@ impl Client {
                 {
                     use crate::providers::anthropic::AnthropicProvider;
                     use crate::providers::ProviderImpl;
-                    return AnthropicProvider.chat(request).await;
+                    let provider = AnthropicProvider::new(
+                        self.api_key.clone(),
+                        self.model.clone(),
+                        None,
+                    );
+                    return provider.chat(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
@@ -114,7 +119,12 @@ impl Client {
                 {
                     use crate::providers::anthropic::AnthropicProvider;
                     use crate::providers::ProviderImpl;
-                    return AnthropicProvider.stream(request).await;
+                    let provider = AnthropicProvider::new(
+                        self.api_key.clone(),
+                        self.model.clone(),
+                        None,
+                    );
+                    return provider.stream(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
