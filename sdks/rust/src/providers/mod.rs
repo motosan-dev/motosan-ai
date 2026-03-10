@@ -1,7 +1,10 @@
 use crate::error::MotosanError;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, StopReason, Usage};
+use crate::types::{ChatRequest, ChatResponse};
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+use crate::types::{StopReason, Usage};
 use async_trait::async_trait;
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use serde_json::Value;
 
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +20,7 @@ pub trait ProviderImpl: Send + Sync {
     async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError>;
 }
 
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
     model: String,
@@ -24,6 +28,7 @@ pub(crate) struct ChatResponseBuilder {
     stop_reason: StopReason,
 }
 
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
         Self {
@@ -70,6 +75,7 @@ impl ChatResponseBuilder {
     }
 }
 
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     payload
         .get("error")
@@ -79,6 +85,7 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
         .to_string()
 }
 
+#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
     match status_code {
         401 => MotosanError::Auth(message),
