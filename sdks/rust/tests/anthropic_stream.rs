@@ -92,3 +92,38 @@ async fn anthropic_stream_ignores_unknown_and_malformed_events() {
 
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn anthropic_stream_setup_token_uses_bearer_and_oauth_beta_header() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"ok\"}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("authorization", "Bearer sk-ant-oat01-stream-token")
+        .match_header("anthropic-beta", "oauth-2025-04-20")
+        .match_header("anthropic-version", "2023-06-01")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("sk-ant-oat01-stream-token", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let first = stream.next().await.expect("first event");
+    let done = stream.next().await.expect("done event");
+
+    assert_eq!(first.content, "ok");
+    assert!(done.done);
+    mock.assert_async().await;
+}

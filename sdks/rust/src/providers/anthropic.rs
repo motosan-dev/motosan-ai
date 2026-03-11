@@ -44,6 +44,36 @@ impl AnthropicProvider {
     fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.base_url)
     }
+
+    fn is_setup_token(token: &str) -> bool {
+        token.starts_with("sk-ant-oat01-")
+    }
+
+    fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if Self::is_setup_token(&self.api_key) {
+            request
+                .header("authorization", format!("Bearer {}", self.api_key))
+                .header("anthropic-beta", "oauth-2025-04-20")
+        } else {
+            request.header("x-api-key", &self.api_key)
+        }
+    }
+
+    fn with_auth_hint(status_code: u16, message: String, is_setup_token: bool) -> String {
+        if status_code != 401 {
+            return message;
+        }
+
+        if is_setup_token {
+            format!(
+                "{message}. Hint: setup tokens (sk-ant-oat01-*) require Authorization: Bearer and anthropic-beta: oauth-2025-04-20"
+            )
+        } else {
+            format!(
+                "{message}. Hint: Anthropic API keys use x-api-key; setup tokens (sk-ant-oat01-*) use Authorization: Bearer plus anthropic-beta: oauth-2025-04-20"
+            )
+        }
+    }
 }
 
 struct AnthropicRequestBuilder {
@@ -130,15 +160,12 @@ impl ProviderImpl for AnthropicProvider {
         let mut attempt = 0;
         let payload: Value;
         loop {
-            let response = match self
+            let request = self
                 .http
                 .post(self.endpoint())
-                .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
-                .json(&body)
-                .send()
-                .await
-            {
+                .json(&body);
+            let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
                     if attempt < self.retry_policy.max_retries && is_retryable_network_error(&error)
@@ -170,6 +197,11 @@ impl ProviderImpl for AnthropicProvider {
             }
 
             let message = extract_error_message(&current_payload, "anthropic request failed");
+            let message = Self::with_auth_hint(
+                status.as_u16(),
+                message,
+                Self::is_setup_token(&self.api_key),
+            );
             return Err(map_http_error(status.as_u16(), message));
         }
 
@@ -188,7 +220,7 @@ impl ProviderImpl for AnthropicProvider {
         let model = payload
             .get("model")
             .and_then(Value::as_str)
-            .unwrap_or("claude-sonnet-4-5")
+            .unwrap_or(DEFAULT_ANTHROPIC_MODEL)
             .to_string();
 
         let input_tokens = payload
@@ -224,15 +256,12 @@ impl ProviderImpl for AnthropicProvider {
             .build();
         let mut attempt = 0;
         let response = loop {
-            let response = match self
+            let request = self
                 .http
                 .post(self.endpoint())
-                .header("x-api-key", &self.api_key)
                 .header("anthropic-version", "2023-06-01")
-                .json(&body)
-                .send()
-                .await
-            {
+                .json(&body);
+            let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
                     if attempt < self.retry_policy.max_retries && is_retryable_network_error(&error)
@@ -261,6 +290,11 @@ impl ProviderImpl for AnthropicProvider {
                 .text()
                 .await
                 .unwrap_or_else(|_| "anthropic stream request failed".to_string());
+            let message = Self::with_auth_hint(
+                status.as_u16(),
+                message,
+                Self::is_setup_token(&self.api_key),
+            );
             return Err(map_http_error(status.as_u16(), message));
         };
 
