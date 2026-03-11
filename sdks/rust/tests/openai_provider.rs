@@ -1,9 +1,9 @@
 #![cfg(feature = "openai")]
 
 use mockito::Matcher;
-use motosan_ai::providers::openai::OpenAIProvider;
+use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StopReason, DEFAULT_OPENAI_MODEL};
+use motosan_ai::{ChatRequest, Message, MotosanError, StopReason, DEFAULT_OPENAI_MODEL};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -175,4 +175,184 @@ async fn openai_stream_ignores_malformed_chunks() {
     assert!(events[1].done);
 
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_endpoint_normalizes_trailing_slash_base_url() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-4o",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(format!("{}/", server.url())));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_chat_falls_back_to_reasoning_content_when_content_empty() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.3-codex",
+                "choices": [{"message": {"content": "", "reasoning_content": "fallback"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "fallback");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_stream_falls_back_to_reasoning_content_and_skips_empty_chunks() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking fallback\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].content, "thinking fallback");
+    assert!(events[1].done);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_stream_maps_structured_error_payload() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(401)
+        .with_body(json!({"error": {"message": "bad key"}}).to_string())
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.stream(request).await;
+    assert!(matches!(result, Err(MotosanError::Auth(_))));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_auth_style_x_api_key_is_supported() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-4o",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()))
+        .with_auth_style(OpenAIAuthStyle::XApiKey);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_chat_can_fallback_to_responses_api_on_404() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(404)
+        .with_body(json!({"error": {"message": "not found"}}).to_string())
+        .create_async()
+        .await;
+
+    let responses_mock = server
+        .mock("POST", "/v1/responses")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.3-codex",
+                "output_text": "fallback response",
+                "usage": {"input_tokens": 5, "output_tokens": 3}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider =
+        OpenAIProvider::new("test-key", None, Some(server.url())).with_responses_fallback(true);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "fallback response");
+    assert_eq!(response.usage.input_tokens, 5);
+    assert_eq!(response.usage.output_tokens, 3);
+    responses_mock.assert_async().await;
 }
