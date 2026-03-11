@@ -2,6 +2,29 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.1.1] - 2026-03-11
+
+### Added
+- MiniMax compatibility improvements:
+  - Migrated to OpenAI-compatible MiniMax endpoint (`/chat/completions`).
+  - Added payload-level `base_resp` error mapping with better auth/rate-limit/request semantics.
+  - Added optional reasoning exposure control and default `<think>...</think>` stripping.
+  - Added fallback to `reasoning_content` for chat and stream parsing.
+  - Merged MiniMax system prompts into first user message for better endpoint compatibility.
+- OpenAI provider enhancements:
+  - Structured stream error parsing and empty-stream-chunk suppression.
+  - `reasoning_content` fallback for chat and stream parsing.
+  - Configurable auth style (`Bearer`, `x-api-key`, custom header).
+  - Optional `/v1/responses` fallback when `/v1/chat/completions` returns `404`.
+- `ClientBuilder` OpenAI options:
+  - `openai_auth_bearer`, `openai_auth_x_api_key`, `openai_auth_custom_header`.
+  - `openai_responses_fallback`.
+
+### Changed
+- Updated MiniMax default model to `MiniMax-M2.5-highspeed`.
+- Expanded `MINIMAX_MODELS` catalog with M2.5/M2.1/M2 family entries.
+- Expanded Rust README with OpenAI and MiniMax advanced behavior/configuration notes.
+
 ## [0.1.0] - 2026-03-10
 
 ### Added
