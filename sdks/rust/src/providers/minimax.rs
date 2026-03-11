@@ -208,7 +208,7 @@ impl MinimaxRequestBuilder {
             }
         }
 
-        let mut messages: Vec<(String, String, Option<String>)> = Vec::new();
+        let mut messages: Vec<Value> = Vec::new();
         for message in &self.req.messages {
             match message.role {
                 Role::System => {
@@ -217,17 +217,41 @@ impl MinimaxRequestBuilder {
                         system_parts.push(trimmed.to_string());
                     }
                 }
-                Role::User => messages.push(("user".to_string(), message.content.clone(), None)),
+                Role::User => {
+                    messages.push(json!({"role": "user", "content": message.content}));
+                }
                 Role::Assistant => {
-                    messages.push(("assistant".to_string(), message.content.clone(), None))
+                    if message.tool_calls.is_empty() {
+                        messages.push(json!({"role": "assistant", "content": message.content}));
+                    } else {
+                        let tool_calls = message
+                            .tool_calls
+                            .iter()
+                            .map(|tool_call| {
+                                json!({
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call.name,
+                                        "arguments": serde_json::to_string(&tool_call.input).unwrap_or_default(),
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        messages.push(json!({
+                            "role": "assistant",
+                            "content": message.content,
+                            "tool_calls": tool_calls,
+                        }));
+                    }
                 }
                 Role::Tool => {
                     if let Some(tool_call_id) = &message.tool_call_id {
-                        messages.push((
-                            "tool".to_string(),
-                            message.content.clone(),
-                            Some(tool_call_id.clone()),
-                        ));
+                        messages.push(json!({
+                            "role": "tool",
+                            "content": message.content,
+                            "tool_call_id": tool_call_id,
+                        }));
                     }
                 }
             }
@@ -235,23 +259,19 @@ impl MinimaxRequestBuilder {
 
         if !system_parts.is_empty() {
             let merged_system = system_parts.join("\n\n");
-            if let Some((_, content, _)) = messages.iter_mut().find(|(role, _, _)| role == "user") {
-                *content = format!("{}\n\n{}", merged_system, content);
+            if let Some(first_user) = messages
+                .iter_mut()
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+            {
+                let content = first_user
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                first_user["content"] = json!(format!("{}\n\n{}", merged_system, content));
             } else {
-                messages.insert(0, ("user".to_string(), merged_system, None));
+                messages.insert(0, json!({"role": "user", "content": merged_system}));
             }
         }
-
-        let messages: Vec<Value> = messages
-            .into_iter()
-            .map(|(role, content, tool_call_id)| {
-                let mut message = json!({"role": role, "content": content});
-                if let Some(tool_call_id) = tool_call_id {
-                    message["tool_call_id"] = json!(tool_call_id);
-                }
-                message
-            })
-            .collect();
 
         let mut body = json!({
             "model": model,

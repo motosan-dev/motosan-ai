@@ -15,6 +15,7 @@ pub struct Message {
     pub role: Role,
     pub content: String,
     pub tool_call_id: Option<String>,
+    pub tool_calls: Vec<ToolCall>,
 }
 
 impl Message {
@@ -23,6 +24,7 @@ impl Message {
             role: Role::User,
             content: content.into(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -31,6 +33,19 @@ impl Message {
             role: Role::Assistant,
             content: content.into(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
+        }
+    }
+
+    pub fn assistant_with_tool_calls(
+        content: impl Into<String>,
+        tool_calls: Vec<ToolCall>,
+    ) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_call_id: None,
+            tool_calls,
         }
     }
 
@@ -39,14 +54,20 @@ impl Message {
             role: Role::System,
             content: content.into(),
             tool_call_id: None,
+            tool_calls: Vec::new(),
         }
     }
 
     pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
+        Self::tool_result(tool_call_id, content)
+    }
+
+    pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
             role: Role::Tool,
             content: content.into(),
             tool_call_id: Some(tool_call_id.into()),
+            tool_calls: Vec::new(),
         }
     }
 }
@@ -149,7 +170,7 @@ pub struct ChatResponse {
     pub stop_reason: StopReason,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,

@@ -111,7 +111,23 @@ impl AnthropicRequestBuilder {
                 Role::System => extracted_systems.push(message.content.clone()),
                 Role::User => messages.push(json!({"role": "user", "content": message.content})),
                 Role::Assistant => {
-                    messages.push(json!({"role": "assistant", "content": message.content}))
+                    if message.tool_calls.is_empty() {
+                        messages.push(json!({"role": "assistant", "content": message.content}));
+                    } else {
+                        let mut blocks = Vec::new();
+                        if !message.content.is_empty() {
+                            blocks.push(json!({"type": "text", "text": message.content}));
+                        }
+                        for tool_call in &message.tool_calls {
+                            blocks.push(json!({
+                                "type": "tool_use",
+                                "id": tool_call.id,
+                                "name": tool_call.name,
+                                "input": tool_call.input,
+                            }));
+                        }
+                        messages.push(json!({"role": "assistant", "content": blocks}));
+                    }
                 }
                 Role::Tool => {
                     if let Some(tool_use_id) = &message.tool_call_id {

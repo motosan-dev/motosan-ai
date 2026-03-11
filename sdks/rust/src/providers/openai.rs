@@ -171,7 +171,29 @@ impl OpenAIProvider {
                     }
                 }
                 Role::Assistant => {
-                    input.push(json!({"role": "assistant", "content": message.content}))
+                    if message.tool_calls.is_empty() {
+                        input.push(json!({"role": "assistant", "content": message.content}));
+                    } else {
+                        let tool_calls = message
+                            .tool_calls
+                            .iter()
+                            .map(|tool_call| {
+                                json!({
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call.name,
+                                        "arguments": serde_json::to_string(&tool_call.input).unwrap_or_default(),
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        input.push(json!({
+                            "role": "assistant",
+                            "content": message.content,
+                            "tool_calls": tool_calls,
+                        }));
+                    }
                 }
                 Role::User => input.push(json!({"role": "user", "content": message.content})),
                 Role::Tool => {
@@ -290,7 +312,29 @@ impl OpenAIRequestBuilder {
             match message.role {
                 Role::User => messages.push(json!({"role": "user", "content": message.content})),
                 Role::Assistant => {
-                    messages.push(json!({"role": "assistant", "content": message.content}))
+                    if message.tool_calls.is_empty() {
+                        messages.push(json!({"role": "assistant", "content": message.content}));
+                    } else {
+                        let tool_calls = message
+                            .tool_calls
+                            .iter()
+                            .map(|tool_call| {
+                                json!({
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call.name,
+                                        "arguments": serde_json::to_string(&tool_call.input).unwrap_or_default(),
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        messages.push(json!({
+                            "role": "assistant",
+                            "content": message.content,
+                            "tool_calls": tool_calls,
+                        }));
+                    }
                 }
                 Role::System => {
                     messages.push(json!({"role": "system", "content": message.content}))
