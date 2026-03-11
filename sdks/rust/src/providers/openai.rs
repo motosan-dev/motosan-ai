@@ -6,7 +6,7 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -174,6 +174,15 @@ impl OpenAIProvider {
                     input.push(json!({"role": "assistant", "content": message.content}))
                 }
                 Role::User => input.push(json!({"role": "user", "content": message.content})),
+                Role::Tool => {
+                    if let Some(tool_call_id) = &message.tool_call_id {
+                        input.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": message.content,
+                        }));
+                    }
+                }
             }
         }
 
@@ -278,12 +287,24 @@ impl OpenAIRequestBuilder {
         }
 
         for message in &self.req.messages {
-            let role = match message.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => "system",
-            };
-            messages.push(json!({"role": role, "content": message.content}));
+            match message.role {
+                Role::User => messages.push(json!({"role": "user", "content": message.content})),
+                Role::Assistant => {
+                    messages.push(json!({"role": "assistant", "content": message.content}))
+                }
+                Role::System => {
+                    messages.push(json!({"role": "system", "content": message.content}))
+                }
+                Role::Tool => {
+                    if let Some(tool_call_id) = &message.tool_call_id {
+                        messages.push(json!({
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": message.content,
+                        }));
+                    }
+                }
+            }
         }
 
         let mut body = json!({
@@ -299,6 +320,24 @@ impl OpenAIRequestBuilder {
         }
         if let Some(max_tokens) = self.req.max_tokens {
             body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(tools) = self.req.tools {
+            let mapped_tools: Vec<Value> = tools
+                .into_iter()
+                .map(|tool| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description.unwrap_or_default(),
+                            "parameters": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                        }
+                    })
+                })
+                .collect();
+            if !mapped_tools.is_empty() {
+                body["tools"] = json!(mapped_tools);
+            }
         }
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
@@ -366,6 +405,32 @@ impl ProviderImpl for OpenAIProvider {
 
         let content = Self::extract_chat_content(&payload);
 
+        let tool_calls = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("tool_calls"))
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| {
+                        let id = call.get("id").and_then(Value::as_str)?.to_string();
+                        let function = call.get("function")?;
+                        let name = function.get("name").and_then(Value::as_str)?.to_string();
+                        let arguments = function
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        let input = serde_json::from_str(arguments)
+                            .unwrap_or_else(|_| Value::String(arguments.to_string()));
+                        Some(ToolCall { id, name, input })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let stop_reason = match payload
             .get("choices")
             .and_then(Value::as_array)
@@ -397,6 +462,7 @@ impl ProviderImpl for OpenAIProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_OPENAI_MODEL)
             .content(content)
+            .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
             .stop_reason(stop_reason)

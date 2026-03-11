@@ -5,11 +5,14 @@ fn message_constructors_set_role_and_content() {
     let user = Message::user("hello");
     let assistant = Message::assistant("world");
     let system = Message::system("policy");
+    let tool = Message::tool("{}", "call_1");
 
     assert!(matches!(user.role, Role::User));
     assert!(matches!(assistant.role, Role::Assistant));
     assert!(matches!(system.role, Role::System));
+    assert!(matches!(tool.role, Role::Tool));
     assert_eq!(user.content, "hello");
+    assert_eq!(tool.tool_call_id.as_deref(), Some("call_1"));
 }
 
 #[test]

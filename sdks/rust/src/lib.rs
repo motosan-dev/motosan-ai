@@ -16,5 +16,5 @@ pub use providers::Provider;
 pub use retry::RetryPolicy;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{
-    ChatRequest, ChatRequestBuilder, ChatResponse, Message, Role, StopReason, Tool, Usage,
+    ChatRequest, ChatRequestBuilder, ChatResponse, Message, Role, StopReason, Tool, ToolCall, Usage,
 };

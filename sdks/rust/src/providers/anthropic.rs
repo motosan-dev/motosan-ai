@@ -6,7 +6,7 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -113,6 +113,18 @@ impl AnthropicRequestBuilder {
                 Role::Assistant => {
                     messages.push(json!({"role": "assistant", "content": message.content}))
                 }
+                Role::Tool => {
+                    if let Some(tool_use_id) = &message.tool_call_id {
+                        messages.push(json!({
+                            "role": "user",
+                            "content": [{
+                                "type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "content": message.content,
+                            }],
+                        }));
+                    }
+                }
             }
         }
 
@@ -140,6 +152,21 @@ impl AnthropicRequestBuilder {
         }
         if let Some(max_tokens) = self.req.max_tokens {
             body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(tools) = self.req.tools {
+            let mapped_tools: Vec<Value> = tools
+                .into_iter()
+                .map(|tool| {
+                    json!({
+                        "name": tool.name,
+                        "description": tool.description.unwrap_or_default(),
+                        "input_schema": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                    })
+                })
+                .collect();
+            if !mapped_tools.is_empty() {
+                body["tools"] = json!(mapped_tools);
+            }
         }
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
@@ -217,6 +244,31 @@ impl ProviderImpl for AnthropicProvider {
             })
             .unwrap_or_default();
 
+        let tool_calls = payload
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .map(|item| ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        input: item.get("input").cloned().unwrap_or_else(|| json!({})),
+                    })
+                    .filter(|call| !call.id.is_empty() && !call.name.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let model = payload
             .get("model")
             .and_then(Value::as_str)
@@ -244,6 +296,7 @@ impl ProviderImpl for AnthropicProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_ANTHROPIC_MODEL)
             .content(content)
+            .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
             .stop_reason(stop_reason)
