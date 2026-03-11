@@ -382,6 +382,70 @@ async fn minimax_maps_payload_level_4xxx_to_invalid_request_error() {
 }
 
 #[tokio::test]
+async fn minimax_stream_parses_structured_error_message_payload() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer bad-key")
+        .with_status(401)
+        .with_body(
+            json!({
+                "error": {
+                    "message": "invalid api key from structured payload"
+                }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("bad-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.stream(request).await;
+    assert!(matches!(result, Err(MotosanError::Auth(_))));
+    let message = match result {
+        Err(MotosanError::Auth(message)) => message,
+        _ => panic!("unexpected stream result variant"),
+    };
+    assert!(message.contains("structured payload"));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_stream_maps_base_resp_payload_errors() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer bad-key")
+        .with_status(400)
+        .with_body(
+            json!({
+                "base_resp": {
+                    "status_code": 2049,
+                    "status_msg": "invalid api key"
+                }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("bad-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.stream(request).await;
+    assert!(matches!(result, Err(MotosanError::Auth(_))));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn minimax_chat_strips_think_blocks_by_default() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
