@@ -51,6 +51,24 @@ fn builder_uses_default_retry_policy_and_allows_override() {
     );
 }
 
+#[test]
+fn builder_defaults_minimax_expose_reasoning_to_false_and_allows_override() {
+    let default_client = Client::builder()
+        .provider(Provider::Minimax)
+        .api_key("k")
+        .build()
+        .expect("build client");
+    assert!(!default_client.minimax_expose_reasoning());
+
+    let custom_client = Client::builder()
+        .provider(Provider::Minimax)
+        .api_key("k")
+        .minimax_expose_reasoning(true)
+        .build()
+        .expect("build client");
+    assert!(custom_client.minimax_expose_reasoning());
+}
+
 #[tokio::test]
 async fn chat_and_stream_exist_and_dispatch() {
     let client = Client::builder()

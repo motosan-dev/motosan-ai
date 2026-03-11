@@ -126,6 +126,33 @@ The SDK auto-selects the correct header mode based on token prefix.
 MiniMax provider uses OpenAI-compatible chat completions path (`/chat/completions`) with `Authorization: Bearer` authentication.
 The SDK also maps MiniMax payload-level `base_resp` errors (e.g. invalid API key) into SDK error variants.
 
+For `MiniMax-M2.5-highspeed`, responses can include `<think>...</think>` reasoning blocks.
+By default, the SDK strips these blocks and returns only the final answer text.
+
+To expose raw reasoning content:
+
+```rust
+use motosan_ai::{Client, Provider};
+
+let client = Client::builder()
+    .provider(Provider::Minimax)
+    .api_key("...")
+    .minimax_expose_reasoning(true)
+    .build()?;
+```
+
+Or per request:
+
+```rust
+use motosan_ai::{ChatRequest, Message};
+use serde_json::json;
+
+let request = ChatRequest::builder()
+    .message(Message::user("hello"))
+    .provider_options(json!({"minimax_expose_reasoning": true}))
+    .build();
+```
+
 Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Model Maintenance (survey process)

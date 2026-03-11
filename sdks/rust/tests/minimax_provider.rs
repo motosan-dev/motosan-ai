@@ -203,3 +203,94 @@ async fn minimax_maps_payload_level_invalid_api_key_to_auth_error() {
 
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn minimax_chat_strips_think_blocks_by_default() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-M2.5-highspeed",
+                "choices": [{"message": {"content": "<think>internal chain</think>\n\npong"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("reply pong"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "pong");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_chat_can_expose_reasoning_from_provider_flag() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-M2.5-highspeed",
+                "choices": [{"message": {"content": "<think>internal chain</think>\n\npong"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider =
+        MinimaxProvider::new("test-key", None, Some(server.url())).with_expose_reasoning(true);
+    let request = ChatRequest::builder()
+        .message(Message::user("reply pong"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert!(response.content.contains("<think>internal chain</think>"));
+    assert!(response.content.ends_with("pong"));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_chat_can_expose_reasoning_from_request_options() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-M2.5-highspeed",
+                "choices": [{"message": {"content": "<think>internal chain</think>\n\npong"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("reply pong"))
+        .provider_options(json!({"minimax_expose_reasoning": true}))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert!(response.content.contains("<think>internal chain</think>"));
+    assert!(response.content.ends_with("pong"));
+    mock.assert_async().await;
+}

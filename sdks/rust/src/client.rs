@@ -9,6 +9,7 @@ pub struct Client {
     provider: Provider,
     api_key: String,
     model: Option<String>,
+    minimax_expose_reasoning: bool,
     retry_policy: RetryPolicy,
 }
 
@@ -31,6 +32,10 @@ impl Client {
 
     pub fn retry_policy(&self) -> &RetryPolicy {
         &self.retry_policy
+    }
+
+    pub fn minimax_expose_reasoning(&self) -> bool {
+        self.minimax_expose_reasoning
     }
 
     pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
@@ -173,6 +178,7 @@ impl Client {
             self.model.clone(),
             None,
         )
+        .with_expose_reasoning(self.minimax_expose_reasoning)
         .with_retry_policy(self.retry_policy.clone())
     }
 }
@@ -182,6 +188,7 @@ pub struct ClientBuilder {
     provider: Option<Provider>,
     api_key: Option<String>,
     model: Option<String>,
+    minimax_expose_reasoning: Option<bool>,
     retry_policy: Option<RetryPolicy>,
 }
 
@@ -206,6 +213,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn minimax_expose_reasoning(mut self, minimax_expose_reasoning: bool) -> Self {
+        self.minimax_expose_reasoning = Some(minimax_expose_reasoning);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -218,6 +230,7 @@ impl ClientBuilder {
             provider,
             api_key,
             model: self.model,
+            minimax_expose_reasoning: self.minimax_expose_reasoning.unwrap_or(false),
             retry_policy: self.retry_policy.unwrap_or_default(),
         })
     }
