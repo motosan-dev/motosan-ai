@@ -107,6 +107,19 @@ let provider = OpenAIProvider::new("api-key", None, Some("https://api.openai.com
 - `with_auth_style(...)`: supports `Bearer`, `XApiKey`, or custom header.
 - `with_responses_fallback(true)`: when `/v1/chat/completions` returns `404`, fallback to `/v1/responses`.
 
+The same behavior is available from `Client::builder()`:
+
+```rust
+use motosan_ai::{Client, Provider};
+
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key("...")
+    .openai_auth_x_api_key() // or .openai_auth_custom_header("X-Auth-Token")
+    .openai_responses_fallback(true)
+    .build()?;
+```
+
 ## Retry Policy
 
 Retry is enabled by default for transient failures (`429`, `5xx`, timeout/connect errors).
