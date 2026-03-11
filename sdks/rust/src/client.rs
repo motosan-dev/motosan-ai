@@ -9,6 +9,8 @@ pub struct Client {
     provider: Provider,
     api_key: String,
     model: Option<String>,
+    openai_auth_header: Option<String>,
+    openai_responses_fallback: bool,
     minimax_expose_reasoning: bool,
     retry_policy: RetryPolicy,
 }
@@ -36,6 +38,14 @@ impl Client {
 
     pub fn minimax_expose_reasoning(&self) -> bool {
         self.minimax_expose_reasoning
+    }
+
+    pub fn openai_auth_header(&self) -> Option<&str> {
+        self.openai_auth_header.as_deref()
+    }
+
+    pub fn openai_responses_fallback(&self) -> bool {
+        self.openai_responses_fallback
     }
 
     pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
@@ -163,12 +173,18 @@ impl Client {
 
     #[cfg(feature = "openai")]
     fn build_openai_provider(&self) -> crate::providers::openai::OpenAIProvider {
-        crate::providers::openai::OpenAIProvider::new(
-            self.api_key.clone(),
-            self.model.clone(),
-            None,
-        )
-        .with_retry_policy(self.retry_policy.clone())
+        use crate::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
+
+        let auth_style = match self.openai_auth_header.as_deref() {
+            None => OpenAIAuthStyle::Bearer,
+            Some(header) if header.eq_ignore_ascii_case("x-api-key") => OpenAIAuthStyle::XApiKey,
+            Some(header) => OpenAIAuthStyle::Custom(header.to_string()),
+        };
+
+        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None)
+            .with_auth_style(auth_style)
+            .with_responses_fallback(self.openai_responses_fallback)
+            .with_retry_policy(self.retry_policy.clone())
     }
 
     #[cfg(feature = "minimax")]
@@ -188,6 +204,8 @@ pub struct ClientBuilder {
     provider: Option<Provider>,
     api_key: Option<String>,
     model: Option<String>,
+    openai_auth_header: Option<String>,
+    openai_responses_fallback: Option<bool>,
     minimax_expose_reasoning: Option<bool>,
     retry_policy: Option<RetryPolicy>,
 }
@@ -213,6 +231,26 @@ impl ClientBuilder {
         self
     }
 
+    pub fn openai_auth_bearer(mut self) -> Self {
+        self.openai_auth_header = None;
+        self
+    }
+
+    pub fn openai_auth_x_api_key(mut self) -> Self {
+        self.openai_auth_header = Some("x-api-key".to_string());
+        self
+    }
+
+    pub fn openai_auth_custom_header(mut self, header_name: impl Into<String>) -> Self {
+        self.openai_auth_header = Some(header_name.into());
+        self
+    }
+
+    pub fn openai_responses_fallback(mut self, enabled: bool) -> Self {
+        self.openai_responses_fallback = Some(enabled);
+        self
+    }
+
     pub fn minimax_expose_reasoning(mut self, minimax_expose_reasoning: bool) -> Self {
         self.minimax_expose_reasoning = Some(minimax_expose_reasoning);
         self
@@ -230,6 +268,8 @@ impl ClientBuilder {
             provider,
             api_key,
             model: self.model,
+            openai_auth_header: self.openai_auth_header,
+            openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
             minimax_expose_reasoning: self.minimax_expose_reasoning.unwrap_or(false),
             retry_policy: self.retry_policy.unwrap_or_default(),
         })
