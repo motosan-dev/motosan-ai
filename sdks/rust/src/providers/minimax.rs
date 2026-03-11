@@ -481,6 +481,9 @@ impl ProviderImpl for MinimaxProvider {
 
                     let payload: Value = serde_json::from_str(&event.data).ok()?;
                     let text = Self::extract_stream_delta_text(&payload, expose_reasoning);
+                    if text.is_empty() {
+                        return None;
+                    }
                     Some(crate::types::StreamEvent {
                         content: text,
                         done: false,
