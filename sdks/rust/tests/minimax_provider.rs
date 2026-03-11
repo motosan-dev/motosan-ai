@@ -16,7 +16,7 @@ async fn minimax_chat_maps_response() {
         .with_status(200)
         .with_body(
             json!({
-                "model": "MiniMax-Text-01",
+                "model": "MiniMax-M2.5",
                 "choices": [{"message": {"content": "hello from minimax"}, "finish_reason": "stop"}],
                 "usage": {"prompt_tokens": 9, "completion_tokens": 4}
             })
@@ -35,7 +35,7 @@ async fn minimax_chat_maps_response() {
 
     let response = provider.chat(request).await.expect("chat response");
     assert_eq!(response.content, "hello from minimax");
-    assert_eq!(response.model, "MiniMax-Text-01");
+    assert_eq!(response.model, "MiniMax-M2.5");
     assert!(matches!(response.stop_reason, StopReason::Stop));
 
     mock.assert_async().await;
@@ -72,7 +72,7 @@ async fn minimax_request_uses_default_model_and_allows_override() {
     default_mock.assert_async().await;
 
     server.reset();
-    let override_model = "MiniMax-Text-01";
+    let override_model = "MiniMax-M2.5-highspeed";
     let override_mock = server
         .mock("POST", "/v1/text/chatcompletion_v2")
         .match_header("authorization", "Bearer test-key")

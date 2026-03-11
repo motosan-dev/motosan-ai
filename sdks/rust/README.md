@@ -60,7 +60,7 @@ cargo build -p motosan-ai --all-features
 
 - Anthropic: `claude-sonnet-4-6`
 - OpenAI: `gpt-5.3-codex`
-- MiniMax: `MiniMax-Text-01`
+- MiniMax: `MiniMax-M2.5`
 
 Override per client:
 
