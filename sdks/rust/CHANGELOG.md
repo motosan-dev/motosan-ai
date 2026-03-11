@@ -2,6 +2,19 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.1.3] - 2026-03-11
+
+### Added
+- Multi-turn tool use support (fixes #72–#75):
+  - `Message.tool_calls: Vec<ToolCall>` — carry tool calls in assistant messages
+  - `Message::assistant_with_tool_calls()` constructor
+  - `Message::tool_result()` / `Message::tool()` constructors for `Role::Tool`
+- Anthropic: serialize assistant `tool_use` blocks in multi-turn requests
+- OpenAI/MiniMax: serialize assistant `tool_calls` field in multi-turn requests
+
+### Fixed
+- Multi-turn tool use conversations now correctly reconstruct conversation history
+
 ## [0.1.0] - 2026-03-10
 
 ### Added
