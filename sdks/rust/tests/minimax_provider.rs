@@ -254,6 +254,44 @@ async fn minimax_stream_ignores_malformed_chunks() {
 }
 
 #[tokio::test]
+async fn minimax_stream_drops_empty_non_done_chunks() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].content, "ok");
+    assert!(!events[0].done);
+    assert!(events[1].done);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn minimax_maps_payload_level_invalid_api_key_to_auth_error() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
