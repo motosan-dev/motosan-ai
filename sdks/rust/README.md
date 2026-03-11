@@ -113,6 +113,14 @@ let client = Client::builder()
     .build()?;
 ```
 
+## Anthropic Auth Matrix
+
+- `sk-ant-api*` or regular Anthropic API key → `x-api-key` header
+- `sk-ant-oat01*` setup token → `Authorization: Bearer <token>` plus `anthropic-beta: oauth-2025-04-20`
+
+When using `Provider::Anthropic`, pass either token string into `Client::builder().api_key(...)`.
+The SDK auto-selects the correct header mode based on token prefix.
+
 Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Model Maintenance (survey process)
