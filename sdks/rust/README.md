@@ -92,6 +92,21 @@ match client.chat(vec![Message::user("hello")]).await {
 }
 ```
 
+## OpenAI Provider Options
+
+Advanced OpenAI-compatible usage:
+
+```rust
+use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
+
+let provider = OpenAIProvider::new("api-key", None, Some("https://api.openai.com".to_string()))
+    .with_auth_style(OpenAIAuthStyle::Bearer)
+    .with_responses_fallback(true);
+```
+
+- `with_auth_style(...)`: supports `Bearer`, `XApiKey`, or custom header.
+- `with_responses_fallback(true)`: when `/v1/chat/completions` returns `404`, fallback to `/v1/responses`.
+
 ## Retry Policy
 
 Retry is enabled by default for transient failures (`429`, `5xx`, timeout/connect errors).
