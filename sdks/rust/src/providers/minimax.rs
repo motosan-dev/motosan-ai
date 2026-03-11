@@ -31,7 +31,7 @@ impl MinimaxProvider {
             http: Client::new(),
             api_key: api_key.into(),
             model: model.unwrap_or_else(|| DEFAULT_MINIMAX_MODEL.to_string()),
-            base_url: base_url.unwrap_or_else(|| "https://api.minimax.chat".to_string()),
+            base_url: base_url.unwrap_or_else(|| "https://api.minimax.io/v1".to_string()),
             retry_policy: RetryPolicy::default(),
         }
     }
@@ -42,7 +42,24 @@ impl MinimaxProvider {
     }
 
     fn endpoint(&self) -> String {
-        format!("{}/v1/text/chatcompletion_v2", self.base_url)
+        format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
+    }
+
+    fn minimax_payload_error(payload: &Value) -> Option<(u16, String)> {
+        let base_resp = payload.get("base_resp")?;
+        let status_code = base_resp.get("status_code").and_then(Value::as_i64)?;
+        if status_code == 0 {
+            return None;
+        }
+
+        let message = base_resp
+            .get("status_msg")
+            .and_then(Value::as_str)
+            .unwrap_or("minimax request failed")
+            .to_string();
+
+        let mapped_status = if status_code == 2049 { 401 } else { 500 };
+        Some((mapped_status, message))
     }
 }
 
@@ -148,6 +165,11 @@ impl ProviderImpl for MinimaxProvider {
                 .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
 
             if status.is_success() {
+                if let Some((mapped_status, message)) =
+                    Self::minimax_payload_error(&current_payload)
+                {
+                    return Err(map_http_error(mapped_status, message));
+                }
                 payload = current_payload;
                 break;
             }
