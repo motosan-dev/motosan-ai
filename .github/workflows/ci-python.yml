@@ -25,5 +25,7 @@ jobs:
         uses: astral-sh/setup-uv@v3
       - name: Sync deps
         run: uv sync --extra full --extra dev
+      - name: Lint
+        run: uv run ruff check motosan_ai/
       - name: Test
         run: uv run pytest -q

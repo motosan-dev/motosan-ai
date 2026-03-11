@@ -7,7 +7,7 @@ from typing import Any, AsyncIterator, Iterable
 
 from motosan_ai.error import ConfigError
 from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
-from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent
+from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
 
 class Provider(StrEnum):
@@ -55,6 +55,23 @@ class Client:
         else:
             self._provider = MinimaxProvider(api_key=self.api_key, model=model, base_url=base_url)
 
+    @classmethod
+    def anthropic(cls, api_key: str | None = None, model: str | None = None) -> "Client":
+        return cls(provider=Provider.anthropic, api_key=api_key, model=model)
+
+    @classmethod
+    def openai(cls, api_key: str | None = None, model: str | None = None) -> "Client":
+        return cls(provider=Provider.openai, api_key=api_key, model=model)
+
+    @classmethod
+    def minimax(
+        cls,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+    ) -> "Client":
+        return cls(provider=Provider.minimax, api_key=api_key, model=model, base_url=base_url)
+
     @staticmethod
     def _load_api_key(provider: Provider) -> str | None:
         env_map = {
@@ -68,6 +85,7 @@ class Client:
         self,
         messages: Iterable[Message | dict[str, Any]],
         *,
+        tools: list[Tool] | None = None,
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -77,6 +95,7 @@ class Client:
         return ChatRequest(
             messages=normalized,
             model=self.model,
+            tools=tools,
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -87,6 +106,7 @@ class Client:
         self,
         messages: Iterable[Message | dict[str, Any]],
         *,
+        tools: list[Tool] | None = None,
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -94,6 +114,7 @@ class Client:
     ) -> ChatResponse:
         request = self._build_request(
             messages,
+            tools=tools,
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -105,6 +126,7 @@ class Client:
         self,
         messages: Iterable[Message | dict[str, Any]],
         *,
+        tools: list[Tool] | None = None,
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -112,6 +134,7 @@ class Client:
     ) -> AsyncIterator[StreamEvent]:
         request = self._build_request(
             messages,
+            tools=tools,
             system=system,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -124,6 +147,7 @@ class Client:
         self,
         messages: Iterable[Message | dict[str, Any]],
         *,
+        tools: list[Tool] | None = None,
         system: str | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
@@ -132,6 +156,7 @@ class Client:
         return asyncio.run(
             self.chat(
                 messages,
+                tools=tools,
                 system=system,
                 temperature=temperature,
                 max_tokens=max_tokens,

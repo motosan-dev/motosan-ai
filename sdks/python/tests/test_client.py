@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from motosan_ai import ChatResponse, Client, Message, Provider, StopReason, Usage
+from motosan_ai import ChatResponse, Client, Message, Provider, StopReason, Tool, Usage
 
 
 class FakeProvider:
@@ -31,6 +31,25 @@ async def test_client_accepts_dict_messages(monkeypatch):
     assert fake.last_request.messages[0] == Message.user("hello")
 
 
+@pytest.mark.asyncio
+async def test_client_passes_tools(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "env-anthropic")
+    client = Client(Provider.anthropic)
+    fake = FakeProvider()
+    client._provider = fake
+
+    tools = [
+        Tool(
+            name="get_weather",
+            description="Get current weather",
+            input_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        )
+    ]
+
+    await client.chat([Message.user("weather in Tokyo")], tools=tools)
+    assert fake.last_request.tools == tools
+
+
 def test_client_env_fallback(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "env-anthropic")
     client = Client(Provider.anthropic)
@@ -44,6 +63,16 @@ def test_chat_sync(monkeypatch):
     client._provider = fake
     response = client.chat_sync([Message.user("hi")])
     assert response.content == "ok"
+
+
+def test_provider_factory_methods(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
+    monkeypatch.setenv("OPENAI_API_KEY", "o")
+    monkeypatch.setenv("MINIMAX_API_KEY", "m")
+
+    assert Client.anthropic().provider == Provider.anthropic
+    assert Client.openai().provider == Provider.openai
+    assert Client.minimax().provider == Provider.minimax
 
 
 def test_missing_key_raises(monkeypatch):
