@@ -460,10 +460,25 @@ impl ProviderImpl for MinimaxProvider {
                 continue;
             }
 
-            let message = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "minimax stream request failed".to_string());
+            let body_bytes = response.bytes().await.ok();
+
+            if let Some(payload) = body_bytes
+                .as_deref()
+                .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
+            {
+                if let Some((mapped_status, message)) = Self::minimax_payload_error(&payload) {
+                    return Err(map_http_error(mapped_status, message));
+                }
+
+                let message = extract_error_message(&payload, "minimax stream request failed");
+                return Err(map_http_error(status.as_u16(), message));
+            }
+
+            let message = body_bytes
+                .as_deref()
+                .map(|bytes| String::from_utf8_lossy(bytes).trim().to_string())
+                .filter(|message| !message.is_empty())
+                .unwrap_or_else(|| "minimax stream request failed".to_string());
             return Err(map_http_error(status.as_u16(), message));
         };
 
