@@ -7,12 +7,14 @@ pub enum Role {
     User,
     Assistant,
     System,
+    Tool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Message {
     pub role: Role,
     pub content: String,
+    pub tool_call_id: Option<String>,
 }
 
 impl Message {
@@ -20,6 +22,7 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -27,6 +30,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -34,6 +38,15 @@ impl Message {
         Self {
             role: Role::System,
             content: content.into(),
+            tool_call_id: None,
+        }
+    }
+
+    pub fn tool(content: impl Into<String>, tool_call_id: impl Into<String>) -> Self {
+        Self {
+            role: Role::Tool,
+            content: content.into(),
+            tool_call_id: Some(tool_call_id.into()),
         }
     }
 }
@@ -130,9 +143,17 @@ impl ChatRequestBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub content: String,
+    pub tool_calls: Vec<ToolCall>,
     pub model: String,
     pub usage: Usage,
     pub stop_reason: StopReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

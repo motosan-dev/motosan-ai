@@ -6,7 +6,7 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -208,7 +208,7 @@ impl MinimaxRequestBuilder {
             }
         }
 
-        let mut messages: Vec<(String, String)> = Vec::new();
+        let mut messages: Vec<(String, String, Option<String>)> = Vec::new();
         for message in &self.req.messages {
             match message.role {
                 Role::System => {
@@ -217,25 +217,40 @@ impl MinimaxRequestBuilder {
                         system_parts.push(trimmed.to_string());
                     }
                 }
-                Role::User => messages.push(("user".to_string(), message.content.clone())),
+                Role::User => messages.push(("user".to_string(), message.content.clone(), None)),
                 Role::Assistant => {
-                    messages.push(("assistant".to_string(), message.content.clone()))
+                    messages.push(("assistant".to_string(), message.content.clone(), None))
+                }
+                Role::Tool => {
+                    if let Some(tool_call_id) = &message.tool_call_id {
+                        messages.push((
+                            "tool".to_string(),
+                            message.content.clone(),
+                            Some(tool_call_id.clone()),
+                        ));
+                    }
                 }
             }
         }
 
         if !system_parts.is_empty() {
             let merged_system = system_parts.join("\n\n");
-            if let Some((_, content)) = messages.iter_mut().find(|(role, _)| role == "user") {
+            if let Some((_, content, _)) = messages.iter_mut().find(|(role, _, _)| role == "user") {
                 *content = format!("{}\n\n{}", merged_system, content);
             } else {
-                messages.insert(0, ("user".to_string(), merged_system));
+                messages.insert(0, ("user".to_string(), merged_system, None));
             }
         }
 
         let messages: Vec<Value> = messages
             .into_iter()
-            .map(|(role, content)| json!({"role": role, "content": content}))
+            .map(|(role, content, tool_call_id)| {
+                let mut message = json!({"role": role, "content": content});
+                if let Some(tool_call_id) = tool_call_id {
+                    message["tool_call_id"] = json!(tool_call_id);
+                }
+                message
+            })
             .collect();
 
         let mut body = json!({
@@ -251,6 +266,24 @@ impl MinimaxRequestBuilder {
         }
         if let Some(max_tokens) = self.req.max_tokens {
             body["max_tokens"] = json!(max_tokens);
+        }
+        if let Some(tools) = self.req.tools {
+            let mapped_tools: Vec<Value> = tools
+                .into_iter()
+                .map(|tool| {
+                    json!({
+                        "type": "function",
+                        "function": {
+                            "name": tool.name,
+                            "description": tool.description.unwrap_or_default(),
+                            "parameters": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                        }
+                    })
+                })
+                .collect();
+            if !mapped_tools.is_empty() {
+                body["tools"] = json!(mapped_tools);
+            }
         }
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
@@ -324,6 +357,32 @@ impl ProviderImpl for MinimaxProvider {
 
         let content = Self::extract_chat_content(&payload, expose_reasoning);
 
+        let tool_calls = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("tool_calls"))
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| {
+                        let id = call.get("id").and_then(Value::as_str)?.to_string();
+                        let function = call.get("function")?;
+                        let name = function.get("name").and_then(Value::as_str)?.to_string();
+                        let arguments = function
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .unwrap_or("{}");
+                        let input = serde_json::from_str(arguments)
+                            .unwrap_or_else(|_| Value::String(arguments.to_string()));
+                        Some(ToolCall { id, name, input })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let stop_reason = match payload
             .get("choices")
             .and_then(Value::as_array)
@@ -355,6 +414,7 @@ impl ProviderImpl for MinimaxProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_MINIMAX_MODEL)
             .content(content)
+            .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
             .stop_reason(stop_reason)
