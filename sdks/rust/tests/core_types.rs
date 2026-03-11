@@ -1,4 +1,4 @@
-use motosan_ai::{ChatRequest, Message, Role, StopReason};
+use motosan_ai::{ChatRequest, Message, Role, StopReason, ToolCall};
 
 #[test]
 fn message_constructors_set_role_and_content() {
@@ -13,6 +13,30 @@ fn message_constructors_set_role_and_content() {
     assert!(matches!(tool.role, Role::Tool));
     assert_eq!(user.content, "hello");
     assert_eq!(tool.tool_call_id.as_deref(), Some("call_1"));
+    assert!(user.tool_calls.is_empty());
+    assert!(assistant.tool_calls.is_empty());
+    assert!(system.tool_calls.is_empty());
+    assert!(tool.tool_calls.is_empty());
+}
+
+#[test]
+fn assistant_with_tool_calls_constructor_sets_values() {
+    let tool_calls = vec![ToolCall {
+        id: "call_1".to_string(),
+        name: "get_weather".to_string(),
+        input: serde_json::json!({"city": "Taipei"}),
+    }];
+
+    let assistant = Message::assistant_with_tool_calls("Let me check", tool_calls.clone());
+    let tool_result = Message::tool_result("call_1", "25°C");
+
+    assert!(matches!(assistant.role, Role::Assistant));
+    assert_eq!(assistant.content, "Let me check");
+    assert_eq!(assistant.tool_calls, tool_calls);
+    assert!(assistant.tool_call_id.is_none());
+
+    assert!(matches!(tool_result.role, Role::Tool));
+    assert_eq!(tool_result.tool_call_id.as_deref(), Some("call_1"));
 }
 
 #[test]
