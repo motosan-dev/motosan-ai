@@ -130,9 +130,17 @@ impl ChatRequestBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub content: String,
+    pub tool_calls: Vec<ToolCall>,
     pub model: String,
     pub usage: Usage,
     pub stop_reason: StopReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

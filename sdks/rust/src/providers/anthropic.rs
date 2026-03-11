@@ -6,7 +6,7 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -185,6 +185,30 @@ impl ProviderImpl for AnthropicProvider {
             })
             .unwrap_or_default();
 
+        let tool_calls = payload
+            .get("content")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) == Some("tool_use"))
+                    .map(|item| ToolCall {
+                        id: item
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        name: item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        input: item.get("input").cloned().unwrap_or(Value::Null),
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let model = payload
             .get("model")
             .and_then(Value::as_str)
@@ -212,6 +236,7 @@ impl ProviderImpl for AnthropicProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_ANTHROPIC_MODEL)
             .content(content)
+            .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
             .stop_reason(stop_reason)

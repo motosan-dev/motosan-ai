@@ -6,7 +6,7 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use reqwest::Client;
@@ -172,6 +172,28 @@ impl ProviderImpl for MinimaxProvider {
             .unwrap_or_default()
             .to_string();
 
+        let tool_calls = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"))
+            .and_then(|message| message.get("tool_calls"))
+            .and_then(Value::as_array)
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter_map(|call| {
+                        let id = call.get("id")?.as_str()?.to_string();
+                        let function = call.get("function")?;
+                        let name = function.get("name")?.as_str()?.to_string();
+                        let arguments_str = function.get("arguments")?.as_str()?;
+                        let input = serde_json::from_str(arguments_str).unwrap_or(Value::Null);
+                        Some(ToolCall { id, name, input })
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
         let stop_reason = match payload
             .get("choices")
             .and_then(Value::as_array)
@@ -203,6 +225,7 @@ impl ProviderImpl for MinimaxProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_MINIMAX_MODEL)
             .content(content)
+            .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
             .stop_reason(stop_reason)

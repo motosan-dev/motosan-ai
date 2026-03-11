@@ -4,7 +4,7 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse};
 #[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
-use crate::types::{StopReason, Usage};
+use crate::types::{StopReason, ToolCall, Usage};
 use async_trait::async_trait;
 #[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 use reqwest::header::HeaderMap;
@@ -29,6 +29,7 @@ pub trait ProviderImpl: Send + Sync {
 #[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
+    tool_calls: Vec<ToolCall>,
     model: String,
     usage: Usage,
     stop_reason: StopReason,
@@ -39,6 +40,7 @@ impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
         Self {
             content: String::new(),
+            tool_calls: Vec::new(),
             model: default_model.into(),
             usage: Usage {
                 input_tokens: 0,
@@ -58,6 +60,11 @@ impl ChatResponseBuilder {
         self
     }
 
+    pub(crate) fn tool_calls(mut self, tool_calls: Vec<ToolCall>) -> Self {
+        self.tool_calls = tool_calls;
+        self
+    }
+
     pub(crate) fn usage(mut self, input_tokens: u32, output_tokens: u32) -> Self {
         self.usage = Usage {
             input_tokens,
@@ -74,6 +81,7 @@ impl ChatResponseBuilder {
     pub(crate) fn build(self) -> ChatResponse {
         ChatResponse {
             content: self.content,
+            tool_calls: self.tool_calls,
             model: self.model,
             usage: self.usage,
             stop_reason: self.stop_reason,
