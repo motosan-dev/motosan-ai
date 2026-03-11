@@ -180,20 +180,43 @@ impl MinimaxRequestBuilder {
             .model
             .clone()
             .unwrap_or_else(|| self.default_model.clone());
-        let mut messages = Vec::new();
-
+        let mut system_parts = Vec::new();
         if let Some(system) = &self.req.system {
-            messages.push(json!({"role": "system", "content": system}));
+            let trimmed = system.trim();
+            if !trimmed.is_empty() {
+                system_parts.push(trimmed.to_string());
+            }
         }
 
+        let mut messages: Vec<(String, String)> = Vec::new();
         for message in &self.req.messages {
-            let role = match message.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => "system",
-            };
-            messages.push(json!({"role": role, "content": message.content}));
+            match message.role {
+                Role::System => {
+                    let trimmed = message.content.trim();
+                    if !trimmed.is_empty() {
+                        system_parts.push(trimmed.to_string());
+                    }
+                }
+                Role::User => messages.push(("user".to_string(), message.content.clone())),
+                Role::Assistant => {
+                    messages.push(("assistant".to_string(), message.content.clone()))
+                }
+            }
         }
+
+        if !system_parts.is_empty() {
+            let merged_system = system_parts.join("\n\n");
+            if let Some((_, content)) = messages.iter_mut().find(|(role, _)| role == "user") {
+                *content = format!("{}\n\n{}", merged_system, content);
+            } else {
+                messages.insert(0, ("user".to_string(), merged_system));
+            }
+        }
+
+        let messages: Vec<Value> = messages
+            .into_iter()
+            .map(|(role, content)| json!({"role": role, "content": content}))
+            .collect();
 
         let mut body = json!({
             "model": model,

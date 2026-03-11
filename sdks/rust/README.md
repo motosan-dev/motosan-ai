@@ -125,6 +125,7 @@ The SDK auto-selects the correct header mode based on token prefix.
 
 MiniMax provider uses OpenAI-compatible chat completions path (`/chat/completions`) with `Authorization: Bearer` authentication.
 The SDK also maps MiniMax payload-level `base_resp` errors (e.g. invalid API key) into SDK error variants.
+For compatibility, MiniMax system prompts are merged into the first user message (instead of sending `role: system`).
 
 For `MiniMax-M2.5-highspeed`, responses can include `<think>...</think>` reasoning blocks.
 By default, the SDK strips these blocks and returns only the final answer text.

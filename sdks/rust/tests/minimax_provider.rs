@@ -101,6 +101,85 @@ async fn minimax_request_uses_default_model_and_allows_override() {
 }
 
 #[tokio::test]
+async fn minimax_request_merges_system_prompt_into_first_user_message() {
+    let mut server = mockito::Server::new_async().await;
+
+    let no_system_role_mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::Regex(r#"\"role\"\s*:\s*\"system\""#.to_string()))
+        .expect(0)
+        .with_status(200)
+        .with_body("{}")
+        .create_async()
+        .await;
+
+    let merged_system_mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::Regex(
+            r#"\"content\"\s*:\s*\"global rules\\n\\nmessage rules\\n\\nhello\""#.to_string(),
+        ))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-Text-01",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .system("global rules")
+        .message(Message::system("message rules"))
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+
+    merged_system_mock.assert_async().await;
+    no_system_role_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_request_inserts_user_message_when_only_system_prompts_exist() {
+    let mut server = mockito::Server::new_async().await;
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::Regex(r#"\"role\"\s*:\s*\"user\""#.to_string()))
+        .match_body(Matcher::Regex(
+            r#"\"content\"\s*:\s*\"only system\""#.to_string(),
+        ))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-Text-01",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().system("only system").build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn minimax_stream_emits_content_and_done() {
     let mut server = mockito::Server::new_async().await;
     let sse_body = concat!(
