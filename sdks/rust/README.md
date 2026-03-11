@@ -128,6 +128,8 @@ The SDK also maps MiniMax payload-level `base_resp` errors (e.g. invalid API key
 
 For `MiniMax-M2.5-highspeed`, responses can include `<think>...</think>` reasoning blocks.
 By default, the SDK strips these blocks and returns only the final answer text.
+If `message.content` is empty (or only contains `<think>` blocks), the SDK falls back to
+`message.reasoning_content` for chat and stream parsing.
 
 To expose raw reasoning content:
 

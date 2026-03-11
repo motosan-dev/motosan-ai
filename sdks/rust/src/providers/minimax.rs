@@ -96,6 +96,62 @@ impl MinimaxProvider {
         sanitized.push_str(remaining);
         sanitized.trim().to_string()
     }
+
+    fn first_non_empty_text(value: Option<&Value>) -> Option<&str> {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
+
+    fn extract_chat_content(payload: &Value, expose_reasoning: bool) -> String {
+        let message = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("message"));
+
+        let content = Self::first_non_empty_text(message.and_then(|msg| msg.get("content")));
+        let reasoning =
+            Self::first_non_empty_text(message.and_then(|msg| msg.get("reasoning_content")));
+
+        if expose_reasoning {
+            return content.or(reasoning).unwrap_or_default().to_string();
+        }
+
+        if let Some(content_text) = content {
+            let sanitized = Self::strip_think_blocks(content_text);
+            if !sanitized.is_empty() {
+                return sanitized;
+            }
+        }
+
+        reasoning.map(Self::strip_think_blocks).unwrap_or_default()
+    }
+
+    fn extract_stream_delta_text(payload: &Value, expose_reasoning: bool) -> String {
+        let delta = payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|choices| choices.first())
+            .and_then(|choice| choice.get("delta"));
+
+        let content = Self::first_non_empty_text(delta.and_then(|d| d.get("content")));
+        let reasoning = Self::first_non_empty_text(delta.and_then(|d| d.get("reasoning_content")));
+
+        if expose_reasoning {
+            return content.or(reasoning).unwrap_or_default().to_string();
+        }
+
+        if let Some(content_text) = content {
+            let sanitized = Self::strip_think_blocks(content_text);
+            if !sanitized.is_empty() {
+                return sanitized;
+            }
+        }
+
+        reasoning.map(Self::strip_think_blocks).unwrap_or_default()
+    }
 }
 
 struct MinimaxRequestBuilder {
@@ -223,21 +279,7 @@ impl ProviderImpl for MinimaxProvider {
             return Err(map_http_error(status.as_u16(), message));
         }
 
-        let raw_content = payload
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("message"))
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-
-        let content = if expose_reasoning {
-            raw_content
-        } else {
-            Self::strip_think_blocks(&raw_content)
-        };
+        let content = Self::extract_chat_content(&payload, expose_reasoning);
 
         let stop_reason = match payload
             .get("choices")
@@ -277,6 +319,7 @@ impl ProviderImpl for MinimaxProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone())
             .stream(true)
             .build();
@@ -324,7 +367,7 @@ impl ProviderImpl for MinimaxProvider {
         let parsed_stream = response
             .bytes_stream()
             .eventsource()
-            .filter_map(|event| match event {
+            .filter_map(move |event| match event {
                 Ok(event) => {
                     if event.data.trim() == "[DONE]" {
                         return Some(crate::types::StreamEvent {
@@ -334,15 +377,7 @@ impl ProviderImpl for MinimaxProvider {
                     }
 
                     let payload: Value = serde_json::from_str(&event.data).ok()?;
-                    let text = payload
-                        .get("choices")
-                        .and_then(Value::as_array)
-                        .and_then(|choices| choices.first())
-                        .and_then(|choice| choice.get("delta"))
-                        .and_then(|delta| delta.get("content"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
+                    let text = Self::extract_stream_delta_text(&payload, expose_reasoning);
                     Some(crate::types::StreamEvent {
                         content: text,
                         done: false,

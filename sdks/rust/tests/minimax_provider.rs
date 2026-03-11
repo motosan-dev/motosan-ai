@@ -294,3 +294,96 @@ async fn minimax_chat_can_expose_reasoning_from_request_options() {
     assert!(response.content.ends_with("pong"));
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn minimax_chat_falls_back_to_reasoning_content_when_content_empty() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-M2.5-highspeed",
+                "choices": [{"message": {"content": "", "reasoning_content": "fallback answer"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("reply"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "fallback answer");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_chat_uses_reasoning_content_when_content_only_think_blocks() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "MiniMax-M2.5-highspeed",
+                "choices": [{"message": {"content": "<think>secret</think>", "reasoning_content": "public fallback"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 9, "completion_tokens": 4},
+                "base_resp": {"status_code": 0, "status_msg": ""}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("reply"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "public fallback");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_stream_falls_back_to_reasoning_content_when_delta_content_empty() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"\",\"reasoning_content\":\"fallback\"}}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].content, "fallback");
+    assert!(!events[0].done);
+    assert!(events[1].done);
+    mock.assert_async().await;
+}
