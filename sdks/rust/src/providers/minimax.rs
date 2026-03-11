@@ -65,7 +65,27 @@ impl MinimaxProvider {
             .unwrap_or("minimax request failed")
             .to_string();
 
-        let mapped_status = if status_code == 2049 { 401 } else { 500 };
+        let message_lower = message.to_ascii_lowercase();
+        let mapped_status = match status_code {
+            2049 => 401,
+            1008 => 429,
+            4000..=4999 => 400,
+            5000..=5999 => 500,
+            _ if message_lower.contains("invalid api key")
+                || message_lower.contains("unauthorized")
+                || message_lower.contains("authentication") =>
+            {
+                401
+            }
+            _ if message_lower.contains("insufficient balance")
+                || message_lower.contains("quota")
+                || message_lower.contains("rate limit")
+                || message_lower.contains("too many") =>
+            {
+                429
+            }
+            _ => 500,
+        };
         Some((mapped_status, message))
     }
 

@@ -284,6 +284,66 @@ async fn minimax_maps_payload_level_invalid_api_key_to_auth_error() {
 }
 
 #[tokio::test]
+async fn minimax_maps_payload_level_insufficient_balance_to_rate_limit_error() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "base_resp": {
+                    "status_code": 1008,
+                    "status_msg": "insufficient balance (1008)"
+                }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.chat(request).await;
+    assert!(matches!(result, Err(MotosanError::RateLimit(_))));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_maps_payload_level_4xxx_to_invalid_request_error() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "base_resp": {
+                    "status_code": 4001,
+                    "status_msg": "bad request"
+                }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.chat(request).await;
+    assert!(matches!(result, Err(MotosanError::InvalidRequest(_))));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn minimax_chat_strips_think_blocks_by_default() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
