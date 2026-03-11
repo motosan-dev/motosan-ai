@@ -18,6 +18,7 @@ pub struct MinimaxProvider {
     api_key: String,
     model: String,
     base_url: String,
+    expose_reasoning: bool,
     retry_policy: RetryPolicy,
 }
 
@@ -32,8 +33,14 @@ impl MinimaxProvider {
             api_key: api_key.into(),
             model: model.unwrap_or_else(|| DEFAULT_MINIMAX_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.minimax.io/v1".to_string()),
+            expose_reasoning: false,
             retry_policy: RetryPolicy::default(),
         }
+    }
+
+    pub fn with_expose_reasoning(mut self, expose_reasoning: bool) -> Self {
+        self.expose_reasoning = expose_reasoning;
+        self
     }
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
@@ -60,6 +67,34 @@ impl MinimaxProvider {
 
         let mapped_status = if status_code == 2049 { 401 } else { 500 };
         Some((mapped_status, message))
+    }
+
+    fn resolve_expose_reasoning(&self, req: &ChatRequest) -> bool {
+        req.provider_options
+            .as_ref()
+            .and_then(Value::as_object)
+            .and_then(|opts| opts.get("minimax_expose_reasoning"))
+            .and_then(Value::as_bool)
+            .unwrap_or(self.expose_reasoning)
+    }
+
+    fn strip_think_blocks(content: &str) -> String {
+        let mut remaining = content;
+        let mut sanitized = String::new();
+
+        while let Some(open_idx) = remaining.find("<think>") {
+            sanitized.push_str(&remaining[..open_idx]);
+            let after_open = &remaining[open_idx + "<think>".len()..];
+            if let Some(close_idx) = after_open.find("</think>") {
+                remaining = &after_open[close_idx + "</think>".len()..];
+            } else {
+                remaining = "";
+                break;
+            }
+        }
+
+        sanitized.push_str(remaining);
+        sanitized.trim().to_string()
     }
 }
 
@@ -121,6 +156,9 @@ impl MinimaxRequestBuilder {
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
                 for (key, value) in map {
+                    if key == "minimax_expose_reasoning" {
+                        continue;
+                    }
                     body[key] = value.clone();
                 }
             }
@@ -133,6 +171,7 @@ impl MinimaxRequestBuilder {
 #[async_trait]
 impl ProviderImpl for MinimaxProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone()).build();
         let mut attempt = 0;
         let payload: Value;
@@ -184,7 +223,7 @@ impl ProviderImpl for MinimaxProvider {
             return Err(map_http_error(status.as_u16(), message));
         }
 
-        let content = payload
+        let raw_content = payload
             .get("choices")
             .and_then(Value::as_array)
             .and_then(|choices| choices.first())
@@ -193,6 +232,12 @@ impl ProviderImpl for MinimaxProvider {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+
+        let content = if expose_reasoning {
+            raw_content
+        } else {
+            Self::strip_think_blocks(&raw_content)
+        };
 
         let stop_reason = match payload
             .get("choices")
