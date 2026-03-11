@@ -121,6 +121,11 @@ let client = Client::builder()
 When using `Provider::Anthropic`, pass either token string into `Client::builder().api_key(...)`.
 The SDK auto-selects the correct header mode based on token prefix.
 
+## MiniMax Compatibility
+
+MiniMax provider uses OpenAI-compatible chat completions path (`/chat/completions`) with `Authorization: Bearer` authentication.
+The SDK also maps MiniMax payload-level `base_resp` errors (e.g. invalid API key) into SDK error variants.
+
 Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Model Maintenance (survey process)

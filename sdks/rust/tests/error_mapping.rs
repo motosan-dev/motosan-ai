@@ -124,7 +124,7 @@ async fn minimax_maps_401_429_500() {
             .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .with_status(401)
         .with_body(json!({"error": {"message": "bad key"}}).to_string())
         .create_async()
@@ -138,7 +138,7 @@ async fn minimax_maps_401_429_500() {
 
     server.reset();
     let rate_limited = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .with_status(429)
         .with_body(json!({"error": {"message": "too many"}}).to_string())
         .create_async()
@@ -152,7 +152,7 @@ async fn minimax_maps_401_429_500() {
 
     server.reset();
     let provider_error = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .with_status(500)
         .with_body(json!({"error": {"message": "boom"}}).to_string())
         .create_async()

@@ -3,7 +3,7 @@
 use mockito::Matcher;
 use motosan_ai::providers::minimax::MinimaxProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StopReason, DEFAULT_MINIMAX_MODEL};
+use motosan_ai::{ChatRequest, Message, MotosanError, StopReason, DEFAULT_MINIMAX_MODEL};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -11,7 +11,7 @@ use tokio_stream::StreamExt;
 async fn minimax_chat_maps_response() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_body(
@@ -46,7 +46,7 @@ async fn minimax_request_uses_default_model_and_allows_override() {
     let mut server = mockito::Server::new_async().await;
 
     let default_mock = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .match_header("authorization", "Bearer test-key")
         .match_body(Matcher::Regex(format!(
             r#"\"model\"\s*:\s*\"{}\""#,
@@ -74,7 +74,7 @@ async fn minimax_request_uses_default_model_and_allows_override() {
     server.reset();
     let override_model = "MiniMax-Text-01";
     let override_mock = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .match_header("authorization", "Bearer test-key")
         .match_body(Matcher::Regex(format!(
             r#"\"model\"\s*:\s*\"{}\""#,
@@ -110,7 +110,7 @@ async fn minimax_stream_emits_content_and_done() {
     );
 
     let mock = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
@@ -147,7 +147,7 @@ async fn minimax_stream_ignores_malformed_chunks() {
     );
 
     let mock = server
-        .mock("POST", "/v1/text/chatcompletion_v2")
+        .mock("POST", "/chat/completions")
         .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
@@ -170,6 +170,36 @@ async fn minimax_stream_ignores_malformed_chunks() {
     assert_eq!(events[0].content, "ok");
     assert!(!events[0].done);
     assert!(events[1].done);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_maps_payload_level_invalid_api_key_to_auth_error() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer bad-key")
+        .with_status(200)
+        .with_body(
+            json!({
+                "base_resp": {
+                    "status_code": 2049,
+                    "status_msg": "invalid api key"
+                }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("bad-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let result = provider.chat(request).await;
+    assert!(matches!(result, Err(MotosanError::Auth(_))));
 
     mock.assert_async().await;
 }
