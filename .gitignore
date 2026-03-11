@@ -1,3 +1,10 @@
 /target/
 /Cargo.lock
 
+
+# Python SDK
+sdks/python/.venv/
+sdks/python/.pytest_cache/
+sdks/python/__pycache__/
+sdks/python/**/__pycache__/
+sdks/python/**/.pytest_cache/
