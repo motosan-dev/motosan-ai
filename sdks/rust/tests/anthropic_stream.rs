@@ -218,8 +218,6 @@ async fn stream_with_passes_system_and_max_tokens_to_provider() {
 
 #[tokio::test]
 async fn client_stream_with_dispatches_to_provider() {
-    use motosan_ai::{Client, Provider};
-
     let mut server = mockito::Server::new_async().await;
     let sse_body = concat!(
         "event: content_block_delta\n",
