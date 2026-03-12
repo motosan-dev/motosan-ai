@@ -1,3 +1,5 @@
+const DEFAULT_MAX_TOKENS: u32 = 4096;
+
 use crate::error::MotosanError;
 use crate::models::DEFAULT_ANTHROPIC_MODEL;
 use crate::providers::{
@@ -166,9 +168,8 @@ impl AnthropicRequestBuilder {
         if let Some(temperature) = self.req.temperature {
             body["temperature"] = json!(temperature);
         }
-        if let Some(max_tokens) = self.req.max_tokens {
-            body["max_tokens"] = json!(max_tokens);
-        }
+        let max_tokens = self.req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+        body["max_tokens"] = json!(max_tokens);
         if let Some(tools) = self.req.tools {
             let mapped_tools: Vec<Value> = tools
                 .into_iter()
