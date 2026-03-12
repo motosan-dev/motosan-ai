@@ -244,7 +244,10 @@ async fn client_stream_with_dispatches_to_provider() {
         .temperature(0.5)
         .build();
 
-    let mut stream = provider.stream(request).await.expect("stream_with response");
+    let mut stream = provider
+        .stream(request)
+        .await
+        .expect("stream_with response");
     let first = stream.next().await.expect("first event");
     assert_eq!(first.content, "hi");
 }
