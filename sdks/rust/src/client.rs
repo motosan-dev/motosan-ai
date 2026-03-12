@@ -70,6 +70,10 @@ impl Client {
         self.dispatch_stream(request_builder.build()).await
     }
 
+    pub async fn stream_with(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
+        self.dispatch_stream(request).await
+    }
+
     async fn dispatch_chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
         match self.provider {
             Provider::Anthropic => {
