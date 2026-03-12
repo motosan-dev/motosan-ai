@@ -154,3 +154,62 @@ async fn anthropic_setup_token_401_includes_actionable_hint() {
     assert!(format!("{err}").contains("oauth-2025-04-20"));
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn chat_without_max_tokens_uses_default() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .match_body(Matcher::Regex(r#""max_tokens"\s*:\s*4096"#.to_string()))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn chat_with_explicit_max_tokens_overrides_default() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .match_body(Matcher::Regex(r#""max_tokens"\s*:\s*2000"#.to_string()))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .max_tokens(2000)
+        .build();
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
