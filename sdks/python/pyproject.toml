@@ -27,7 +27,8 @@ Repository = "https://github.com/motosan-dev/motosan-ai"
 anthropic = ["anthropic>=0.49"]
 openai = ["openai>=1.70"]
 minimax = ["httpx>=0.27"]
-full = ["motosan-ai[anthropic,openai,minimax]"]
+ollama = ["openai>=1.70"]
+full = ["motosan-ai[anthropic,openai,minimax,ollama]"]
 
 dev = [
   "pytest>=8.0",

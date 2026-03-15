@@ -8,14 +8,18 @@ from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReaso
 
 
 class OpenAIProvider:
-    def __init__(self, api_key: str, model: str | None = None) -> None:
+    def __init__(self, api_key: str, model: str | None = None, base_url: str | None = None) -> None:
         self.api_key = api_key
         self.model = model or "gpt-4o"
+        self.base_url = base_url
         try:
             from openai import AsyncOpenAI  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise ConfigError("openai package is required for OpenAIProvider") from exc
-        self._client = AsyncOpenAI(api_key=api_key)
+        kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            kwargs["base_url"] = base_url
+        self._client = AsyncOpenAI(**kwargs)
 
     @staticmethod
     def _serialize_messages(messages: list[Message], system: str | None = None) -> list[dict[str, Any]]:

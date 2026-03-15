@@ -250,6 +250,9 @@ full = [
 minimax = [
     { name = "httpx" },
 ]
+ollama = [
+    { name = "openai" },
+]
 openai = [
     { name = "openai" },
 ]
@@ -259,14 +262,15 @@ requires-dist = [
     { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.49" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx", marker = "extra == 'minimax'", specifier = ">=0.27" },
-    { name = "motosan-ai", extras = ["anthropic", "openai", "minimax"], marker = "extra == 'full'" },
+    { name = "motosan-ai", extras = ["anthropic", "openai", "minimax", "ollama"], marker = "extra == 'full'" },
+    { name = "openai", marker = "extra == 'ollama'", specifier = ">=1.70" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.70" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9" },
 ]
-provides-extras = ["anthropic", "openai", "minimax", "full", "dev"]
+provides-extras = ["anthropic", "openai", "minimax", "ollama", "full", "dev"]
 
 [[package]]
 name = "openai"
