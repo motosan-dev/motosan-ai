@@ -14,6 +14,7 @@ class Provider(StrEnum):
     anthropic = "anthropic"
     openai = "openai"
     minimax = "minimax"
+    ollama = "ollama"
 
 
 def _normalize_message(item: Message | dict[str, Any]) -> Message:
@@ -43,17 +44,26 @@ class Client:
     ) -> None:
         provider_value = Provider(provider)
         self.provider = provider_value
-        self.api_key = api_key or self._load_api_key(provider_value)
         self.model = model
-        if not self.api_key:
-            raise ConfigError(f"Missing API key for provider: {provider_value.value}")
 
-        if provider_value == Provider.anthropic:
-            self._provider = AnthropicProvider(api_key=self.api_key, model=model)
-        elif provider_value == Provider.openai:
-            self._provider = OpenAIProvider(api_key=self.api_key, model=model)
+        if provider_value == Provider.ollama:
+            self.api_key = api_key or ""
+            self._provider = OpenAIProvider(
+                api_key=self.api_key,
+                model=model or "llama3.2",
+                base_url=base_url or "http://localhost:11434/v1",
+            )
         else:
-            self._provider = MinimaxProvider(api_key=self.api_key, model=model, base_url=base_url)
+            self.api_key = api_key or self._load_api_key(provider_value)
+            if not self.api_key:
+                raise ConfigError(f"Missing API key for provider: {provider_value.value}")
+
+            if provider_value == Provider.anthropic:
+                self._provider = AnthropicProvider(api_key=self.api_key, model=model)
+            elif provider_value == Provider.openai:
+                self._provider = OpenAIProvider(api_key=self.api_key, model=model, base_url=base_url)
+            else:
+                self._provider = MinimaxProvider(api_key=self.api_key, model=model, base_url=base_url)
 
     @classmethod
     def anthropic(cls, api_key: str | None = None, model: str | None = None) -> "Client":
@@ -71,6 +81,14 @@ class Client:
         base_url: str | None = None,
     ) -> "Client":
         return cls(provider=Provider.minimax, api_key=api_key, model=model, base_url=base_url)
+
+    @classmethod
+    def ollama(
+        cls,
+        model: str | None = None,
+        base_url: str | None = None,
+    ) -> "Client":
+        return cls(provider=Provider.ollama, model=model, base_url=base_url)
 
     @staticmethod
     def _load_api_key(provider: Provider) -> str | None:
