@@ -627,8 +627,7 @@ impl OpenAIStreamAdapter {
                     }
                     if let Some(args) = tc_args {
                         if !args.is_empty() {
-                            self.pending
-                                .push_back(StreamEvent::tool_call_args(args));
+                            self.pending.push_back(StreamEvent::tool_call_args(args));
                         }
                     }
                 }

@@ -601,8 +601,7 @@ impl Stream for MinimaxStreamAdapter {
                         }
 
                         // Finish reason
-                        let finish_reason =
-                            choice.get("finish_reason").and_then(Value::as_str);
+                        let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
                         if let Some(reason) = finish_reason {
                             if reason == "tool_calls" {
                                 self.pending.push_back(StreamEvent::tool_call_end());

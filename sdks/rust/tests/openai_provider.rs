@@ -384,7 +384,9 @@ async fn openai_stream_emits_tool_call_events() {
         .tools(vec![Tool {
             name: "get_weather".to_string(),
             description: Some("Get weather".to_string()),
-            input_schema: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+            input_schema: Some(
+                json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            ),
         }])
         .build();
 
