@@ -193,19 +193,14 @@ pub enum StopReason {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamEventType {
+    #[default]
     Text,
     ToolCallStart,
     ToolCallArgs,
     ToolCallEnd,
-}
-
-impl Default for StreamEventType {
-    fn default() -> Self {
-        Self::Text
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

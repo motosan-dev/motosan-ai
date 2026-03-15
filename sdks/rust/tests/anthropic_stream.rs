@@ -334,7 +334,7 @@ async fn anthropic_stream_emits_tool_use_events() {
         .iter()
         .filter(|e| e.event_type == StreamEventType::ToolCallEnd)
         .collect();
-    assert!(ends.len() >= 1);
+    assert!(!ends.is_empty());
 
     // Done
     assert!(received.last().unwrap().done);
