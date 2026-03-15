@@ -237,9 +237,13 @@ impl Client {
             .clone()
             .unwrap_or_else(|| crate::models::DEFAULT_OLLAMA_MODEL.to_string());
 
-        OpenAIProvider::new("".to_string(), Some(model), Some(self.ollama_base_url.clone()))
-            .with_auth_style(OpenAIAuthStyle::Bearer)
-            .with_retry_policy(self.retry_policy.clone())
+        OpenAIProvider::new(
+            "".to_string(),
+            Some(model),
+            Some(self.ollama_base_url.clone()),
+        )
+        .with_auth_style(OpenAIAuthStyle::Bearer)
+        .with_retry_policy(self.retry_policy.clone())
     }
 }
 
