@@ -13,6 +13,10 @@ pub struct Client {
     openai_responses_fallback: bool,
     minimax_expose_reasoning: bool,
     ollama_base_url: String,
+    ollama_native: bool,
+    ollama_think: Option<String>,
+    ollama_keep_alive: Option<String>,
+    ollama_num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
 }
 
@@ -114,6 +118,13 @@ impl Client {
                 }
             }
             Provider::Ollama => {
+                #[cfg(feature = "ollama_native")]
+                {
+                    if self.ollama_native {
+                        use crate::providers::ProviderImpl;
+                        return self.build_ollama_native_provider().chat(request).await;
+                    }
+                }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
@@ -167,6 +178,13 @@ impl Client {
                 }
             }
             Provider::Ollama => {
+                #[cfg(feature = "ollama_native")]
+                {
+                    if self.ollama_native {
+                        use crate::providers::ProviderImpl;
+                        return self.build_ollama_native_provider().stream(request).await;
+                    }
+                }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
@@ -185,7 +203,8 @@ impl Client {
         not(feature = "anthropic"),
         not(feature = "openai"),
         not(feature = "minimax"),
-        not(feature = "ollama")
+        not(feature = "ollama"),
+        not(feature = "ollama_native")
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -245,6 +264,19 @@ impl Client {
         .with_auth_style(OpenAIAuthStyle::Bearer)
         .with_retry_policy(self.retry_policy.clone())
     }
+
+    #[cfg(feature = "ollama_native")]
+    fn build_ollama_native_provider(&self) -> crate::providers::ollama::OllamaProvider {
+        let model = self
+            .model
+            .clone()
+            .unwrap_or_else(|| crate::models::DEFAULT_OLLAMA_MODEL.to_string());
+        crate::providers::ollama::OllamaProvider::new(model, self.ollama_base_url.clone())
+            .with_think(self.ollama_think.clone())
+            .with_keep_alive(self.ollama_keep_alive.clone())
+            .with_num_ctx(self.ollama_num_ctx)
+            .with_retry_policy(self.retry_policy.clone())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -256,6 +288,10 @@ pub struct ClientBuilder {
     openai_responses_fallback: Option<bool>,
     minimax_expose_reasoning: Option<bool>,
     ollama_base_url: Option<String>,
+    ollama_native: Option<bool>,
+    ollama_think: Option<String>,
+    ollama_keep_alive: Option<String>,
+    ollama_num_ctx: Option<u32>,
     retry_policy: Option<RetryPolicy>,
 }
 
@@ -310,6 +346,26 @@ impl ClientBuilder {
         self
     }
 
+    pub fn ollama_native(mut self, native: bool) -> Self {
+        self.ollama_native = Some(native);
+        self
+    }
+
+    pub fn ollama_think(mut self, think: impl Into<String>) -> Self {
+        self.ollama_think = Some(think.into());
+        self
+    }
+
+    pub fn ollama_keep_alive(mut self, duration: impl Into<String>) -> Self {
+        self.ollama_keep_alive = Some(duration.into());
+        self
+    }
+
+    pub fn ollama_num_ctx(mut self, tokens: u32) -> Self {
+        self.ollama_num_ctx = Some(tokens);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -328,6 +384,10 @@ impl ClientBuilder {
             ollama_base_url: self
                 .ollama_base_url
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            ollama_native: self.ollama_native.unwrap_or(false),
+            ollama_think: self.ollama_think,
+            ollama_keep_alive: self.ollama_keep_alive,
+            ollama_num_ctx: self.ollama_num_ctx,
             retry_policy: self.retry_policy.unwrap_or_default(),
         })
     }

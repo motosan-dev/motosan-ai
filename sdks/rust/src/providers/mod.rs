@@ -1,16 +1,41 @@
 use crate::error::MotosanError;
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse};
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 use crate::types::{StopReason, ToolCall, Usage};
 use async_trait::async_trait;
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 use reqwest::header::HeaderMap;
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 use serde_json::Value;
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +52,12 @@ pub trait ProviderImpl: Send + Sync {
     async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError>;
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
     tool_calls: Vec<ToolCall>,
@@ -36,7 +66,12 @@ pub(crate) struct ChatResponseBuilder {
     stop_reason: StopReason,
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
         Self {
@@ -90,7 +125,12 @@ impl ChatResponseBuilder {
     }
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     payload
         .get("error")
@@ -100,7 +140,12 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
         .to_string()
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
     match status_code {
         401 => MotosanError::Auth(message),
@@ -110,24 +155,44 @@ pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError 
     }
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     status_code == 429 || status_code >= 500
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
     let seconds = raw.parse::<u64>().ok()?;
     Some(Duration::from_secs(seconds))
 }
 
-#[cfg(any(feature = "anthropic", feature = "openai", feature = "minimax"))]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
 pub(crate) async fn sleep_before_retry(
     policy: &RetryPolicy,
     attempt: u32,
@@ -150,3 +215,6 @@ pub mod openai;
 
 #[cfg(feature = "minimax")]
 pub mod minimax;
+
+#[cfg(feature = "ollama_native")]
+pub mod ollama;
