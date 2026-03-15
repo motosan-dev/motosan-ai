@@ -18,6 +18,7 @@ pub enum Provider {
     Anthropic,
     OpenAI,
     Minimax,
+    Ollama,
 }
 
 #[async_trait]
