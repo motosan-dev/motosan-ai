@@ -226,7 +226,7 @@ wheels = [
 
 [[package]]
 name = "motosan-ai"
-version = "0.2.0"
+version = "0.2.1"
 source = { editable = "sdks/python" }
 dependencies = [
     { name = "httpx" },
