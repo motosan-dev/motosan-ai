@@ -549,6 +549,7 @@ impl ProviderImpl for OpenAIProvider {
         let adapter = OpenAIStreamAdapter {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
+            seen_tool_ids: Vec::new(),
         };
 
         Ok(Box::pin(adapter))
@@ -568,6 +569,7 @@ struct OpenAIStreamAdapter {
         >,
     >,
     pending: std::collections::VecDeque<StreamEvent>,
+    seen_tool_ids: Vec<String>,
 }
 
 impl OpenAIStreamAdapter {
@@ -622,12 +624,15 @@ impl OpenAIStreamAdapter {
                         .and_then(Value::as_str);
 
                     if let (Some(id), Some(name)) = (tc_id, tc_name) {
+                        self.seen_tool_ids.push(id.to_string());
                         self.pending
                             .push_back(StreamEvent::tool_call_start(id, name));
                     }
                     if let Some(args) = tc_args {
                         if !args.is_empty() {
-                            self.pending.push_back(StreamEvent::tool_call_args(args));
+                            let id = tc_id.unwrap_or("");
+                            self.pending
+                                .push_back(StreamEvent::tool_call_args_with_id(id, args));
                         }
                     }
                 }
@@ -638,7 +643,11 @@ impl OpenAIStreamAdapter {
         let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
         if let Some(reason) = finish_reason {
             if reason == "tool_calls" {
-                self.pending.push_back(StreamEvent::tool_call_end());
+                let ids: Vec<String> = self.seen_tool_ids.drain(..).collect();
+                for id in &ids {
+                    self.pending
+                        .push_back(StreamEvent::tool_call_end_with_id(id));
+                }
             }
             self.pending.push_back(StreamEvent::done());
             return true;

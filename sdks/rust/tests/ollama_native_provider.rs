@@ -3,7 +3,7 @@
 use mockito::Matcher;
 use motosan_ai::providers::ollama::OllamaProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StopReason, Tool, DEFAULT_OLLAMA_MODEL};
+use motosan_ai::{ChatRequest, Message, StopReason, StreamEventType, Tool, DEFAULT_OLLAMA_MODEL};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -330,4 +330,134 @@ async fn ollama_native_client_builder() {
         .expect("client build");
 
     assert!(matches!(client.provider(), Provider::Ollama));
+}
+
+#[tokio::test]
+async fn ollama_native_stream_single_tool_call_emits_3_events() {
+    let mut server = mockito::Server::new_async().await;
+    let ndjson_body = concat!(
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Taipei\"}}}]},\"done\":false}\n",
+        "{\"done\":true}\n"
+    );
+
+    let mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ndjson_body)
+        .create_async()
+        .await;
+
+    let provider = build_provider(server.url());
+    let request = ChatRequest::builder()
+        .message(Message::user("weather?"))
+        .tools(vec![Tool {
+            name: "get_weather".to_string(),
+            description: Some("Get weather".to_string()),
+            input_schema: Some(
+                json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            ),
+        }])
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    // 3 tool events + done = 4 total
+    let starts: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallStart)
+        .collect();
+    let args: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
+        .collect();
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallEnd)
+        .collect();
+
+    assert_eq!(starts.len(), 1);
+    assert_eq!(args.len(), 1);
+    assert_eq!(ends.len(), 1);
+
+    // All 3 events share the same tool_call_id
+    let id = starts[0].tool_call_id.as_ref().unwrap();
+    assert_eq!(args[0].tool_call_id.as_ref().unwrap(), id);
+    assert_eq!(ends[0].tool_call_id.as_ref().unwrap(), id);
+
+    assert_eq!(starts[0].tool_call_name.as_deref(), Some("get_weather"));
+    assert!(args[0]
+        .tool_call_args_delta
+        .as_ref()
+        .unwrap()
+        .contains("Taipei"));
+    assert!(events.last().unwrap().done);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn ollama_native_stream_two_tool_calls_emits_6_events() {
+    let mut server = mockito::Server::new_async().await;
+    let ndjson_body = concat!(
+        "{\"message\":{\"role\":\"assistant\",\"content\":\"\",\"tool_calls\":[",
+        "{\"function\":{\"name\":\"get_weather\",\"arguments\":{\"city\":\"Taipei\"}}},",
+        "{\"function\":{\"name\":\"get_time\",\"arguments\":{\"tz\":\"Asia/Taipei\"}}}",
+        "]},\"done\":false}\n",
+        "{\"done\":true}\n"
+    );
+
+    let mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ndjson_body)
+        .create_async()
+        .await;
+
+    let provider = build_provider(server.url());
+    let request = ChatRequest::builder()
+        .message(Message::user("weather and time?"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let starts: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallStart)
+        .collect();
+    let args: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
+        .collect();
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallEnd)
+        .collect();
+
+    assert_eq!(starts.len(), 2);
+    assert_eq!(args.len(), 2);
+    assert_eq!(ends.len(), 2);
+
+    assert_eq!(starts[0].tool_call_name.as_deref(), Some("get_weather"));
+    assert_eq!(starts[1].tool_call_name.as_deref(), Some("get_time"));
+
+    // Each tool call has unique id, shared across its 3 events
+    let id0 = starts[0].tool_call_id.as_ref().unwrap();
+    let id1 = starts[1].tool_call_id.as_ref().unwrap();
+    assert_ne!(id0, id1);
+    assert_eq!(args[0].tool_call_id.as_ref().unwrap(), id0);
+    assert_eq!(ends[0].tool_call_id.as_ref().unwrap(), id0);
+    assert_eq!(args[1].tool_call_id.as_ref().unwrap(), id1);
+    assert_eq!(ends[1].tool_call_id.as_ref().unwrap(), id1);
+
+    mock.assert_async().await;
 }

@@ -6,11 +6,13 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
 use async_trait::async_trait;
+use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tokio_stream::StreamExt;
+use std::pin::Pin;
+use std::task::Poll;
 
 pub struct OllamaProvider {
     http: Client,
@@ -367,67 +369,95 @@ impl ProviderImpl for OllamaProvider {
             buffer: Vec::new(),
         };
 
-        let parsed_stream = ndjson_stream.filter_map(|line_result| match line_result {
-            Ok(line) => {
-                let payload: Value = match serde_json::from_str(&line) {
-                    Ok(v) => v,
-                    Err(_) => return None,
-                };
+        let adapter = OllamaStreamAdapter {
+            inner: Box::pin(ndjson_stream),
+            pending: std::collections::VecDeque::new(),
+        };
 
-                let done = payload
-                    .get("done")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                if done {
-                    return Some(crate::types::StreamEvent::done());
+        Ok(Box::pin(adapter))
+    }
+}
+
+/// Stream adapter that parses Ollama NDJSON events and emits proper
+/// 3-event sequences (Start + Args + End) for each tool call.
+struct OllamaStreamAdapter {
+    inner: Pin<Box<dyn Stream<Item = Result<String, MotosanError>> + Send>>,
+    pending: std::collections::VecDeque<StreamEvent>,
+}
+
+impl Stream for OllamaStreamAdapter {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(event) = self.pending.pop_front() {
+            return Poll::Ready(Some(event));
+        }
+
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(line))) => {
+                    let payload: Value = match serde_json::from_str(&line) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+
+                    let done = payload
+                        .get("done")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    if done {
+                        return Poll::Ready(Some(StreamEvent::done()));
+                    }
+
+                    let message = payload.get("message");
+                    let content = message
+                        .and_then(|m| m.get("content"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    let thinking = message
+                        .and_then(|m| m.get("thinking"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+
+                    let text = if !thinking.is_empty() && content.is_empty() {
+                        thinking.to_string()
+                    } else if !content.is_empty() {
+                        content.to_string()
+                    } else {
+                        String::new()
+                    };
+
+                    if !text.is_empty() {
+                        self.pending.push_back(StreamEvent::text(text));
+                    }
+
+                    // Emit 3-event sequence per tool call
+                    let tool_calls = message
+                        .map(OllamaProvider::extract_tool_calls)
+                        .unwrap_or_default();
+                    for tc in &tool_calls {
+                        let args = serde_json::to_string(&tc.input).unwrap_or_default();
+                        self.pending
+                            .push_back(StreamEvent::tool_call_start(&tc.id, &tc.name));
+                        self.pending
+                            .push_back(StreamEvent::tool_call_args_with_id(&tc.id, args));
+                        self.pending
+                            .push_back(StreamEvent::tool_call_end_with_id(&tc.id));
+                    }
+
+                    if let Some(evt) = self.pending.pop_front() {
+                        return Poll::Ready(Some(evt));
+                    }
+                    continue;
                 }
-
-                let message = payload.get("message");
-                let content = message
-                    .and_then(|m| m.get("content"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let thinking = message
-                    .and_then(|m| m.get("thinking"))
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-
-                let text = if !thinking.is_empty() && content.is_empty() {
-                    thinking.to_string()
-                } else if !content.is_empty() {
-                    content.to_string()
-                } else {
-                    String::new()
-                };
-
-                // Check for tool_calls in the message
-                let tool_calls = message.map(Self::extract_tool_calls).unwrap_or_default();
-                if !tool_calls.is_empty() {
-                    // For Ollama, tool calls arrive as complete objects
-                    // Return the first tool_call_start; remaining are lost
-                    // (Ollama streaming rarely sends multiple tool calls in one chunk)
-                    let tc = &tool_calls[0];
-                    let args = serde_json::to_string(&tc.input).unwrap_or_default();
-                    return Some(crate::types::StreamEvent {
-                        content: String::new(),
-                        done: false,
-                        tool_call_id: Some(tc.id.clone()),
-                        tool_call_name: Some(tc.name.clone()),
-                        tool_call_args_delta: Some(args),
-                        event_type: crate::types::StreamEventType::ToolCallStart,
-                    });
-                }
-
-                if text.is_empty() {
-                    return None;
-                }
-
-                Some(crate::types::StreamEvent::text(text))
+                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
             }
-            Err(_) => None,
-        });
-
-        Ok(Box::pin(parsed_stream))
+        }
     }
 }
 

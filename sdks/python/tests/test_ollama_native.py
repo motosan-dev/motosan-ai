@@ -286,6 +286,72 @@ def test_client_ollama_compat_still_works(monkeypatch):
     assert isinstance(client._provider, OpenAIProvider)
 
 
+# --- Stream tool call tests ---
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_single_tool_call_emits_3_events(provider):
+    ndjson = (
+        '{"message":{"content":"","tool_calls":[{"function":{"name":"get_weather","arguments":{"city":"Taipei"}}}]},"done":false}\n'
+        '{"done":true}\n'
+    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
+    events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("weather?")]))]
+
+    starts = [e for e in events if e.event_type == "tool_call_start"]
+    args = [e for e in events if e.event_type == "tool_call_args"]
+    ends = [e for e in events if e.event_type == "tool_call_end"]
+
+    assert len(starts) == 1
+    assert len(args) == 1
+    assert len(ends) == 1
+
+    # All 3 events share the same tool_call_id
+    tc_id = starts[0].tool_call_id
+    assert tc_id is not None
+    assert args[0].tool_call_id == tc_id
+    assert ends[0].tool_call_id == tc_id
+
+    assert starts[0].tool_call_name == "get_weather"
+    assert "Taipei" in args[0].tool_call_args_delta
+    assert events[-1].done is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_two_tool_calls_emits_6_events(provider):
+    ndjson = (
+        '{"message":{"content":"","tool_calls":['
+        '{"function":{"name":"get_weather","arguments":{"city":"Taipei"}}},'
+        '{"function":{"name":"get_time","arguments":{"tz":"Asia/Taipei"}}}'
+        ']},"done":false}\n'
+        '{"done":true}\n'
+    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
+    events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("weather and time?")]))]
+
+    starts = [e for e in events if e.event_type == "tool_call_start"]
+    args = [e for e in events if e.event_type == "tool_call_args"]
+    ends = [e for e in events if e.event_type == "tool_call_end"]
+
+    assert len(starts) == 2
+    assert len(args) == 2
+    assert len(ends) == 2
+
+    assert starts[0].tool_call_name == "get_weather"
+    assert starts[1].tool_call_name == "get_time"
+
+    # Each tool call has unique id, shared across its 3 events
+    id0 = starts[0].tool_call_id
+    id1 = starts[1].tool_call_id
+    assert id0 != id1
+    assert args[0].tool_call_id == id0
+    assert ends[0].tool_call_id == id0
+    assert args[1].tool_call_id == id1
+    assert ends[1].tool_call_id == id1
+
+
 # --- Error handling ---
 
 
