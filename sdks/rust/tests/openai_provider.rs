@@ -3,7 +3,9 @@
 use mockito::Matcher;
 use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, MotosanError, StopReason, DEFAULT_OPENAI_MODEL};
+use motosan_ai::{
+    ChatRequest, Message, MotosanError, StopReason, StreamEventType, Tool, DEFAULT_OPENAI_MODEL,
+};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -355,4 +357,74 @@ async fn openai_chat_can_fallback_to_responses_api_on_404() {
     assert_eq!(response.usage.input_tokens, 5);
     assert_eq!(response.usage.output_tokens, 3);
     responses_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_stream_emits_tool_call_events() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Taipei\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("weather in Taipei?"))
+        .tools(vec![Tool {
+            name: "get_weather".to_string(),
+            description: Some("Get weather".to_string()),
+            input_schema: Some(
+                json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            ),
+        }])
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut received = Vec::new();
+    while let Some(event) = stream.next().await {
+        received.push(event);
+    }
+
+    // Tool call start
+    let starts: Vec<_> = received
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallStart)
+        .collect();
+    assert_eq!(starts.len(), 1);
+    assert_eq!(starts[0].tool_call_id.as_deref(), Some("call_1"));
+    assert_eq!(starts[0].tool_call_name.as_deref(), Some("get_weather"));
+
+    // Tool call args
+    let args_events: Vec<_> = received
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
+        .collect();
+    let full_args: String = args_events
+        .iter()
+        .filter_map(|e| e.tool_call_args_delta.as_deref())
+        .collect();
+    assert_eq!(full_args, "{\"city\":\"Taipei\"}");
+
+    // Tool call end
+    let ends: Vec<_> = received
+        .iter()
+        .filter(|e| e.event_type == StreamEventType::ToolCallEnd)
+        .collect();
+    assert_eq!(ends.len(), 1);
+
+    // Done
+    assert!(received.last().unwrap().done);
+
+    mock.assert_async().await;
 }

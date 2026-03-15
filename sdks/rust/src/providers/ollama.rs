@@ -379,10 +379,7 @@ impl ProviderImpl for OllamaProvider {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 if done {
-                    return Some(crate::types::StreamEvent {
-                        content: String::new(),
-                        done: true,
-                    });
+                    return Some(crate::types::StreamEvent::done());
                 }
 
                 let message = payload.get("message");
@@ -400,13 +397,32 @@ impl ProviderImpl for OllamaProvider {
                 } else if !content.is_empty() {
                     content.to_string()
                 } else {
-                    return None;
+                    String::new()
                 };
 
-                Some(crate::types::StreamEvent {
-                    content: text,
-                    done: false,
-                })
+                // Check for tool_calls in the message
+                let tool_calls = message.map(Self::extract_tool_calls).unwrap_or_default();
+                if !tool_calls.is_empty() {
+                    // For Ollama, tool calls arrive as complete objects
+                    // Return the first tool_call_start; remaining are lost
+                    // (Ollama streaming rarely sends multiple tool calls in one chunk)
+                    let tc = &tool_calls[0];
+                    let args = serde_json::to_string(&tc.input).unwrap_or_default();
+                    return Some(crate::types::StreamEvent {
+                        content: String::new(),
+                        done: false,
+                        tool_call_id: Some(tc.id.clone()),
+                        tool_call_name: Some(tc.name.clone()),
+                        tool_call_args_delta: Some(args),
+                        event_type: crate::types::StreamEventType::ToolCallStart,
+                    });
+                }
+
+                if text.is_empty() {
+                    return None;
+                }
+
+                Some(crate::types::StreamEvent::text(text))
             }
             Err(_) => None,
         });

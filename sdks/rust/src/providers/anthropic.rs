@@ -8,12 +8,14 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
+use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tokio_stream::StreamExt;
+use std::pin::Pin;
+use std::task::Poll;
 
 pub struct AnthropicProvider {
     http: Client,
@@ -368,37 +370,119 @@ impl ProviderImpl for AnthropicProvider {
             return Err(map_http_error(status.as_u16(), message));
         };
 
-        let parsed_stream = response
-            .bytes_stream()
-            .eventsource()
-            .filter_map(|event| match event {
-                Ok(event) => {
-                    let payload: Value = serde_json::from_str(&event.data).ok()?;
-                    let event_type = payload.get("type")?.as_str()?;
+        let raw_stream = response.bytes_stream().eventsource();
+        let adapter = AnthropicStreamAdapter {
+            inner: Box::pin(raw_stream),
+            pending: std::collections::VecDeque::new(),
+        };
+
+        Ok(Box::pin(adapter))
+    }
+}
+
+/// Stream adapter that parses Anthropic SSE events including tool_use blocks.
+struct AnthropicStreamAdapter {
+    inner: Pin<
+        Box<
+            dyn Stream<
+                    Item = Result<
+                        eventsource_stream::Event,
+                        eventsource_stream::EventStreamError<reqwest::Error>,
+                    >,
+                > + Send,
+        >,
+    >,
+    pending: std::collections::VecDeque<StreamEvent>,
+}
+
+impl Stream for AnthropicStreamAdapter {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        // Drain any pending events first
+        if let Some(event) = self.pending.pop_front() {
+            return Poll::Ready(Some(event));
+        }
+
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    let payload: Value = match serde_json::from_str(&event.data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let event_type = match payload.get("type").and_then(Value::as_str) {
+                        Some(t) => t,
+                        None => continue,
+                    };
 
                     match event_type {
-                        "content_block_delta" => {
-                            let text = payload
-                                .get("delta")
-                                .and_then(|delta| delta.get("text"))
-                                .and_then(Value::as_str)
-                                .unwrap_or("")
-                                .to_string();
-                            Some(crate::types::StreamEvent {
-                                content: text,
-                                done: false,
-                            })
+                        "content_block_start" => {
+                            let block = payload.get("content_block");
+                            if let Some(block) = block {
+                                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
+                                    let id =
+                                        block.get("id").and_then(Value::as_str).unwrap_or_default();
+                                    let name = block
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default();
+                                    return Poll::Ready(Some(StreamEvent::tool_call_start(
+                                        id, name,
+                                    )));
+                                }
+                            }
+                            continue;
                         }
-                        "message_stop" => Some(crate::types::StreamEvent {
-                            content: String::new(),
-                            done: true,
-                        }),
-                        _ => None,
+                        "content_block_delta" => {
+                            let delta = match payload.get("delta") {
+                                Some(d) => d,
+                                None => continue,
+                            };
+                            let delta_type = delta.get("type").and_then(Value::as_str);
+
+                            match delta_type {
+                                Some("input_json_delta") => {
+                                    let partial = delta
+                                        .get("partial_json")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default();
+                                    if !partial.is_empty() {
+                                        return Poll::Ready(Some(StreamEvent::tool_call_args(
+                                            partial,
+                                        )));
+                                    }
+                                    continue;
+                                }
+                                _ => {
+                                    // text_delta or untyped delta with "text" field
+                                    let text = delta
+                                        .get("text")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default();
+                                    if !text.is_empty() {
+                                        return Poll::Ready(Some(StreamEvent::text(text)));
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                        "content_block_stop" => {
+                            return Poll::Ready(Some(StreamEvent::tool_call_end()));
+                        }
+                        "message_stop" => {
+                            return Poll::Ready(Some(StreamEvent::done()));
+                        }
+                        _ => continue,
                     }
                 }
-                Err(_) => None,
-            });
-
-        Ok(Box::pin(parsed_stream))
+                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }

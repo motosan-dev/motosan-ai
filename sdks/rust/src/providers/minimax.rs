@@ -6,12 +6,14 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
+use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tokio_stream::StreamExt;
+use std::pin::Pin;
+use std::task::Poll;
 
 pub struct MinimaxProvider {
     http: Client,
@@ -502,31 +504,121 @@ impl ProviderImpl for MinimaxProvider {
             return Err(map_http_error(status.as_u16(), message));
         };
 
-        let parsed_stream = response
-            .bytes_stream()
-            .eventsource()
-            .filter_map(move |event| match event {
-                Ok(event) => {
+        let raw_stream = response.bytes_stream().eventsource();
+        let adapter = MinimaxStreamAdapter {
+            inner: Box::pin(raw_stream),
+            pending: std::collections::VecDeque::new(),
+            expose_reasoning,
+        };
+
+        Ok(Box::pin(adapter))
+    }
+}
+
+/// Stream adapter that parses Minimax SSE events including tool_calls.
+struct MinimaxStreamAdapter {
+    inner: Pin<
+        Box<
+            dyn Stream<
+                    Item = Result<
+                        eventsource_stream::Event,
+                        eventsource_stream::EventStreamError<reqwest::Error>,
+                    >,
+                > + Send,
+        >,
+    >,
+    pending: std::collections::VecDeque<StreamEvent>,
+    expose_reasoning: bool,
+}
+
+impl Stream for MinimaxStreamAdapter {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(event) = self.pending.pop_front() {
+            return Poll::Ready(Some(event));
+        }
+
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
                     if event.data.trim() == "[DONE]" {
-                        return Some(crate::types::StreamEvent {
-                            content: String::new(),
-                            done: true,
-                        });
+                        return Poll::Ready(Some(StreamEvent::done()));
                     }
 
-                    let payload: Value = serde_json::from_str(&event.data).ok()?;
-                    let text = Self::extract_stream_delta_text(&payload, expose_reasoning);
-                    if text.is_empty() {
-                        return None;
+                    let payload: Value = match serde_json::from_str(&event.data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+
+                    let choice = payload
+                        .get("choices")
+                        .and_then(Value::as_array)
+                        .and_then(|c| c.first());
+
+                    if let Some(choice) = choice {
+                        let delta = choice.get("delta");
+
+                        // Text content
+                        if let Some(delta) = delta {
+                            let text = MinimaxProvider::extract_stream_delta_text(
+                                &payload,
+                                self.expose_reasoning,
+                            );
+                            if !text.is_empty() {
+                                self.pending.push_back(StreamEvent::text(text));
+                            }
+
+                            // Tool calls
+                            if let Some(tool_calls) =
+                                delta.get("tool_calls").and_then(Value::as_array)
+                            {
+                                for tc in tool_calls {
+                                    let tc_id = tc.get("id").and_then(Value::as_str);
+                                    let function = tc.get("function");
+                                    let tc_name = function
+                                        .and_then(|f| f.get("name"))
+                                        .and_then(Value::as_str);
+                                    let tc_args = function
+                                        .and_then(|f| f.get("arguments"))
+                                        .and_then(Value::as_str);
+
+                                    if let (Some(id), Some(name)) = (tc_id, tc_name) {
+                                        self.pending
+                                            .push_back(StreamEvent::tool_call_start(id, name));
+                                    }
+                                    if let Some(args) = tc_args {
+                                        if !args.is_empty() {
+                                            self.pending
+                                                .push_back(StreamEvent::tool_call_args(args));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Finish reason
+                        let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
+                        if let Some(reason) = finish_reason {
+                            if reason == "tool_calls" {
+                                self.pending.push_back(StreamEvent::tool_call_end());
+                            }
+                            self.pending.push_back(StreamEvent::done());
+                        }
                     }
-                    Some(crate::types::StreamEvent {
-                        content: text,
-                        done: false,
-                    })
+
+                    if let Some(evt) = self.pending.pop_front() {
+                        return Poll::Ready(Some(evt));
+                    }
+                    continue;
                 }
-                Err(_) => None,
-            });
-
-        Ok(Box::pin(parsed_stream))
+                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }
