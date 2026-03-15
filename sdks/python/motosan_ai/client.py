@@ -41,6 +41,11 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
+        *,
+        ollama_native: bool = False,
+        ollama_think: bool = False,
+        ollama_keep_alive: str | None = None,
+        ollama_num_ctx: int | None = None,
     ) -> None:
         provider_value = Provider(provider)
         self.provider = provider_value
@@ -48,11 +53,22 @@ class Client:
 
         if provider_value == Provider.ollama:
             self.api_key = api_key or ""
-            self._provider = OpenAIProvider(
-                api_key=self.api_key,
-                model=model or "llama3.2",
-                base_url=base_url or "http://localhost:11434/v1",
-            )
+            if ollama_native:
+                from motosan_ai.providers.ollama import OllamaProvider as NativeOllamaProvider
+
+                self._provider = NativeOllamaProvider(
+                    model=model or "llama3.2",
+                    base_url=base_url or "http://localhost:11434",
+                    think=ollama_think,
+                    keep_alive=ollama_keep_alive,
+                    num_ctx=ollama_num_ctx,
+                )
+            else:
+                self._provider = OpenAIProvider(
+                    api_key=self.api_key,
+                    model=model or "llama3.2",
+                    base_url=base_url or "http://localhost:11434/v1",
+                )
         else:
             self.api_key = api_key or self._load_api_key(provider_value)
             if not self.api_key:
@@ -87,8 +103,21 @@ class Client:
         cls,
         model: str | None = None,
         base_url: str | None = None,
+        *,
+        native: bool = False,
+        think: bool = False,
+        keep_alive: str | None = None,
+        num_ctx: int | None = None,
     ) -> "Client":
-        return cls(provider=Provider.ollama, model=model, base_url=base_url)
+        return cls(
+            provider=Provider.ollama,
+            model=model,
+            base_url=base_url,
+            ollama_native=native,
+            ollama_think=think,
+            ollama_keep_alive=keep_alive,
+            ollama_num_ctx=num_ctx,
+        )
 
     @staticmethod
     def _load_api_key(provider: Provider) -> str | None:
