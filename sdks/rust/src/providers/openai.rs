@@ -6,12 +6,14 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, ToolCall};
+use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
+use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
-use tokio_stream::StreamExt;
+use std::pin::Pin;
+use std::task::Poll;
 
 #[derive(Debug, Clone)]
 pub enum OpenAIAuthStyle {
@@ -107,19 +109,6 @@ impl OpenAIProvider {
         let content = Self::first_non_empty_text(message.and_then(|msg| msg.get("content")));
         let reasoning =
             Self::first_non_empty_text(message.and_then(|msg| msg.get("reasoning_content")));
-
-        content.or(reasoning).unwrap_or_default().to_string()
-    }
-
-    fn extract_stream_delta_text(payload: &Value) -> String {
-        let delta = payload
-            .get("choices")
-            .and_then(Value::as_array)
-            .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("delta"));
-
-        let content = Self::first_non_empty_text(delta.and_then(|d| d.get("content")));
-        let reasoning = Self::first_non_empty_text(delta.and_then(|d| d.get("reasoning_content")));
 
         content.or(reasoning).unwrap_or_default().to_string()
     }
@@ -556,31 +545,134 @@ impl ProviderImpl for OpenAIProvider {
             return Err(map_http_error(status.as_u16(), message));
         };
 
-        let parsed_stream = response
-            .bytes_stream()
-            .eventsource()
-            .filter_map(|event| match event {
-                Ok(event) => {
-                    if event.data.trim() == "[DONE]" {
-                        return Some(crate::types::StreamEvent {
-                            content: String::new(),
-                            done: true,
-                        });
-                    }
+        let raw_stream = response.bytes_stream().eventsource();
+        let adapter = OpenAIStreamAdapter {
+            inner: Box::pin(raw_stream),
+            pending: std::collections::VecDeque::new(),
+        };
 
-                    let payload: Value = serde_json::from_str(&event.data).ok()?;
-                    let text = Self::extract_stream_delta_text(&payload);
-                    if text.is_empty() {
-                        return None;
+        Ok(Box::pin(adapter))
+    }
+}
+
+/// Stream adapter that parses OpenAI SSE events including tool_calls in deltas.
+struct OpenAIStreamAdapter {
+    inner: Pin<
+        Box<
+            dyn Stream<
+                    Item = Result<
+                        eventsource_stream::Event,
+                        eventsource_stream::EventStreamError<reqwest::Error>,
+                    >,
+                > + Send,
+        >,
+    >,
+    pending: std::collections::VecDeque<StreamEvent>,
+}
+
+impl OpenAIStreamAdapter {
+    fn parse_event(&mut self, data: &str) -> bool {
+        if data.trim() == "[DONE]" {
+            self.pending.push_back(StreamEvent::done());
+            return true;
+        }
+
+        let payload: Value = match serde_json::from_str(data) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+
+        let choice = match payload
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|c| c.first())
+        {
+            Some(c) => c,
+            None => return false,
+        };
+
+        let delta = choice.get("delta");
+
+        // Text content
+        if let Some(delta) = delta {
+            let content = delta.get("content").and_then(Value::as_str).unwrap_or("");
+            let reasoning = delta
+                .get("reasoning_content")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let text = if !content.is_empty() {
+                content
+            } else if !reasoning.is_empty() {
+                reasoning
+            } else {
+                ""
+            };
+            if !text.is_empty() {
+                self.pending.push_back(StreamEvent::text(text));
+            }
+
+            // Tool calls in delta
+            if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
+                for tc in tool_calls {
+                    let tc_id = tc.get("id").and_then(Value::as_str);
+                    let function = tc.get("function");
+                    let tc_name = function.and_then(|f| f.get("name")).and_then(Value::as_str);
+                    let tc_args = function
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(Value::as_str);
+
+                    if let (Some(id), Some(name)) = (tc_id, tc_name) {
+                        self.pending
+                            .push_back(StreamEvent::tool_call_start(id, name));
                     }
-                    Some(crate::types::StreamEvent {
-                        content: text,
-                        done: false,
-                    })
+                    if let Some(args) = tc_args {
+                        if !args.is_empty() {
+                            self.pending
+                                .push_back(StreamEvent::tool_call_args(args));
+                        }
+                    }
                 }
-                Err(_) => None,
-            });
+            }
+        }
 
-        Ok(Box::pin(parsed_stream))
+        // Finish reason
+        let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
+        if let Some(reason) = finish_reason {
+            if reason == "tool_calls" {
+                self.pending.push_back(StreamEvent::tool_call_end());
+            }
+            self.pending.push_back(StreamEvent::done());
+            return true;
+        }
+
+        false
+    }
+}
+
+impl Stream for OpenAIStreamAdapter {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(event) = self.pending.pop_front() {
+            return Poll::Ready(Some(event));
+        }
+
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    self.parse_event(&event.data);
+                    if let Some(evt) = self.pending.pop_front() {
+                        return Poll::Ready(Some(evt));
+                    }
+                    continue;
+                }
+                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }

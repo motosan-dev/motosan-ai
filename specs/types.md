@@ -23,6 +23,7 @@ Canonical definitions shared across all language SDKs.
 | Field | Type |
 |-------|------|
 | `content` | `string` |
+| `tool_calls` | `ToolCall[]` |
 | `model` | `string` |
 | `usage` | `Usage` |
 | `stop_reason` | `StopReason` |
@@ -31,10 +32,17 @@ Canonical definitions shared across all language SDKs.
 `end_turn` | `max_tokens` | `tool_use` | `stop` | `other`
 
 ## StreamEvent
-| Field | Type |
-|-------|------|
-| `content` | `string` (delta) |
-| `done` | `bool` |
+| Field | Type | Default |
+|-------|------|---------|
+| `content` | `string` (delta) | |
+| `done` | `bool` | |
+| `tool_call_id` | `string?` | `null` |
+| `tool_call_name` | `string?` | `null` |
+| `tool_call_args_delta` | `string?` | `null` |
+| `event_type` | `StreamEventType` | `"text"` |
+
+## StreamEventType
+`text` | `tool_call_start` | `tool_call_args` | `tool_call_end`
 
 ## Default Models
 | Provider | Default |

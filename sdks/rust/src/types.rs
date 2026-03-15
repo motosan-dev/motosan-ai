@@ -194,7 +194,87 @@ pub enum StopReason {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StreamEventType {
+    Text,
+    ToolCallStart,
+    ToolCallArgs,
+    ToolCallEnd,
+}
+
+impl Default for StreamEventType {
+    fn default() -> Self {
+        Self::Text
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamEvent {
     pub content: String,
     pub done: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_args_delta: Option<String>,
+    #[serde(default)]
+    pub event_type: StreamEventType,
+}
+
+impl StreamEvent {
+    pub fn text(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Text,
+        }
+    }
+
+    pub fn done() -> Self {
+        Self {
+            content: String::new(),
+            done: true,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Text,
+        }
+    }
+
+    pub fn tool_call_start(id: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: Some(id.into()),
+            tool_call_name: Some(name.into()),
+            tool_call_args_delta: None,
+            event_type: StreamEventType::ToolCallStart,
+        }
+    }
+
+    pub fn tool_call_args(delta: impl Into<String>) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: Some(delta.into()),
+            event_type: StreamEventType::ToolCallArgs,
+        }
+    }
+
+    pub fn tool_call_end() -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::ToolCallEnd,
+        }
+    }
 }
