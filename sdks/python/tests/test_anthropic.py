@@ -1,7 +1,7 @@
 import pytest
 
 from motosan_ai.providers.anthropic import AnthropicProvider
-from motosan_ai.types import ChatRequest, Message, StopReason
+from motosan_ai.types import ChatRequest, Message, StopReason, Tool
 
 
 class FakeMessagesAPI:
@@ -11,9 +11,20 @@ class FakeMessagesAPI:
     async def create(self, **kwargs):
         self.last_kwargs = kwargs
         if kwargs.get("stream"):
+            if kwargs.get("tools"):
+                async def tool_gen():
+                    yield {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}
+                    yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Let me check"}}
+                    yield {"type": "content_block_stop", "index": 0}
+                    yield {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather"}}
+                    yield {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"city":'}}
+                    yield {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '"Taipei"}'}}
+                    yield {"type": "content_block_stop", "index": 1}
+                    yield {"type": "message_stop"}
+                return tool_gen()
             async def gen():
-                yield {"type": "content_block_delta", "delta": {"text": "hel"}}
-                yield {"type": "content_block_delta", "delta": {"text": "lo"}}
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hel"}}
+                yield {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "lo"}}
                 yield {"type": "message_stop"}
             return gen()
         return {
@@ -58,3 +69,36 @@ async def test_anthropic_stream(provider):
     events = [e async for e in provider.stream(req)]
     assert [e.content for e in events if not e.done] == ["hel", "lo"]
     assert events[-1].done is True
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_tool_use(provider):
+    tools = [Tool(name="get_weather", description="Get weather", input_schema={"type": "object", "properties": {"city": {"type": "string"}}})]
+    req = ChatRequest(messages=[Message.user("weather in Taipei?")], tools=tools)
+    events = [e async for e in provider.stream(req)]
+
+    # Should have text events
+    text_events = [e for e in events if e.event_type == "text" and not e.done]
+    assert any(e.content == "Let me check" for e in text_events)
+
+    # Should have tool_call_start
+    starts = [e for e in events if e.event_type == "tool_call_start"]
+    assert len(starts) == 1
+    assert starts[0].tool_call_id == "toolu_1"
+    assert starts[0].tool_call_name == "get_weather"
+
+    # Should have tool_call_args
+    args_events = [e for e in events if e.event_type == "tool_call_args"]
+    assert len(args_events) == 2
+    full_args = "".join(e.tool_call_args_delta for e in args_events)
+    assert full_args == '{"city":"Taipei"}'
+
+    # Should have tool_call_end
+    ends = [e for e in events if e.event_type == "tool_call_end"]
+    assert len(ends) >= 1
+
+    # Should end with done=True
+    assert events[-1].done is True
+
+    # Verify tools were sent in the request
+    assert "tools" in provider._client.messages.last_kwargs

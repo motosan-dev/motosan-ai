@@ -157,6 +157,22 @@ class OllamaProvider:
                     text = content or thinking
                     if text:
                         yield StreamEvent(content=text, done=False)
+
+                    for tc in msg.get("tool_calls") or []:
+                        fn = tc.get("function") or {}
+                        raw_args = fn.get("arguments", {})
+                        if isinstance(raw_args, str):
+                            args_str = raw_args
+                        else:
+                            args_str = json.dumps(raw_args, ensure_ascii=False)
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=str(uuid.uuid4()),
+                            tool_call_name=fn.get("name", ""),
+                            tool_call_args_delta=args_str,
+                            event_type="tool_call_start",
+                        )
         except Exception as exc:
             if isinstance(exc, ProviderError):
                 raise

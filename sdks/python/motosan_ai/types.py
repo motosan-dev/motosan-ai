@@ -92,3 +92,7 @@ class ChatResponse:
 class StreamEvent:
     content: str
     done: bool
+    tool_call_id: str | None = None
+    tool_call_name: str | None = None
+    tool_call_args_delta: str | None = None
+    event_type: str = "text"  # 'text' | 'tool_call_start' | 'tool_call_args' | 'tool_call_end'

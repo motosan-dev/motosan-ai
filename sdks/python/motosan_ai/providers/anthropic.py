@@ -139,6 +139,15 @@ class AnthropicProvider:
         system = request.system or extracted_system
         if system:
             body["system"] = system
+        if request.tools:
+            body["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.input_schema or {"type": "object", "properties": {}},
+                }
+                for t in request.tools
+            ]
         if request.provider_options:
             body.update(request.provider_options)
 
@@ -149,10 +158,39 @@ class AnthropicProvider:
 
         async for event in events:
             payload = event if isinstance(event, dict) else event.model_dump()
-            if payload.get("type") == "content_block_delta":
-                text = (payload.get("delta") or {}).get("text", "")
-                if text:
-                    yield StreamEvent(content=text, done=False)
-            elif payload.get("type") == "message_stop":
+            event_type = payload.get("type")
+
+            if event_type == "content_block_start":
+                block = payload.get("content_block") or {}
+                if block.get("type") == "tool_use":
+                    yield StreamEvent(
+                        content="",
+                        done=False,
+                        tool_call_id=block.get("id", ""),
+                        tool_call_name=block.get("name", ""),
+                        event_type="tool_call_start",
+                    )
+
+            elif event_type == "content_block_delta":
+                delta = payload.get("delta") or {}
+                delta_type = delta.get("type")
+                if delta_type == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        yield StreamEvent(content=text, done=False)
+                elif delta_type == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    if partial:
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_args_delta=partial,
+                            event_type="tool_call_args",
+                        )
+
+            elif event_type == "content_block_stop":
+                yield StreamEvent(content="", done=False, event_type="tool_call_end")
+
+            elif event_type == "message_stop":
                 yield StreamEvent(content="", done=True)
                 return

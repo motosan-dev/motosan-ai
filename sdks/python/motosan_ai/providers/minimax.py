@@ -142,6 +142,18 @@ class MinimaxProvider:
             "messages": self._serialize_messages(request.messages, request.system),
             "stream": True,
         }
+        if request.tools:
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description or "",
+                        "parameters": t.input_schema or {"type": "object", "properties": {}},
+                    },
+                }
+                for t in request.tools
+            ]
         if request.provider_options:
             body.update(request.provider_options)
 
@@ -173,6 +185,31 @@ class MinimaxProvider:
                     text = delta.get("content") or ""
                     if text:
                         yield StreamEvent(content=text, done=False)
+
+                    for tc in delta.get("tool_calls") or []:
+                        fn = tc.get("function") or {}
+                        tc_id = tc.get("id")
+                        tc_name = fn.get("name")
+                        tc_args = fn.get("arguments")
+                        if tc_id and tc_name:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_id=tc_id,
+                                tool_call_name=tc_name,
+                                event_type="tool_call_start",
+                            )
+                        if tc_args:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_args_delta=tc_args,
+                                event_type="tool_call_args",
+                            )
+
+                    finish_reason = choice.get("finish_reason")
+                    if finish_reason == "tool_calls":
+                        yield StreamEvent(content="", done=False, event_type="tool_call_end")
         except Exception as exc:
             if isinstance(exc, (AuthError, RateLimitError, InvalidRequestError, ProviderError)):
                 raise
