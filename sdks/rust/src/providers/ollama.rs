@@ -273,7 +273,7 @@ impl ProviderImpl for OllamaProvider {
         };
 
         let tool_calls = message
-            .map(|m| Self::extract_tool_calls(m))
+            .map(Self::extract_tool_calls)
             .unwrap_or_default();
 
         let stop_reason = if !tool_calls.is_empty() {
