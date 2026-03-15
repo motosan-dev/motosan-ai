@@ -262,11 +262,33 @@ impl StreamEvent {
         }
     }
 
+    pub fn tool_call_args_with_id(id: impl Into<String>, delta: impl Into<String>) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: Some(id.into()),
+            tool_call_name: None,
+            tool_call_args_delta: Some(delta.into()),
+            event_type: StreamEventType::ToolCallArgs,
+        }
+    }
+
     pub fn tool_call_end() -> Self {
         Self {
             content: String::new(),
             done: false,
             tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::ToolCallEnd,
+        }
+    }
+
+    pub fn tool_call_end_with_id(id: impl Into<String>) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: Some(id.into()),
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,

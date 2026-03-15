@@ -165,13 +165,26 @@ class OllamaProvider:
                             args_str = raw_args
                         else:
                             args_str = json.dumps(raw_args, ensure_ascii=False)
+                        tc_id = str(uuid.uuid4())
                         yield StreamEvent(
                             content="",
                             done=False,
-                            tool_call_id=str(uuid.uuid4()),
+                            tool_call_id=tc_id,
                             tool_call_name=fn.get("name", ""),
-                            tool_call_args_delta=args_str,
                             event_type="tool_call_start",
+                        )
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=tc_id,
+                            tool_call_args_delta=args_str,
+                            event_type="tool_call_args",
+                        )
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=tc_id,
+                            event_type="tool_call_end",
                         )
         except Exception as exc:
             if isinstance(exc, ProviderError):
