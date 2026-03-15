@@ -2,6 +2,32 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.2.0] - 2026-03-15
+
+### Added
+- **Ollama provider** (`ollama` feature): connect to local or remote Ollama instances
+  - Phase 1: `Provider::Ollama` via OpenAI-compatible endpoint (`/v1/chat/completions`)
+  - Phase 2: `OllamaProvider` native implementation using `POST /api/chat` with NDJSON streaming
+  - `think` mode: enable reasoning on qwen3-thinking, deepseek-r1 and other thinking models
+  - `keep_alive`: control how long the model stays loaded in VRAM
+  - `num_ctx`: override context window size via Modelfile options
+  - `ollama_base_url()` builder: point to remote Ollama instance
+  - `ollama_native(true)` builder: switch to native `/api/chat` endpoint
+  - `ollama_think()`, `ollama_keep_alive()`, `ollama_num_ctx()` builder methods
+  - `NdjsonStream`: custom `futures::Stream` adapter for NDJSON line parsing
+  - Tool calls: auto-generates `call_{idx}` id when Ollama native omits it
+  - `DEFAULT_OLLAMA_MODEL = "llama3.2"` in `models.rs`
+- `feature = "full"` now includes `ollama`
+
+## [0.1.4] - 2026-03-15
+
+### Added
+- `Client::stream_with(request: ChatRequest)` — stream with full `ChatRequest` (system, max_tokens, tools, temperature)
+
+### Fixed
+- Anthropic provider: `max_tokens` now defaults to `4096` when not set (Anthropic API requires this field; previously caused HTTP 400)
+
+
 ## [0.1.3] - 2026-03-11
 
 ### Added
