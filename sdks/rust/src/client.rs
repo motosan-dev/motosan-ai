@@ -12,6 +12,7 @@ pub struct Client {
     openai_auth_header: Option<String>,
     openai_responses_fallback: bool,
     minimax_expose_reasoning: bool,
+    ollama_base_url: String,
     retry_policy: RetryPolicy,
 }
 
@@ -112,6 +113,18 @@ impl Client {
                     return Err(Self::feature_not_enabled("minimax"));
                 }
             }
+            Provider::Ollama => {
+                #[cfg(feature = "ollama")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_ollama_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "ollama"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("ollama"));
+                }
+            }
         }
     }
 
@@ -153,13 +166,26 @@ impl Client {
                     return Err(Self::feature_not_enabled("minimax"));
                 }
             }
+            Provider::Ollama => {
+                #[cfg(feature = "ollama")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_ollama_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "ollama"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("ollama"));
+                }
+            }
         }
     }
 
     #[cfg(any(
         not(feature = "anthropic"),
         not(feature = "openai"),
-        not(feature = "minimax")
+        not(feature = "minimax"),
+        not(feature = "ollama")
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -201,6 +227,24 @@ impl Client {
         .with_expose_reasoning(self.minimax_expose_reasoning)
         .with_retry_policy(self.retry_policy.clone())
     }
+
+    #[cfg(feature = "ollama")]
+    fn build_ollama_provider(&self) -> crate::providers::openai::OpenAIProvider {
+        use crate::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
+
+        let model = self
+            .model
+            .clone()
+            .unwrap_or_else(|| crate::models::DEFAULT_OLLAMA_MODEL.to_string());
+
+        OpenAIProvider::new(
+            "".to_string(),
+            Some(model),
+            Some(self.ollama_base_url.clone()),
+        )
+        .with_auth_style(OpenAIAuthStyle::Bearer)
+        .with_retry_policy(self.retry_policy.clone())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -211,6 +255,7 @@ pub struct ClientBuilder {
     openai_auth_header: Option<String>,
     openai_responses_fallback: Option<bool>,
     minimax_expose_reasoning: Option<bool>,
+    ollama_base_url: Option<String>,
     retry_policy: Option<RetryPolicy>,
 }
 
@@ -260,6 +305,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn ollama_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.ollama_base_url = Some(base_url.into());
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -275,6 +325,9 @@ impl ClientBuilder {
             openai_auth_header: self.openai_auth_header,
             openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
             minimax_expose_reasoning: self.minimax_expose_reasoning.unwrap_or(false),
+            ollama_base_url: self
+                .ollama_base_url
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
             retry_policy: self.retry_policy.unwrap_or_default(),
         })
     }

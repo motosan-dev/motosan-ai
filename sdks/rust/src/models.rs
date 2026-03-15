@@ -1,6 +1,7 @@
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.3-codex";
 pub const DEFAULT_MINIMAX_MODEL: &str = "MiniMax-M2.5-highspeed";
+pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
 
 pub const ANTHROPIC_MODELS: &[&str] = &[
     "claude-opus-4-6",
