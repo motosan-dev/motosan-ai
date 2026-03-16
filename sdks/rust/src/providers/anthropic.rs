@@ -374,6 +374,7 @@ impl ProviderImpl for AnthropicProvider {
         let adapter = AnthropicStreamAdapter {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
+            current_tool_id: None,
         };
 
         Ok(Box::pin(adapter))
@@ -393,6 +394,7 @@ struct AnthropicStreamAdapter {
         >,
     >,
     pending: std::collections::VecDeque<StreamEvent>,
+    current_tool_id: Option<String>,
 }
 
 impl Stream for AnthropicStreamAdapter {
@@ -430,6 +432,7 @@ impl Stream for AnthropicStreamAdapter {
                                         .get("name")
                                         .and_then(Value::as_str)
                                         .unwrap_or_default();
+                                    self.current_tool_id = Some(id.to_string());
                                     return Poll::Ready(Some(StreamEvent::tool_call_start(
                                         id, name,
                                     )));
@@ -451,9 +454,11 @@ impl Stream for AnthropicStreamAdapter {
                                         .and_then(Value::as_str)
                                         .unwrap_or_default();
                                     if !partial.is_empty() {
-                                        return Poll::Ready(Some(StreamEvent::tool_call_args(
-                                            partial,
-                                        )));
+                                        let id =
+                                            self.current_tool_id.as_deref().unwrap_or_default();
+                                        return Poll::Ready(Some(
+                                            StreamEvent::tool_call_args_with_id(id, partial),
+                                        ));
                                     }
                                     continue;
                                 }
@@ -471,7 +476,10 @@ impl Stream for AnthropicStreamAdapter {
                             }
                         }
                         "content_block_stop" => {
-                            return Poll::Ready(Some(StreamEvent::tool_call_end()));
+                            if let Some(id) = self.current_tool_id.take() {
+                                return Poll::Ready(Some(StreamEvent::tool_call_end_with_id(id)));
+                            }
+                            continue;
                         }
                         "message_stop" => {
                             return Poll::Ready(Some(StreamEvent::done()));

@@ -7,6 +7,7 @@ from typing import Any, AsyncIterator, Iterable
 
 from motosan_ai.error import ConfigError
 from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
+from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
 
@@ -187,8 +188,18 @@ class Client:
             max_tokens=max_tokens,
             provider_options=provider_options,
         )
+        stripper = ThinkStripper()
         async for event in self._provider.stream(request):
-            yield event
+            if event.event_type == "text" and event.content:
+                clean = stripper.feed(event.content)
+                if clean:
+                    yield StreamEvent(content=clean, done=False)
+            else:
+                if event.done:
+                    remaining = stripper.flush()
+                    if remaining:
+                        yield StreamEvent(content=remaining, done=False)
+                yield event
 
     def chat_sync(
         self,

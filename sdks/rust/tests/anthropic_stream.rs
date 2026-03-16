@@ -317,7 +317,7 @@ async fn anthropic_stream_emits_tool_use_events() {
     assert_eq!(starts[0].tool_call_id.as_deref(), Some("toolu_1"));
     assert_eq!(starts[0].tool_call_name.as_deref(), Some("get_weather"));
 
-    // Tool call args
+    // Tool call args — must carry same id
     let args_events: Vec<_> = received
         .iter()
         .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
@@ -328,13 +328,16 @@ async fn anthropic_stream_emits_tool_use_events() {
         .filter_map(|e| e.tool_call_args_delta.as_deref())
         .collect();
     assert_eq!(full_args, "{\"city\":\"Taipei\"}");
+    assert_eq!(args_events[0].tool_call_id.as_deref(), Some("toolu_1"));
+    assert_eq!(args_events[1].tool_call_id.as_deref(), Some("toolu_1"));
 
-    // Tool call end
+    // Tool call end — must carry same id
     let ends: Vec<_> = received
         .iter()
         .filter(|e| e.event_type == StreamEventType::ToolCallEnd)
         .collect();
-    assert!(!ends.is_empty());
+    assert_eq!(ends.len(), 1);
+    assert_eq!(ends[0].tool_call_id.as_deref(), Some("toolu_1"));
 
     // Done
     assert!(received.last().unwrap().done);

@@ -156,6 +156,8 @@ class AnthropicProvider:
         except Exception as exc:
             raise ProviderError(str(exc)) from exc
 
+        current_tool_id: str | None = None
+
         async for event in events:
             payload = event if isinstance(event, dict) else event.model_dump()
             event_type = payload.get("type")
@@ -163,10 +165,11 @@ class AnthropicProvider:
             if event_type == "content_block_start":
                 block = payload.get("content_block") or {}
                 if block.get("type") == "tool_use":
+                    current_tool_id = block.get("id", "")
                     yield StreamEvent(
                         content="",
                         done=False,
-                        tool_call_id=block.get("id", ""),
+                        tool_call_id=current_tool_id,
                         tool_call_name=block.get("name", ""),
                         event_type="tool_call_start",
                     )
@@ -184,12 +187,20 @@ class AnthropicProvider:
                         yield StreamEvent(
                             content="",
                             done=False,
+                            tool_call_id=current_tool_id,
                             tool_call_args_delta=partial,
                             event_type="tool_call_args",
                         )
 
             elif event_type == "content_block_stop":
-                yield StreamEvent(content="", done=False, event_type="tool_call_end")
+                if current_tool_id is not None:
+                    yield StreamEvent(
+                        content="",
+                        done=False,
+                        tool_call_id=current_tool_id,
+                        event_type="tool_call_end",
+                    )
+                    current_tool_id = None
 
             elif event_type == "message_stop":
                 yield StreamEvent(content="", done=True)
