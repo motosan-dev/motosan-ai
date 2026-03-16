@@ -2,7 +2,8 @@ use crate::error::MotosanError;
 use crate::providers::Provider;
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Message};
+use crate::think_stripper::ThinkStripper;
+use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventType};
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -72,11 +73,20 @@ impl Client {
             request_builder = request_builder.model(model.clone());
         }
 
-        self.dispatch_stream(request_builder.build()).await
+        let raw = self.dispatch_stream(request_builder.build()).await?;
+        Ok(Self::wrap_with_think_stripper(raw))
     }
 
     pub async fn stream_with(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
-        self.dispatch_stream(request).await
+        let raw = self.dispatch_stream(request).await?;
+        Ok(Self::wrap_with_think_stripper(raw))
+    }
+
+    fn wrap_with_think_stripper(raw: BoxStream) -> BoxStream {
+        Box::pin(ThinkStripperStream {
+            inner: raw,
+            stripper: ThinkStripper::new(),
+        })
     }
 
     async fn dispatch_chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -390,5 +400,44 @@ impl ClientBuilder {
             ollama_num_ctx: self.ollama_num_ctx,
             retry_policy: self.retry_policy.unwrap_or_default(),
         })
+    }
+}
+
+/// Stream wrapper that filters `<think>...</think>` tags from text events.
+struct ThinkStripperStream {
+    inner: BoxStream,
+    stripper: ThinkStripper,
+}
+
+impl futures_core::Stream for ThinkStripperStream {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(event)) => {
+                    if event.event_type == StreamEventType::Text && !event.content.is_empty() {
+                        let clean = self.stripper.feed(&event.content);
+                        if clean.is_empty() {
+                            continue; // buffering, skip this event
+                        }
+                        return Poll::Ready(Some(StreamEvent::text(clean)));
+                    }
+                    return Poll::Ready(Some(event));
+                }
+                Poll::Ready(None) => {
+                    let remaining = self.stripper.flush();
+                    if !remaining.is_empty() {
+                        return Poll::Ready(Some(StreamEvent::text(remaining)));
+                    }
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
     }
 }

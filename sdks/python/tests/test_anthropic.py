@@ -87,15 +87,18 @@ async def test_anthropic_stream_tool_use(provider):
     assert starts[0].tool_call_id == "toolu_1"
     assert starts[0].tool_call_name == "get_weather"
 
-    # Should have tool_call_args
+    # Should have tool_call_args — with correct id
     args_events = [e for e in events if e.event_type == "tool_call_args"]
     assert len(args_events) == 2
     full_args = "".join(e.tool_call_args_delta for e in args_events)
     assert full_args == '{"city":"Taipei"}'
+    assert args_events[0].tool_call_id == "toolu_1"
+    assert args_events[1].tool_call_id == "toolu_1"
 
-    # Should have tool_call_end
+    # Should have tool_call_end — with correct id
     ends = [e for e in events if e.event_type == "tool_call_end"]
-    assert len(ends) >= 1
+    assert len(ends) == 1
+    assert ends[0].tool_call_id == "toolu_1"
 
     # Should end with done=True
     assert events[-1].done is True

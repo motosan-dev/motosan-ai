@@ -4,6 +4,7 @@ pub mod models;
 pub mod providers;
 pub mod retry;
 pub mod stream;
+pub mod think_stripper;
 pub mod types;
 
 pub use client::{Client, ClientBuilder};
