@@ -14,7 +14,14 @@ class AnthropicProvider:
             from anthropic import AsyncAnthropic  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise ConfigError("anthropic package is required for AnthropicProvider") from exc
-        self._client = AsyncAnthropic(api_key=api_key)
+        # OAuth tokens (sk-ant-oat01-*) need Bearer auth + beta header
+        if api_key.startswith("sk-ant-oat01-"):
+            self._client = AsyncAnthropic(
+                auth_token=api_key,
+                default_headers={"anthropic-beta": "oauth-2025-04-20"},
+            )
+        else:
+            self._client = AsyncAnthropic(api_key=api_key)
 
     @staticmethod
     def _serialize_messages(messages: list[Message]) -> tuple[list[dict[str, Any]], str | None]:
