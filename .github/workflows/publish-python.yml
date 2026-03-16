@@ -10,9 +10,6 @@ jobs:
     defaults:
       run:
         working-directory: sdks/python
-    environment: pypi
-    permissions:
-      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
@@ -20,3 +17,4 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist/
+          password: ${{ secrets.PYPI_API_TOKEN }}
