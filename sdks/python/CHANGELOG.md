@@ -2,12 +2,16 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
-## [0.3.3] - 2026-03-18
+## [0.4.0] - 2026-03-18
 
 ### Changed
 - **Remove official SDK dependencies**: Anthropic and OpenAI providers rewritten to use `httpx` directly instead of `anthropic` and `openai` packages — zero official provider SDK dependencies
 - **pyproject.toml**: `anthropic`, `openai`, `ollama` optional deps now all resolve to `httpx>=0.27`
 - **All mock tests** migrated from `monkeypatch` + `FakeClient` to `respx` HTTP mocking
+- **Anthropic default model** updated to `claude-sonnet-4-6`
+- **OAuth streaming**: OAuth `chat()` now internally streams (Anthropic requires streaming for OAuth tokens) and collects into `ChatResponse`
+- **OAuth system prompt**: sent as array of blocks with Claude Code prefix + `cache_control`
+- **OAuth user messages**: serialized as content blocks (`[{"type": "text", "text": ...}]`) per Anthropic OAuth requirements
 
 ### Fixed
 - **Anthropic OAuth `chat()` tool_calls**: OAuth path now correctly collects tool_call stream events into `ChatResponse.tool_calls` with proper `stop_reason=tool_use` (previously returned empty)
@@ -16,6 +20,10 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 ### Added
 - **Live integration tests** (`tests/integration/test_anthropic_live.py`): 7 tests hitting real Anthropic API with OAuth token — chat, stream, system prompt, temperature, tool use (single + multi-turn), stream + tool use
 - **Pre-push gate** (`scripts/pre-push-gate.sh`): blocks push unless unit + live tests pass
+
+## [0.3.3] - 2026-03-16
+
+(Published to PyPI with anthropic SDK-based providers — superseded by 0.4.0)
 
 ## [0.2.1] - 2026-03-15
 
