@@ -224,13 +224,25 @@ Every release **must** include documentation and changelog updates. This is a ha
    ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
    ```
 
-5. **Commit and tag**:
+5. **Commit, tag, and push**:
    ```bash
    git add -p  # review each change
-   git commit -m "chore: release vX.Y.Z"
-   git tag -a vX.Y.Z -m "vX.Y.Z — <summary>"
+   git commit -m "chore: release rust-vX.Y.Z / python-vX.Y.Z"
+   # Tag each SDK independently
+   git tag -a rust-vX.Y.Z -m "rust-vX.Y.Z — summary"
+   git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
    git push origin main --tags
    ```
+
+### Tag Convention
+
+| SDK | Tag format | Triggers |
+|-----|-----------|----------|
+| Rust | `rust-v0.3.3` | `publish-rust.yml` → crates.io |
+| Python | `python-v0.3.3` | `publish-python.yml` → PyPI |
+
+Rust and Python are versioned independently — tag each separately.
+Can release only one SDK if the other has no changes.
 
 ### What Goes in the CHANGELOG
 
