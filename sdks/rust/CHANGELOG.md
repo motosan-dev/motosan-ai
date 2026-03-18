@@ -2,6 +2,16 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.3.3] - 2026-03-18
+
+### Fixed
+- **Anthropic OAuth**: Full Claude Code OAuth support for setup tokens (sk-ant-oat01-*)
+  - Added `claude-code-20250219` beta header + Claude CLI identity headers
+  - Array format for system prompt and message content (required by OAuth endpoint)
+  - `chat()` auto-redirects to `stream()` for OAuth tokens (non-streaming not supported)
+  - Injected Claude Code system prompt prefix for OAuth requests
+  - Tested with claude-sonnet-4-6 and claude-opus-4-6
+
 ## [0.2.0] - 2026-03-15
 
 ### Added

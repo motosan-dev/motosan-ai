@@ -14,11 +14,16 @@ class AnthropicProvider:
             from anthropic import AsyncAnthropic  # type: ignore
         except Exception as exc:  # pragma: no cover
             raise ConfigError("anthropic package is required for AnthropicProvider") from exc
-        # OAuth tokens (sk-ant-oat01-*) need Bearer auth + beta header
-        if api_key.startswith("sk-ant-oat01-"):
+        self._is_oauth = api_key.startswith("sk-ant-oat01-")
+        # OAuth tokens (sk-ant-oat01-*) need Bearer auth + Claude Code identity headers
+        if self._is_oauth:
             self._client = AsyncAnthropic(
                 auth_token=api_key,
-                default_headers={"anthropic-beta": "oauth-2025-04-20"},
+                default_headers={
+                    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+                    "user-agent": "claude-code/1.0.33",
+                    "x-app": "cli",
+                },
             )
         else:
             self._client = AsyncAnthropic(api_key=api_key)
@@ -74,9 +79,18 @@ class AnthropicProvider:
         system = "\n\n".join(system_parts) if system_parts else None
         return outgoing, system
 
+    def _inject_claude_code_prefix(self, system: str | None) -> str | None:
+        """Inject Claude Code system prompt prefix for OAuth requests."""
+        if not self._is_oauth:
+            return system
+        prefix = "You are Claude Code, Anthropic's official CLI for Claude."
+        if system:
+            return f"{prefix}\n\n{system}"
+        return prefix
+
     async def chat(self, request: ChatRequest) -> ChatResponse:
         messages, extracted_system = self._serialize_messages(request.messages)
-        system = request.system or extracted_system
+        system = self._inject_claude_code_prefix(request.system or extracted_system)
         body: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": messages,
@@ -137,13 +151,13 @@ class AnthropicProvider:
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         messages, extracted_system = self._serialize_messages(request.messages)
+        system = self._inject_claude_code_prefix(request.system or extracted_system)
         body: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": messages,
             "stream": True,
             "max_tokens": request.max_tokens or 1024,
         }
-        system = request.system or extracted_system
         if system:
             body["system"] = system
         if request.tools:

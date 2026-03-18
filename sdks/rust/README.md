@@ -144,10 +144,17 @@ let client = Client::builder()
 ## Anthropic Auth Matrix
 
 - `sk-ant-api*` or regular Anthropic API key → `x-api-key` header
-- `sk-ant-oat01*` setup token → `Authorization: Bearer <token>` plus `anthropic-beta: oauth-2025-04-20`
+- `sk-ant-oat01*` setup token → OAuth mode:
+  - `Authorization: Bearer <token>` header
+  - `anthropic-beta: claude-code-20250219,oauth-2025-04-20,...` headers
+  - `user-agent: claude-code/<version>` + `x-app: cli` identity headers
+  - Streaming required (non-streaming returns 400)
+  - Array format for system prompt and message content
+  - Claude Code system prompt prefix auto-injected
+  - `chat()` auto-redirects to `stream()` and collects result
 
 When using `Provider::Anthropic`, pass either token string into `Client::builder().api_key(...)`.
-The SDK auto-selects the correct header mode based on token prefix.
+The SDK auto-selects the correct auth mode and request format based on token prefix.
 
 ## MiniMax Compatibility
 

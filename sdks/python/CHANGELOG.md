@@ -2,6 +2,14 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.3.3] - 2026-03-18
+
+### Fixed
+- **Anthropic OAuth**: Full Claude Code OAuth support for setup tokens (sk-ant-oat01-*)
+  - Added `claude-code-20250219` beta header + Claude CLI identity headers (`user-agent`, `x-app`)
+  - Injected Claude Code system prompt prefix for OAuth requests
+  - Aligned with Rust SDK OAuth behavior
+
 ## [0.2.1] - 2026-03-15
 
 ### Added
