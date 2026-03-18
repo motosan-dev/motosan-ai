@@ -2,13 +2,21 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
-## [0.4.1] - 2026-03-18
+## [0.4.2] - 2026-03-18
 
 ### Added
-- **Retry with exponential backoff** for rate limit (429) errors — `Client.chat()` and `Client.stream()` auto-retry up to `max_retries` times (default 3) with 1s, 2s, 4s backoff (capped at 30s)
+- **Retry with exponential backoff** for transient errors — `Client.chat()` and `Client.stream()` auto-retry on 429, 5xx, and network errors (default `max_retries=3`)
 - `max_retries` parameter on `Client` constructor and all classmethods (`anthropic()`, `openai()`, `minimax()`, `ollama()`)
 - `Retry-After` header parsing — uses server-suggested wait time when available
-- New `motosan_ai.retry` module with `with_retry()` utility
+- New `motosan_ai.retry` module with `with_retry()` and `_is_retryable()` utilities
+
+### Changed
+- **Retry defaults aligned with Rust SDK** — `initial_backoff=0.1s`, `max_backoff=2.0s` (was 1s/30s)
+- **Retry scope expanded** — now retries `RateLimitError` (429), `ProviderError` (5xx), and `NetworkError` (timeout/connection), matching Rust SDK behavior
+
+## [0.4.1] - 2026-03-18
+
+(Superseded by 0.4.2 — retry only covered 429, defaults misaligned with Rust)
 
 ## [0.4.0] - 2026-03-18
 
