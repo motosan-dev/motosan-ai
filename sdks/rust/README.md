@@ -204,6 +204,21 @@ let request = ChatRequest::builder()
 
 Error handling policy reference: `docs/error-handling-policy.md`.
 
+## Publishing
+
+Automated via `publish-rust.yml` on `rust-v*` tag push → crates.io.
+
+```bash
+# Tag and push to trigger publish
+git tag -a rust-vX.Y.Z -m "rust-vX.Y.Z — summary"
+git push origin rust-vX.Y.Z
+
+# Manual (emergency)
+cargo publish
+```
+
+Rust and Python SDKs are versioned independently.
+
 ## Model Maintenance (survey process)
 
 When updating model defaults, verify against official provider documentation:

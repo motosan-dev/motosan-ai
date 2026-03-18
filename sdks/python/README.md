@@ -194,12 +194,25 @@ uv run pytest sdks/python/tests/ -q --ignore=sdks/python/tests/integration/
 ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
 ```
 
+## Publishing
+
+Automated via `publish-python.yml` on `python-v*` tag push → PyPI.
+
+```bash
+# Tag and push to trigger publish
+git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
+git push origin python-vX.Y.Z
+
+# Manual (emergency)
+uv build --out-dir dist && uv publish dist/*
+```
+
+Rust and Python SDKs are versioned independently.
+
 ## Development
 
 ```bash
 uv sync --extra full --extra dev
 uv run ruff check motosan_ai/
 uv run pytest -q
-uv build --out-dir dist
-uv publish --dry-run dist/*
 ```

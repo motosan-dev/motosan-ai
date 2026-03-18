@@ -251,13 +251,26 @@ Auto-reads OAuth token from macOS Keychain.
 
 ---
 
+## Publishing
+
+Rust and Python are versioned and released independently.
+
+| SDK | Tag format | Workflow | Registry |
+|-----|-----------|----------|----------|
+| Rust | `rust-v*` | `publish-rust.yml` | crates.io |
+| Python | `python-v*` | `publish-python.yml` | PyPI |
+
+Can release only one SDK if the other has no changes.
+
+---
+
 ## Milestones
 
-| Version | Scope | Status |
-|---------|-------|--------|
-| v0.1.0 | Rust SDK — 3 providers, streaming, retry, tests | ✅ Shipped 2026-03-10 |
-| v0.1.1 | Rust — tool calling, MiniMax improvements, OpenAI auth style | ✅ Shipped 2026-03-11 |
-| v0.2.0 | Python SDK — 4 providers, async + sync, tool calling, tests | ✅ Shipped |
-| v0.3.3 | Remove official SDK deps, httpx-only, OAuth fixes, live tests | ✅ Current |
-| v0.3.0 | TypeScript SDK | ⏳ Planned (due 2026-04-28) |
-| v1.0.0 | All stable, docs site, crates.io + PyPI publish | ⏳ Planned (due 2026-06-01) |
+| SDK | Version | Scope | Status |
+|-----|---------|-------|--------|
+| Rust | rust-v0.1.0 | 3 providers, streaming, retry, tests | ✅ Shipped 2026-03-10 |
+| Rust | rust-v0.1.1 | Tool calling, MiniMax improvements, OpenAI auth style | ✅ Shipped 2026-03-11 |
+| Python | python-v0.2.0 | 4 providers, async + sync, tool calling, tests | ✅ Shipped |
+| Both | rust-v0.3.3 / python-v0.3.3 | Remove official SDK deps, httpx-only, OAuth fixes, live tests | ✅ Current |
+| TypeScript | ts-v0.1.0 | TypeScript SDK | ⏳ Planned (due 2026-04-28) |
+| All | v1.0.0 | All stable, docs site | ⏳ Planned (due 2026-06-01) |

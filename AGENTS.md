@@ -265,12 +265,27 @@ Can release only one SDK if the other has no changes.
 
 ---
 
+## Publishing
+
+Publish is automated via GitHub Actions on tag push:
+- `rust-v*` → `publish-rust.yml` → crates.io (fmt + clippy + test + publish)
+- `python-v*` → `publish-python.yml` → PyPI (trusted publishing)
+
+Manual publish (emergency):
+```bash
+# Rust
+cd sdks/rust && cargo publish
+
+# Python
+cd sdks/python && uv build --out-dir dist && uv publish dist/*
+```
+
+---
+
 ## Milestones
 
-| Milestone | Status |
-|-----------|--------|
-| M1 `v0.1.0 — Rust SDK` | ✅ closed |
-| M6 `v0.1.2 — Multi-turn Tool Use Fix` | ✅ closed (v0.1.3 shipped) |
-| M2 `v0.2.0 — Python SDK` | 🔄 in progress |
-| M3 `v0.3.0 — TypeScript SDK` | ⏳ |
-| M4 `v1.0.0 — Stable Release` | ⏳ |
+| SDK | Version | Status |
+|-----|---------|--------|
+| Rust | rust-v0.3.3 | ✅ Current (crates.io) |
+| Python | python-v0.3.3 | ✅ Current (PyPI) |
+| TypeScript | ts-v0.1.0 | ⏳ Planned |
