@@ -57,7 +57,12 @@ impl AnthropicProvider {
         if Self::is_setup_token(&self.api_key) {
             request
                 .header("authorization", format!("Bearer {}", self.api_key))
-                .header("anthropic-beta", "oauth-2025-04-20")
+                .header(
+                    "anthropic-beta",
+                    "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
+                )
+                .header("user-agent", "claude-code/1.0.33")
+                .header("x-app", "cli")
         } else {
             request.header("x-api-key", &self.api_key)
         }
@@ -84,14 +89,16 @@ struct AnthropicRequestBuilder {
     req: ChatRequest,
     default_model: String,
     stream: bool,
+    oauth: bool,
 }
 
 impl AnthropicRequestBuilder {
-    fn new(req: ChatRequest, default_model: String) -> Self {
+    fn new(req: ChatRequest, default_model: String, oauth: bool) -> Self {
         Self {
             req,
             default_model,
             stream: false,
+            oauth,
         }
     }
 
@@ -113,7 +120,13 @@ impl AnthropicRequestBuilder {
         for message in &self.req.messages {
             match message.role {
                 Role::System => extracted_systems.push(message.content.clone()),
-                Role::User => messages.push(json!({"role": "user", "content": message.content})),
+                Role::User => {
+                    if self.oauth {
+                        messages.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
+                    } else {
+                        messages.push(json!({"role": "user", "content": message.content}));
+                    }
+                }
                 Role::Assistant => {
                     if message.tool_calls.is_empty() {
                         messages.push(json!({"role": "assistant", "content": message.content}));
@@ -165,7 +178,11 @@ impl AnthropicRequestBuilder {
             body["stream"] = json!(true);
         }
         if let Some(system_prompt) = system {
-            body["system"] = json!(system_prompt);
+            if self.oauth {
+                body["system"] = json!([{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]);
+            } else {
+                body["system"] = json!(system_prompt);
+            }
         }
         if let Some(temperature) = self.req.temperature {
             body["temperature"] = json!(temperature);
@@ -202,7 +219,34 @@ impl AnthropicRequestBuilder {
 #[async_trait]
 impl ProviderImpl for AnthropicProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        let body = AnthropicRequestBuilder::new(req, self.model.clone()).build();
+        let is_oauth = Self::is_setup_token(&self.api_key);
+
+        // OAuth tokens require streaming + Claude Code identity.
+        // Redirect to stream path and collect the full response.
+        if is_oauth {
+            // OAuth requires streaming. Delegate to stream() which handles
+            // the Claude Code system prompt injection.
+            use tokio_stream::StreamExt;
+            let mut stream = self.stream(req).await?;
+            let mut content = String::new();
+            let mut input_tokens = 0u64;
+            let mut output_tokens = 0u64;
+            while let Some(event) = stream.next().await {
+                if event.done {
+                    break;
+                }
+                content.push_str(&event.content);
+            }
+            return Ok(ChatResponse {
+                content,
+                model: self.model.clone(),
+                usage: crate::types::Usage { input_tokens: 0, output_tokens: 0 },
+                stop_reason: crate::types::StopReason::EndTurn,
+                tool_calls: vec![],
+            });
+        }
+
+        let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth).build();
         let mut attempt = 0;
         let payload: Value;
         loop {
@@ -323,7 +367,19 @@ impl ProviderImpl for AnthropicProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        let body = AnthropicRequestBuilder::new(req, self.model.clone())
+        let is_oauth = Self::is_setup_token(&self.api_key);
+        let req = if is_oauth {
+            let mut r = req;
+            let prefix = "You are Claude Code, Anthropic's official CLI for Claude.";
+            r.system = Some(match r.system {
+                Some(s) => format!("{}\n\n{}", prefix, s),
+                None => prefix.to_string(),
+            });
+            r
+        } else {
+            req
+        };
+        let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth)
             .stream(true)
             .build();
         let mut attempt = 0;
