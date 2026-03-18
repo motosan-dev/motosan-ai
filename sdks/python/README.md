@@ -99,6 +99,23 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Retry
+
+All API calls automatically retry on transient errors (429 rate limit, 5xx server errors, network timeouts). Default: 3 retries with exponential backoff (100ms, 200ms, 400ms).
+
+```python
+# Default: 3 retries
+client = Client.anthropic(api_key="...")
+
+# Disable retry
+client = Client.anthropic(api_key="...", max_retries=0)
+
+# Custom retry count
+client = Client.anthropic(api_key="...", max_retries=5)
+```
+
+Respects `Retry-After` header when present.
+
 ## Sync Wrapper
 
 ```python
