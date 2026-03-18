@@ -6,7 +6,7 @@ import os
 from enum import StrEnum
 from typing import Any, AsyncIterator, Iterable
 
-from motosan_ai.error import ConfigError, RateLimitError
+from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
 from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
@@ -229,16 +229,18 @@ class Client:
                                 yield StreamEvent(content=remaining, done=False)
                         yield event
                 return  # stream completed successfully
-            except RateLimitError as e:
+            except (RateLimitError, NetworkError, ProviderError) as e:
+                from motosan_ai.retry import _is_retryable, _parse_retry_after, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF
+                if not _is_retryable(e):
+                    raise
                 last_error = e
                 if attempt >= self._max_retries:
                     break
-                from motosan_ai.retry import _parse_retry_after, DEFAULT_MAX_BACKOFF
                 retry_after = _parse_retry_after(str(e))
-                wait = min(retry_after if retry_after is not None else 1.0 * (2 ** attempt), DEFAULT_MAX_BACKOFF)
+                wait = min(retry_after if retry_after is not None else DEFAULT_INITIAL_BACKOFF * (2 ** attempt), DEFAULT_MAX_BACKOFF)
                 logger.warning(
-                    "Rate limited stream (attempt %d/%d), retrying in %.1fs",
-                    attempt + 1, self._max_retries, wait,
+                    "Retryable stream error (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1, self._max_retries, wait, type(e).__name__,
                 )
                 await asyncio.sleep(wait)
         raise last_error  # type: ignore[misc]

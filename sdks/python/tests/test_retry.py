@@ -1,7 +1,12 @@
 import pytest
 
-from motosan_ai.retry import with_retry, _parse_retry_after
-from motosan_ai.error import RateLimitError
+from motosan_ai.retry import with_retry, _parse_retry_after, _is_retryable
+from motosan_ai.error import (
+    AuthError,
+    NetworkError,
+    ProviderError,
+    RateLimitError,
+)
 
 
 class TestParseRetryAfter:
@@ -16,6 +21,32 @@ class TestParseRetryAfter:
 
     def test_retry_after_dash_variant(self):
         assert _parse_retry_after("Retry-After 10") == 10.0
+
+
+class TestIsRetryable:
+    def test_rate_limit_error(self):
+        assert _is_retryable(RateLimitError("429")) is True
+
+    def test_network_error(self):
+        assert _is_retryable(NetworkError("connection reset")) is True
+
+    def test_provider_error_5xx(self):
+        assert _is_retryable(ProviderError("Error code: 500 - server error")) is True
+
+    def test_provider_error_502(self):
+        assert _is_retryable(ProviderError("502 Bad Gateway")) is True
+
+    def test_provider_error_503(self):
+        assert _is_retryable(ProviderError("503 Service Unavailable")) is True
+
+    def test_provider_error_4xx_not_retryable(self):
+        assert _is_retryable(ProviderError("Error code: 400 - bad request")) is False
+
+    def test_auth_error_not_retryable(self):
+        assert _is_retryable(AuthError("401 unauthorized")) is False
+
+    def test_value_error_not_retryable(self):
+        assert _is_retryable(ValueError("bad")) is False
 
 
 class TestWithRetry:
@@ -48,6 +79,62 @@ class TestWithRetry:
         assert calls == 3
 
     @pytest.mark.asyncio
+    async def test_retries_on_network_error(self):
+        calls = 0
+
+        async def fn():
+            nonlocal calls
+            calls += 1
+            if calls < 2:
+                raise NetworkError("connection reset")
+            return "ok"
+
+        result = await with_retry(fn, max_retries=3, initial_backoff=0.001)
+        assert result == "ok"
+        assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_retries_on_5xx_provider_error(self):
+        calls = 0
+
+        async def fn():
+            nonlocal calls
+            calls += 1
+            if calls < 2:
+                raise ProviderError("Error code: 500 - Internal Server Error")
+            return "ok"
+
+        result = await with_retry(fn, max_retries=3, initial_backoff=0.001)
+        assert result == "ok"
+        assert calls == 2
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_4xx_provider_error(self):
+        calls = 0
+
+        async def fn():
+            nonlocal calls
+            calls += 1
+            raise ProviderError("Error code: 400 - bad request")
+
+        with pytest.raises(ProviderError):
+            await with_retry(fn, max_retries=3, initial_backoff=0.001)
+        assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_does_not_retry_auth_error(self):
+        calls = 0
+
+        async def fn():
+            nonlocal calls
+            calls += 1
+            raise AuthError("401")
+
+        with pytest.raises(AuthError):
+            await with_retry(fn, max_retries=3, initial_backoff=0.001)
+        assert calls == 1
+
+    @pytest.mark.asyncio
     async def test_exhausts_retries(self):
         async def fn():
             raise RateLimitError("429")
@@ -56,7 +143,7 @@ class TestWithRetry:
             await with_retry(fn, max_retries=2, initial_backoff=0.001)
 
     @pytest.mark.asyncio
-    async def test_non_rate_limit_error_not_retried(self):
+    async def test_non_retryable_error_not_retried(self):
         calls = 0
 
         async def fn():
@@ -70,7 +157,6 @@ class TestWithRetry:
 
     @pytest.mark.asyncio
     async def test_uses_retry_after_from_message(self):
-        """Verify that Retry-After in the error message is respected (value capped at max_backoff)."""
         calls = 0
 
         async def fn():
@@ -96,3 +182,21 @@ class TestWithRetry:
         with pytest.raises(RateLimitError):
             await with_retry(fn, max_retries=0)
         assert calls == 1
+
+    @pytest.mark.asyncio
+    async def test_mixed_errors_retries_then_succeeds(self):
+        """Network error then rate limit then success."""
+        calls = 0
+
+        async def fn():
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise NetworkError("timeout")
+            if calls == 2:
+                raise RateLimitError("429")
+            return "ok"
+
+        result = await with_retry(fn, max_retries=3, initial_backoff=0.001)
+        assert result == "ok"
+        assert calls == 3
