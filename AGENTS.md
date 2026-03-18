@@ -287,5 +287,5 @@ cd sdks/python && uv build --out-dir dist && uv publish dist/*
 | SDK | Version | Status |
 |-----|---------|--------|
 | Rust | rust-v0.3.3 | ✅ Current (crates.io) |
-| Python | python-v0.4.0 | ✅ Current (PyPI) |
+| Python | python-v0.4.1 | ✅ Current (PyPI) |
 | TypeScript | ts-v0.1.0 | ⏳ Planned |

@@ -2,6 +2,14 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.4.1] - 2026-03-18
+
+### Added
+- **Retry with exponential backoff** for rate limit (429) errors — `Client.chat()` and `Client.stream()` auto-retry up to `max_retries` times (default 3) with 1s, 2s, 4s backoff (capped at 30s)
+- `max_retries` parameter on `Client` constructor and all classmethods (`anthropic()`, `openai()`, `minimax()`, `ollama()`)
+- `Retry-After` header parsing — uses server-suggested wait time when available
+- New `motosan_ai.retry` module with `with_retry()` utility
+
 ## [0.4.0] - 2026-03-18
 
 ### Changed
