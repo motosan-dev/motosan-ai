@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from enum import StrEnum
 from typing import Any, AsyncIterator, Iterable
 
-from motosan_ai.error import ConfigError
+from motosan_ai.error import ConfigError, RateLimitError
 from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
 from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
+
+logger = logging.getLogger(__name__)
 
 
 class Provider(StrEnum):
@@ -47,10 +50,12 @@ class Client:
         ollama_think: bool = False,
         ollama_keep_alive: str | None = None,
         ollama_num_ctx: int | None = None,
+        max_retries: int = 3,
     ) -> None:
         provider_value = Provider(provider)
         self.provider = provider_value
         self.model = model
+        self._max_retries = max_retries
 
         if provider_value == Provider.ollama:
             self.api_key = api_key or ""
@@ -83,12 +88,22 @@ class Client:
                 self._provider = MinimaxProvider(api_key=self.api_key, model=model, base_url=base_url)
 
     @classmethod
-    def anthropic(cls, api_key: str | None = None, model: str | None = None) -> "Client":
-        return cls(provider=Provider.anthropic, api_key=api_key, model=model)
+    def anthropic(
+        cls,
+        api_key: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+    ) -> "Client":
+        return cls(provider=Provider.anthropic, api_key=api_key, model=model, max_retries=max_retries)
 
     @classmethod
-    def openai(cls, api_key: str | None = None, model: str | None = None) -> "Client":
-        return cls(provider=Provider.openai, api_key=api_key, model=model)
+    def openai(
+        cls,
+        api_key: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+    ) -> "Client":
+        return cls(provider=Provider.openai, api_key=api_key, model=model, max_retries=max_retries)
 
     @classmethod
     def minimax(
@@ -96,8 +111,9 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
+        max_retries: int = 3,
     ) -> "Client":
-        return cls(provider=Provider.minimax, api_key=api_key, model=model, base_url=base_url)
+        return cls(provider=Provider.minimax, api_key=api_key, model=model, base_url=base_url, max_retries=max_retries)
 
     @classmethod
     def ollama(
@@ -109,6 +125,7 @@ class Client:
         think: bool = False,
         keep_alive: str | None = None,
         num_ctx: int | None = None,
+        max_retries: int = 3,
     ) -> "Client":
         return cls(
             provider=Provider.ollama,
@@ -118,6 +135,7 @@ class Client:
             ollama_think=think,
             ollama_keep_alive=keep_alive,
             ollama_num_ctx=num_ctx,
+            max_retries=max_retries,
         )
 
     @staticmethod
@@ -168,6 +186,12 @@ class Client:
             max_tokens=max_tokens,
             provider_options=provider_options,
         )
+        if self._max_retries > 0:
+            from motosan_ai.retry import with_retry
+            return await with_retry(
+                lambda: self._provider.chat(request),
+                max_retries=self._max_retries,
+            )
         return await self._provider.chat(request)
 
     async def stream(
@@ -188,18 +212,36 @@ class Client:
             max_tokens=max_tokens,
             provider_options=provider_options,
         )
-        stripper = ThinkStripper()
-        async for event in self._provider.stream(request):
-            if event.event_type == "text" and event.content:
-                clean = stripper.feed(event.content)
-                if clean:
-                    yield StreamEvent(content=clean, done=False)
-            else:
-                if event.done:
-                    remaining = stripper.flush()
-                    if remaining:
-                        yield StreamEvent(content=remaining, done=False)
-                yield event
+        last_error: RateLimitError | None = None
+        max_attempts = self._max_retries + 1 if self._max_retries > 0 else 1
+        for attempt in range(max_attempts):
+            try:
+                stripper = ThinkStripper()
+                async for event in self._provider.stream(request):
+                    if event.event_type == "text" and event.content:
+                        clean = stripper.feed(event.content)
+                        if clean:
+                            yield StreamEvent(content=clean, done=False)
+                    else:
+                        if event.done:
+                            remaining = stripper.flush()
+                            if remaining:
+                                yield StreamEvent(content=remaining, done=False)
+                        yield event
+                return  # stream completed successfully
+            except RateLimitError as e:
+                last_error = e
+                if attempt >= self._max_retries:
+                    break
+                from motosan_ai.retry import _parse_retry_after, DEFAULT_MAX_BACKOFF
+                retry_after = _parse_retry_after(str(e))
+                wait = min(retry_after if retry_after is not None else 1.0 * (2 ** attempt), DEFAULT_MAX_BACKOFF)
+                logger.warning(
+                    "Rate limited stream (attempt %d/%d), retrying in %.1fs",
+                    attempt + 1, self._max_retries, wait,
+                )
+                await asyncio.sleep(wait)
+        raise last_error  # type: ignore[misc]
 
     def chat_sync(
         self,
