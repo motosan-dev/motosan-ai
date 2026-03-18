@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 DEFAULT_MAX_RETRIES = 3
-DEFAULT_INITIAL_BACKOFF = 1.0  # seconds
-DEFAULT_MAX_BACKOFF = 30.0
+DEFAULT_INITIAL_BACKOFF = 0.1  # seconds (aligned with Rust: 100ms)
+DEFAULT_MAX_BACKOFF = 2.0  # seconds (aligned with Rust: 2000ms)
 
 
 def _parse_retry_after(error_message: str) -> float | None:
