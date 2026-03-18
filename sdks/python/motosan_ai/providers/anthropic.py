@@ -1,35 +1,56 @@
 from __future__ import annotations
 
+import json
 from typing import Any, AsyncIterator
 
-from motosan_ai.error import AuthError, ConfigError, NetworkError, ProviderError, RateLimitError
+import httpx
+
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+
+_DEFAULT_BASE_URL = "https://api.anthropic.com"
+_ANTHROPIC_VERSION = "2023-06-01"
+_CLAUDE_CODE_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude."
 
 
 class AnthropicProvider:
-    def __init__(self, api_key: str, model: str | None = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        model: str | None = None,
+        base_url: str | None = None,
+    ) -> None:
         self.api_key = api_key
-        self.model = model or "claude-sonnet-4-5"
-        try:
-            from anthropic import AsyncAnthropic  # type: ignore
-        except Exception as exc:  # pragma: no cover
-            raise ConfigError("anthropic package is required for AnthropicProvider") from exc
+        self.model = model or "claude-sonnet-4-6"
+        self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
         self._is_oauth = api_key.startswith("sk-ant-oat01-")
-        # OAuth tokens (sk-ant-oat01-*) need Bearer auth + Claude Code identity headers
+        self._http = httpx.AsyncClient(timeout=120.0)
+
+    def _endpoint(self) -> str:
+        return f"{self.base_url}/v1/messages"
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        }
         if self._is_oauth:
-            self._client = AsyncAnthropic(
-                auth_token=api_key,
-                default_headers={
-                    "anthropic-beta": "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-                    "user-agent": "claude-code/1.0.33",
-                    "x-app": "cli",
-                },
+            headers["authorization"] = f"Bearer {self.api_key}"
+            headers["anthropic-beta"] = (
+                "claude-code-20250219,oauth-2025-04-20,"
+                "fine-grained-tool-streaming-2025-05-14,"
+                "interleaved-thinking-2025-05-14"
             )
+            headers["user-agent"] = "claude-code/1.0.33"
+            headers["x-app"] = "cli"
         else:
-            self._client = AsyncAnthropic(api_key=api_key)
+            headers["x-api-key"] = self.api_key
+        return headers
 
     @staticmethod
-    def _serialize_messages(messages: list[Message]) -> tuple[list[dict[str, Any]], str | None]:
+    def _serialize_messages(
+        messages: list[Message], *, oauth: bool = False,
+    ) -> tuple[list[dict[str, Any]], str | None]:
         outgoing: list[dict[str, Any]] = []
         system_parts: list[str] = []
 
@@ -40,7 +61,10 @@ class AnthropicProvider:
                 continue
 
             if message.role == Role.user:
-                outgoing.append({"role": "user", "content": message.content})
+                if oauth:
+                    outgoing.append({"role": "user", "content": [{"type": "text", "text": message.content}]})
+                else:
+                    outgoing.append({"role": "user", "content": message.content})
                 continue
 
             if message.role == Role.assistant:
@@ -79,23 +103,33 @@ class AnthropicProvider:
         system = "\n\n".join(system_parts) if system_parts else None
         return outgoing, system
 
-    def _inject_claude_code_prefix(self, system: str | None) -> str | None:
-        """Inject Claude Code system prompt prefix for OAuth requests."""
+    def _build_system(self, user_system: str | None) -> Any:
         if not self._is_oauth:
-            return system
-        prefix = "You are Claude Code, Anthropic's official CLI for Claude."
-        if system:
-            return f"{prefix}\n\n{system}"
-        return prefix
+            if user_system:
+                return user_system
+            return None
+        # OAuth: system must be array of blocks.
+        # Claude Code prefix in first block (with cache_control), user system in second block.
+        blocks: list[dict[str, Any]] = [
+            {"type": "text", "text": _CLAUDE_CODE_PREFIX, "cache_control": {"type": "ephemeral"}},
+        ]
+        if user_system:
+            blocks.append({"type": "text", "text": user_system})
+        return blocks
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
-        messages, extracted_system = self._serialize_messages(request.messages)
-        system = self._inject_claude_code_prefix(request.system or extracted_system)
+    def _build_body(self, request: ChatRequest, *, stream: bool = False) -> dict[str, Any]:
+        messages, extracted_system = self._serialize_messages(
+            request.messages, oauth=self._is_oauth,
+        )
+        system = self._build_system(request.system or extracted_system)
+
         body: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": messages,
-            "max_tokens": request.max_tokens or 1024,
+            "max_tokens": request.max_tokens or 4096,
         }
+        if stream:
+            body["stream"] = True
         if system:
             body["system"] = system
         if request.temperature is not None:
@@ -111,20 +145,75 @@ class AnthropicProvider:
             ]
         if request.provider_options:
             body.update(request.provider_options)
+        return body
 
+    @staticmethod
+    def _map_http_error(status: int, message: str) -> Exception:
+        if status == 401:
+            return AuthError(message)
+        if status == 429:
+            return RateLimitError(message)
+        return ProviderError(message)
+
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        # OAuth tokens require streaming — collect stream into a single response.
+        if self._is_oauth:
+            content = ""
+            tool_calls: list[ToolCall] = []
+            current_tc_id = ""
+            current_tc_name = ""
+            current_tc_args = ""
+            stop_reason = StopReason.end_turn
+
+            async for event in self.stream(request):
+                if event.done:
+                    break
+                if event.event_type == "text" and event.content:
+                    content += event.content
+                elif event.event_type == "tool_call_start":
+                    current_tc_id = event.tool_call_id or ""
+                    current_tc_name = event.tool_call_name or ""
+                    current_tc_args = ""
+                elif event.event_type == "tool_call_args":
+                    current_tc_args += event.tool_call_args_delta or ""
+                elif event.event_type == "tool_call_end":
+                    try:
+                        parsed_input = json.loads(current_tc_args) if current_tc_args else {}
+                    except json.JSONDecodeError:
+                        parsed_input = {}
+                    tool_calls.append(ToolCall(id=current_tc_id, name=current_tc_name, input=parsed_input))
+                    current_tc_id = ""
+                    current_tc_name = ""
+                    current_tc_args = ""
+
+            if tool_calls:
+                stop_reason = StopReason.tool_use
+
+            return ChatResponse(
+                content=content,
+                model=request.model or self.model,
+                usage=Usage(0, 0),
+                stop_reason=stop_reason,
+                tool_calls=tool_calls,
+            )
+
+        body = self._build_body(request)
         try:
-            resp = await self._client.messages.create(**body)
-        except Exception as exc:
-            name = exc.__class__.__name__.lower()
-            if "authentication" in name:
-                raise AuthError(str(exc)) from exc
-            if "ratelimit" in name or "rate_limit" in name:
-                raise RateLimitError(str(exc)) from exc
+            resp = await self._http.post(self._endpoint(), headers=self._headers(), json=body)
+        except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
 
-        payload = resp if isinstance(resp, dict) else resp.model_dump()
+        if not resp.is_success:
+            raise self._map_http_error(resp.status_code, resp.text)
+
+        payload = resp.json()
+        return self._parse_response(payload)
+
+    def _parse_response(self, payload: dict[str, Any]) -> ChatResponse:
         content_blocks = payload.get("content", [])
-        text = "".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
+        text = "".join(
+            block.get("text", "") for block in content_blocks if block.get("type") == "text"
+        )
         tool_calls = [
             ToolCall(
                 id=block.get("id", ""),
@@ -150,37 +239,34 @@ class AnthropicProvider:
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
-        messages, extracted_system = self._serialize_messages(request.messages)
-        system = self._inject_claude_code_prefix(request.system or extracted_system)
-        body: dict[str, Any] = {
-            "model": request.model or self.model,
-            "messages": messages,
-            "stream": True,
-            "max_tokens": request.max_tokens or 1024,
-        }
-        if system:
-            body["system"] = system
-        if request.tools:
-            body["tools"] = [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "input_schema": t.input_schema or {"type": "object", "properties": {}},
-                }
-                for t in request.tools
-            ]
-        if request.provider_options:
-            body.update(request.provider_options)
-
+        body = self._build_body(request, stream=True)
         try:
-            events = await self._client.messages.create(**body)
-        except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+            resp = await self._http.send(
+                self._http.build_request("POST", self._endpoint(), headers=self._headers(), json=body),
+                stream=True,
+            )
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
+
+        if not resp.is_success:
+            error_body = await resp.aread()
+            raise self._map_http_error(resp.status_code, error_body.decode())
 
         current_tool_id: str | None = None
 
-        async for event in events:
-            payload = event if isinstance(event, dict) else event.model_dump()
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                yield StreamEvent(content="", done=True)
+                return
+
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
             event_type = payload.get("type")
 
             if event_type == "content_block_start":

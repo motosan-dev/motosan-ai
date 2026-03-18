@@ -4,11 +4,18 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 
 ## [0.3.3] - 2026-03-18
 
+### Changed
+- **Remove official SDK dependencies**: Anthropic and OpenAI providers rewritten to use `httpx` directly instead of `anthropic` and `openai` packages — zero official provider SDK dependencies
+- **pyproject.toml**: `anthropic`, `openai`, `ollama` optional deps now all resolve to `httpx>=0.27`
+- **All mock tests** migrated from `monkeypatch` + `FakeClient` to `respx` HTTP mocking
+
 ### Fixed
-- **Anthropic OAuth**: Full Claude Code OAuth support for setup tokens (sk-ant-oat01-*)
-  - Added `claude-code-20250219` beta header + Claude CLI identity headers (`user-agent`, `x-app`)
-  - Injected Claude Code system prompt prefix for OAuth requests
-  - Aligned with Rust SDK OAuth behavior
+- **Anthropic OAuth `chat()` tool_calls**: OAuth path now correctly collects tool_call stream events into `ChatResponse.tool_calls` with proper `stop_reason=tool_use` (previously returned empty)
+- **Anthropic OAuth system prompt**: system prompt now sent as separate blocks (Claude Code prefix with `cache_control` + user system without) instead of merged single string (fixes `invalid_request_error`)
+
+### Added
+- **Live integration tests** (`tests/integration/test_anthropic_live.py`): 7 tests hitting real Anthropic API with OAuth token — chat, stream, system prompt, temperature, tool use (single + multi-turn), stream + tool use
+- **Pre-push gate** (`scripts/pre-push-gate.sh`): blocks push unless unit + live tests pass
 
 ## [0.2.1] - 2026-03-15
 

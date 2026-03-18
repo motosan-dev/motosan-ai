@@ -1,6 +1,6 @@
 # Architecture Plan — motosan-ai
 
-*Created: 2026-03-10 | Last updated: 2026-03-11 | Status: Rust v0.1.1 shipped ✅ | Python M2 in progress*
+*Created: 2026-03-10 | Last updated: 2026-03-18 | Status: Rust v0.3.3 / Python v0.3.3 | Both SDKs use httpx/reqwest directly (no official provider SDKs)*
 
 ## Goal
 
@@ -136,22 +136,29 @@ sdks/rust/
 
 | Provider | Notes |
 |----------|-------|
-| Anthropic | RSA-PSS OAuth token support (`sk-ant-oat01-*`); separate `system` param |
+| Anthropic | OAuth token support (`sk-ant-oat01-*`): Bearer auth, system as array of blocks, `chat()` auto-redirects to `stream()` with tool_call collection; standard key uses `x-api-key` |
 | OpenAI | Configurable auth style (Bearer / x-api-key / custom); optional `/v1/responses` fallback |
 | MiniMax | OpenAI-compatible `/chat/completions`; system prompt merged into first user message; `<think>` stripping |
+| Ollama | OpenAI-compat mode (via OpenAI provider) + native NDJSON mode; no API key required |
 
 ---
 
-## Python Architecture (`sdks/python/`) — M2, in progress
+## Python Architecture (`sdks/python/`)
+
+### HTTP Client
+
+All providers use `httpx` directly — **no official provider SDKs** (`anthropic`, `openai`) required.
+This keeps the dependency tree minimal and gives full control over auth, headers, and SSE parsing.
 
 ### Optional Dependencies
 
 ```toml
 [project.optional-dependencies]
-anthropic = ["httpx>=0.27"]   # uses httpx directly (no anthropic SDK dep)
+anthropic = ["httpx>=0.27"]
 openai    = ["httpx>=0.27"]
 minimax   = ["httpx>=0.27"]
-all       = ["motosan-ai[anthropic,openai,minimax]"]
+ollama    = ["httpx>=0.27"]
+all       = ["motosan-ai[anthropic,openai,minimax,ollama]"]
 ```
 
 ### Core Types (mirrors Rust)
@@ -189,17 +196,58 @@ class ChatResponse:
 ```
 sdks/python/
 ├── pyproject.toml
-└── motosan_ai/
-    ├── __init__.py
-    ├── client.py        Client (async + sync wrapper)
-    ├── types.py         Message, ChatRequest, ChatResponse, ToolCall, Usage, StreamEvent
-    ├── error.py         MotosanError and subclasses
-    └── providers/
-        ├── base.py        ProviderProtocol
-        ├── anthropic.py   #[cfg optional anthropic]
-        ├── openai.py      #[cfg optional openai]
-        └── minimax.py     #[cfg optional minimax]
+├── motosan_ai/
+│   ├── __init__.py
+│   ├── client.py            Client (async + sync wrapper)
+│   ├── types.py             Message, ChatRequest, ChatResponse, ToolCall, Usage, StreamEvent
+│   ├── error.py             MotosanError and subclasses
+│   ├── think_stripper.py    <think> tag removal for MiniMax
+│   └── providers/
+│       ├── __init__.py
+│       ├── anthropic.py     httpx direct (OAuth + standard key)
+│       ├── openai.py        httpx direct
+│       ├── minimax.py       httpx direct
+│       └── ollama.py        httpx direct (native NDJSON API)
+└── tests/
+    ├── test_anthropic.py    mock tests (respx)
+    ├── test_openai.py       mock tests (respx)
+    ├── test_minimax.py      mock tests (respx)
+    ├── test_ollama.py       mock tests (respx)
+    ├── test_ollama_native.py
+    └── integration/
+        └── test_anthropic_live.py   live API tests (7 tests)
 ```
+
+---
+
+## Testing Strategy
+
+### Unit Tests (mock)
+- Rust: `cargo test --all-features` — mockito-based, no API keys
+- Python: `uv run pytest tests/ --ignore=tests/integration/` — respx-based, no API keys
+
+### Live Integration Tests
+Both SDKs have 7 identical Anthropic live tests (supports OAuth token):
+
+1. chat (basic)
+2. stream (basic)
+3. system prompt
+4. temperature
+5. tool use (single turn)
+6. tool use (multi-turn)
+7. stream + tool use
+
+```bash
+# Python
+ANTHROPIC_API_KEY=... uv run pytest tests/integration/test_anthropic_live.py -v
+
+# Rust
+ANTHROPIC_API_KEY=... cargo test --features full --test anthropic_live -- --test-threads=1
+```
+
+### Pre-push Gate
+`scripts/pre-push-gate.sh` runs all unit + live tests before push.
+Auto-reads OAuth token from macOS Keychain.
 
 ---
 
@@ -209,6 +257,7 @@ sdks/python/
 |---------|-------|--------|
 | v0.1.0 | Rust SDK — 3 providers, streaming, retry, tests | ✅ Shipped 2026-03-10 |
 | v0.1.1 | Rust — tool calling, MiniMax improvements, OpenAI auth style | ✅ Shipped 2026-03-11 |
-| v0.2.0 | Python SDK — 3 providers, async + sync, tool calling, tests | 🔄 In progress (due 2026-04-07) |
+| v0.2.0 | Python SDK — 4 providers, async + sync, tool calling, tests | ✅ Shipped |
+| v0.3.3 | Remove official SDK deps, httpx-only, OAuth fixes, live tests | ✅ Current |
 | v0.3.0 | TypeScript SDK | ⏳ Planned (due 2026-04-28) |
 | v1.0.0 | All stable, docs site, crates.io + PyPI publish | ⏳ Planned (due 2026-06-01) |

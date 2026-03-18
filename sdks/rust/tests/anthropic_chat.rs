@@ -108,21 +108,23 @@ async fn anthropic_request_uses_default_model_and_allows_override() {
 #[tokio::test]
 async fn anthropic_setup_token_uses_bearer_and_oauth_beta_header() {
     let mut server = mockito::Server::new_async().await;
+    // OAuth chat() delegates to stream(), so mock must return SSE format
+    let sse_body = [
+        "event: content_block_delta",
+        &format!("data: {}", json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}})),
+        "",
+        "event: message_stop",
+        &format!("data: {}", json!({"type": "message_stop"})),
+        "",
+    ].join("\n");
     let mock = server
         .mock("POST", "/v1/messages")
         .match_header("authorization", "Bearer sk-ant-oat01-test-token")
-        .match_header("anthropic-beta", "oauth-2025-04-20")
+        .match_header("anthropic-beta", Matcher::Regex("oauth-2025-04-20".to_string()))
         .match_header("anthropic-version", "2023-06-01")
         .with_status(200)
-        .with_body(
-            json!({
-                "model": DEFAULT_ANTHROPIC_MODEL,
-                "stop_reason": "end_turn",
-                "usage": {"input_tokens": 1, "output_tokens": 1},
-                "content": [{"type": "text", "text": "ok"}]
-            })
-            .to_string(),
-        )
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
         .create_async()
         .await;
 
@@ -130,7 +132,8 @@ async fn anthropic_setup_token_uses_bearer_and_oauth_beta_header() {
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
-    let _ = provider.chat(request).await.expect("chat response");
+    let resp = provider.chat(request).await.expect("chat response");
+    assert_eq!(resp.content, "ok");
     mock.assert_async().await;
 }
 

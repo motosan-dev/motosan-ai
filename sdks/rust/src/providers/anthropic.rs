@@ -224,25 +224,57 @@ impl ProviderImpl for AnthropicProvider {
         // OAuth tokens require streaming + Claude Code identity.
         // Redirect to stream path and collect the full response.
         if is_oauth {
-            // OAuth requires streaming. Delegate to stream() which handles
-            // the Claude Code system prompt injection.
             use tokio_stream::StreamExt;
             let mut stream = self.stream(req).await?;
             let mut content = String::new();
-            let mut input_tokens = 0u64;
-            let mut output_tokens = 0u64;
+            let mut tool_calls: Vec<ToolCall> = Vec::new();
+            let mut current_tc_id = String::new();
+            let mut current_tc_name = String::new();
+            let mut current_tc_args = String::new();
+
             while let Some(event) = stream.next().await {
                 if event.done {
                     break;
                 }
-                content.push_str(&event.content);
+                match event.event_type {
+                    crate::types::StreamEventType::Text => {
+                        content.push_str(&event.content);
+                    }
+                    crate::types::StreamEventType::ToolCallStart => {
+                        current_tc_id = event.tool_call_id.unwrap_or_default();
+                        current_tc_name = event.tool_call_name.unwrap_or_default();
+                        current_tc_args.clear();
+                    }
+                    crate::types::StreamEventType::ToolCallArgs => {
+                        if let Some(delta) = &event.tool_call_args_delta {
+                            current_tc_args.push_str(delta);
+                        }
+                    }
+                    crate::types::StreamEventType::ToolCallEnd => {
+                        let input: serde_json::Value = serde_json::from_str(&current_tc_args)
+                            .unwrap_or_else(|_| json!({}));
+                        tool_calls.push(ToolCall {
+                            id: std::mem::take(&mut current_tc_id),
+                            name: std::mem::take(&mut current_tc_name),
+                            input,
+                        });
+                        current_tc_args.clear();
+                    }
+                }
             }
+
+            let stop_reason = if tool_calls.is_empty() {
+                crate::types::StopReason::EndTurn
+            } else {
+                crate::types::StopReason::ToolUse
+            };
+
             return Ok(ChatResponse {
                 content,
                 model: self.model.clone(),
                 usage: crate::types::Usage { input_tokens: 0, output_tokens: 0 },
-                stop_reason: crate::types::StopReason::EndTurn,
-                tool_calls: vec![],
+                stop_reason,
+                tool_calls,
             });
         }
 
@@ -368,20 +400,80 @@ impl ProviderImpl for AnthropicProvider {
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
         let is_oauth = Self::is_setup_token(&self.api_key);
-        let req = if is_oauth {
-            let mut r = req;
+        let body = if is_oauth {
+            // OAuth: build body manually with system as array of blocks
+            let (messages, extracted_system) = {
+                let mut msgs = Vec::new();
+                let mut sys_parts = Vec::new();
+                for message in &req.messages {
+                    match message.role {
+                        Role::System => sys_parts.push(message.content.clone()),
+                        Role::User => {
+                            msgs.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
+                        }
+                        Role::Assistant => {
+                            if message.tool_calls.is_empty() {
+                                msgs.push(json!({"role": "assistant", "content": message.content}));
+                            } else {
+                                let mut blocks = Vec::new();
+                                if !message.content.is_empty() {
+                                    blocks.push(json!({"type": "text", "text": message.content}));
+                                }
+                                for tc in &message.tool_calls {
+                                    blocks.push(json!({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input}));
+                                }
+                                msgs.push(json!({"role": "assistant", "content": blocks}));
+                            }
+                        }
+                        Role::Tool => {
+                            if let Some(tool_use_id) = &message.tool_call_id {
+                                msgs.push(json!({"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": message.content}]}));
+                            }
+                        }
+                    }
+                }
+                let sys = if sys_parts.is_empty() { None } else { Some(sys_parts.join("\n")) };
+                (msgs, sys)
+            };
+            let user_system = req.system.or(extracted_system);
             let prefix = "You are Claude Code, Anthropic's official CLI for Claude.";
-            r.system = Some(match r.system {
-                Some(s) => format!("{}\n\n{}", prefix, s),
-                None => prefix.to_string(),
+            let mut system_blocks = vec![json!({"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}})];
+            if let Some(s) = user_system {
+                system_blocks.push(json!({"type": "text", "text": s}));
+            }
+            let model = req.model.unwrap_or_else(|| self.model.clone());
+            let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+            let mut body = json!({
+                "model": model,
+                "messages": messages,
+                "max_tokens": max_tokens,
+                "stream": true,
+                "system": system_blocks,
             });
-            r
+            if let Some(temperature) = req.temperature {
+                body["temperature"] = json!(temperature);
+            }
+            if let Some(tools) = req.tools {
+                let mapped: Vec<Value> = tools.into_iter().map(|t| json!({
+                    "name": t.name,
+                    "description": t.description.unwrap_or_default(),
+                    "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                })).collect();
+                if !mapped.is_empty() {
+                    body["tools"] = json!(mapped);
+                }
+            }
+            if let Some(po) = req.provider_options {
+                if let Some(map) = po.as_object() {
+                    for (k, v) in map { body[k] = v.clone(); }
+                }
+            }
+            body
         } else {
-            req
+            AnthropicRequestBuilder::new(req, self.model.clone(), false)
+                .stream(true)
+                .build()
         };
-        let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth)
-            .stream(true)
-            .build();
         let mut attempt = 0;
         let response = loop {
             let request = self

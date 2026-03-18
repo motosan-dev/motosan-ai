@@ -3,23 +3,29 @@ from __future__ import annotations
 import json
 from typing import Any, AsyncIterator
 
-from motosan_ai.error import AuthError, ConfigError, NetworkError, ProviderError, RateLimitError
+import httpx
+
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+
+_DEFAULT_BASE_URL = "https://api.openai.com"
 
 
 class OpenAIProvider:
     def __init__(self, api_key: str, model: str | None = None, base_url: str | None = None) -> None:
         self.api_key = api_key
         self.model = model or "gpt-4o"
-        self.base_url = base_url
-        try:
-            from openai import AsyncOpenAI  # type: ignore
-        except Exception as exc:  # pragma: no cover
-            raise ConfigError("openai package is required for OpenAIProvider") from exc
-        kwargs: dict[str, Any] = {"api_key": api_key}
-        if base_url:
-            kwargs["base_url"] = base_url
-        self._client = AsyncOpenAI(**kwargs)
+        self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self._http = httpx.AsyncClient(timeout=120.0)
+
+    def _endpoint(self) -> str:
+        return f"{self.base_url}/v1/chat/completions"
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "authorization": f"Bearer {self.api_key}",
+            "content-type": "application/json",
+        }
 
     @staticmethod
     def _serialize_messages(messages: list[Message], system: str | None = None) -> list[dict[str, Any]]:
@@ -62,11 +68,13 @@ class OpenAIProvider:
                 )
         return outgoing
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:
+    def _build_body(self, request: ChatRequest, *, stream: bool = False) -> dict[str, Any]:
         body: dict[str, Any] = {
             "model": request.model or self.model,
             "messages": self._serialize_messages(request.messages, request.system),
         }
+        if stream:
+            body["stream"] = True
         if request.temperature is not None:
             body["temperature"] = request.temperature
         if request.max_tokens is not None:
@@ -85,18 +93,27 @@ class OpenAIProvider:
             ]
         if request.provider_options:
             body.update(request.provider_options)
+        return body
 
+    @staticmethod
+    def _map_http_error(status: int, message: str) -> Exception:
+        if status == 401:
+            return AuthError(message)
+        if status == 429:
+            return RateLimitError(message)
+        return ProviderError(message)
+
+    async def chat(self, request: ChatRequest) -> ChatResponse:
+        body = self._build_body(request)
         try:
-            resp = await self._client.chat.completions.create(**body)
-        except Exception as exc:
-            name = exc.__class__.__name__.lower()
-            if "authentication" in name:
-                raise AuthError(str(exc)) from exc
-            if "ratelimit" in name or "rate_limit" in name:
-                raise RateLimitError(str(exc)) from exc
+            resp = await self._http.post(self._endpoint(), headers=self._headers(), json=body)
+        except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
 
-        payload = resp if isinstance(resp, dict) else resp.model_dump()
+        if not resp.is_success:
+            raise self._map_http_error(resp.status_code, resp.text)
+
+        payload = resp.json()
         choice = (payload.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         content = message.get("content") or ""
@@ -127,33 +144,32 @@ class OpenAIProvider:
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
-        body: dict[str, Any] = {
-            "model": request.model or self.model,
-            "messages": self._serialize_messages(request.messages, request.system),
-            "stream": True,
-        }
-        if request.tools:
-            body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description or "",
-                        "parameters": t.input_schema or {"type": "object", "properties": {}},
-                    },
-                }
-                for t in request.tools
-            ]
-        if request.provider_options:
-            body.update(request.provider_options)
-
+        body = self._build_body(request, stream=True)
         try:
-            stream = await self._client.chat.completions.create(**body)
-        except Exception as exc:
-            raise ProviderError(str(exc)) from exc
+            resp = await self._http.send(
+                self._http.build_request("POST", self._endpoint(), headers=self._headers(), json=body),
+                stream=True,
+            )
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
 
-        async for event in stream:
-            payload = event if isinstance(event, dict) else event.model_dump()
+        if not resp.is_success:
+            error_body = await resp.aread()
+            raise self._map_http_error(resp.status_code, error_body.decode())
+
+        async for line in resp.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            data = line[6:]
+            if data == "[DONE]":
+                yield StreamEvent(content="", done=True)
+                return
+
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+
             for choice in payload.get("choices") or []:
                 delta = choice.get("delta") or {}
                 text = delta.get("content") or ""

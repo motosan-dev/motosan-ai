@@ -5,12 +5,13 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 ## [0.3.3] - 2026-03-18
 
 ### Fixed
-- **Anthropic OAuth**: Full Claude Code OAuth support for setup tokens (sk-ant-oat01-*)
-  - Added `claude-code-20250219` beta header + Claude CLI identity headers
-  - Array format for system prompt and message content (required by OAuth endpoint)
-  - `chat()` auto-redirects to `stream()` for OAuth tokens (non-streaming not supported)
-  - Injected Claude Code system prompt prefix for OAuth requests
-  - Tested with claude-sonnet-4-6 and claude-opus-4-6
+- **Anthropic OAuth `chat()` tool_calls**: OAuth path now correctly collects `ToolCallStart`/`ToolCallArgs`/`ToolCallEnd` stream events into `ChatResponse.tool_calls` (previously returned empty)
+- **Anthropic OAuth system prompt**: system prompt now sent as separate blocks (Claude Code prefix with `cache_control` + user system without) instead of merged single block (fixes `invalid_request_error`)
+- **Mock test header matching**: OAuth `anthropic-beta` header uses regex match instead of exact string
+
+### Added
+- **Live integration tests** (`tests/anthropic_live.rs`): 7 tests hitting real Anthropic API with OAuth token — chat, stream, system prompt, temperature, tool use (single + multi-turn), stream + tool use
+- **Pre-push gate** (`scripts/pre-push-gate.sh`): blocks push unless unit + live tests pass
 
 ## [0.2.0] - 2026-03-15
 

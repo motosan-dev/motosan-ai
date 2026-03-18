@@ -1,6 +1,7 @@
 # motosan-ai (Python SDK)
 
-Multi-provider Python SDK for Anthropic, OpenAI, and MiniMax.
+Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, and Ollama.
+All providers use `httpx` directly — no official provider SDKs required.
 
 ## Installation
 
@@ -9,6 +10,7 @@ pip install motosan-ai
 pip install "motosan-ai[anthropic]"
 pip install "motosan-ai[openai]"
 pip install "motosan-ai[minimax]"
+pip install "motosan-ai[ollama]"
 pip install "motosan-ai[full]"
 ```
 
@@ -21,7 +23,7 @@ from motosan_ai import Client
 
 
 async def main() -> None:
-    client = Client.anthropic(api_key="sk-ant-...", model="claude-3-5-sonnet-latest")
+    client = Client.anthropic(api_key="sk-ant-...", model="claude-sonnet-4-6")
     response = await client.chat([
         {"role": "user", "content": "Hello"},
     ])
@@ -85,7 +87,7 @@ from motosan_ai import Client, Message
 
 
 async def main() -> None:
-    client = Client.openai(api_key="sk-...", model="gpt-4.1-mini")
+    client = Client.openai(api_key="sk-...", model="gpt-4o")
 
     async for event in client.stream([Message.user("Write a haiku about rain")]):
         if event.content:
@@ -114,7 +116,7 @@ print(response.content)
 ```python
 from motosan_ai import Client
 
-client = Client.anthropic(api_key="sk-ant-...", model="claude-3-5-sonnet-latest")
+client = Client.anthropic(api_key="sk-ant-...", model="claude-sonnet-4-6")
 ```
 
 ### OpenAI
@@ -122,7 +124,7 @@ client = Client.anthropic(api_key="sk-ant-...", model="claude-3-5-sonnet-latest"
 ```python
 from motosan_ai import Client
 
-client = Client.openai(api_key="sk-...", model="gpt-4.1-mini")
+client = Client.openai(api_key="sk-...", model="gpt-4o")
 ```
 
 ### MiniMax
@@ -133,13 +135,64 @@ from motosan_ai import Client
 client = Client.minimax(api_key="...", model="MiniMax-M1")
 ```
 
+### Ollama
+
+```python
+from motosan_ai import Client
+
+# OpenAI-compatible mode (default)
+client = Client.ollama(model="llama3.2")
+
+# Native Ollama API mode (supports think/keep_alive/num_ctx)
+client = Client.ollama(model="llama3.2", ollama_native=True, ollama_think=True)
+```
+
+## Anthropic Auth Matrix
+
+- `sk-ant-api*` or regular Anthropic API key → `x-api-key` header
+- `sk-ant-oat01*` OAuth token → OAuth mode:
+  - `Authorization: Bearer <token>` header (via httpx directly)
+  - `anthropic-beta: claude-code-20250219,oauth-2025-04-20,...` headers
+  - `user-agent: claude-code/<version>` + `x-app: cli` identity headers
+  - System prompt sent as array of blocks (prefix + user system)
+  - Claude Code system prompt prefix auto-injected
+  - `chat()` auto-redirects to `stream()` and collects result (including tool_calls)
+
+The SDK auto-detects token type by prefix — pass either into `Client.anthropic(api_key=...)`.
+
+```python
+from motosan_ai import Client
+
+# Standard API key
+client = Client.anthropic(api_key="sk-ant-api03-...")
+
+# OAuth token (auto-detected, same interface)
+client = Client.anthropic(api_key="sk-ant-oat01-...")
+```
+
+## HTTP Client
+
+All providers use `httpx` directly — no official provider SDKs (`anthropic`, `openai`) required.
+This keeps the dependency tree minimal and gives full control over auth, headers, and SSE parsing.
+
 ## Requirements
 
 - Python 3.11+
 - One provider API key:
-  - `ANTHROPIC_API_KEY`
+  - `ANTHROPIC_API_KEY` (standard API key or OAuth token)
   - `OPENAI_API_KEY`
   - `MINIMAX_API_KEY`
+  - Ollama: no key needed (local)
+
+## Testing
+
+```bash
+# Unit tests (mock, no API needed)
+uv run pytest sdks/python/tests/ -q --ignore=sdks/python/tests/integration/
+
+# Live integration tests (requires ANTHROPIC_API_KEY)
+ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
+```
 
 ## Development
 

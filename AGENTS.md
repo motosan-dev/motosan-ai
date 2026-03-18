@@ -125,8 +125,9 @@ sdks/python/
 - Python 3.11+, type hints on all public functions
 - `async`-first: `Client.chat()` and `Client.stream()` are async
 - Sync wrapper: `Client.chat_sync()` via `asyncio.run()`
-- Optional deps: import inside function body, raise `ImportError` with install hint if missing
-- Tests: pytest + pytest-asyncio, mock provider HTTP calls with `respx` or `unittest.mock`
+- All providers use `httpx` directly — **no official provider SDKs** (`anthropic`, `openai`)
+- Tests: pytest + pytest-asyncio, mock HTTP calls with `respx`
+- Live integration tests in `tests/integration/` — require real API keys
 
 ---
 
@@ -164,13 +165,91 @@ interface ToolCall {
 cd sdks/rust
 cargo fmt
 cargo clippy --all-features -- -D warnings
-cargo test  # skips integration tests (they need API keys + #[ignore])
+cargo test --all-features  # unit tests (mock, no API needed)
 
 # Python
 cd sdks/python
 uv run ruff check .
-uv run pytest tests/
+uv run pytest tests/ --ignore=tests/integration/
 ```
+
+## Before Pushing (pre-push gate)
+
+A pre-push hook (`scripts/pre-push-gate.sh`) runs automatically and blocks push on failure:
+
+1. Python unit tests (mock)
+2. Rust unit tests (mock)
+3. Python live Anthropic integration tests (7 tests, ~50s)
+4. Rust live Anthropic integration tests (7 tests, ~46s)
+
+Live tests require `ANTHROPIC_API_KEY` — auto-reads from macOS Keychain if not set.
+Skip with `git push --no-verify` in emergencies.
+
+```bash
+# Run live tests manually
+ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
+ANTHROPIC_API_KEY=... cargo test --features full --test anthropic_live -- --test-threads=1
+```
+
+## Before Releasing
+
+Every release **must** include documentation and changelog updates. This is a hard gate — do not tag or publish without completing all items.
+
+### Release Checklist
+
+1. **Update CHANGELOGs** — both SDKs:
+   - `sdks/rust/CHANGELOG.md` — add new version section with Added/Changed/Fixed
+   - `sdks/python/CHANGELOG.md` — add new version section with Added/Changed/Fixed
+   - Follow [Keep a Changelog](https://keepachangelog.com/) format
+   - Include PR/issue numbers where applicable
+
+2. **Bump versions**:
+   - `sdks/rust/Cargo.toml` → `version = "X.Y.Z"`
+   - `sdks/python/pyproject.toml` → `version = "X.Y.Z"`
+
+3. **Update documentation** — any file affected by this release:
+   - `sdks/rust/README.md` — new features, API changes, examples
+   - `sdks/python/README.md` — new features, API changes, examples
+   - `AGENTS.md` — coding standards, provider notes, milestones
+   - `docs/plans/2026-03-10-architecture.md` — architecture changes, provider notes, milestones
+
+4. **Run full test suite** (pre-push gate handles this, but verify manually if needed):
+   ```bash
+   # Unit tests
+   cargo test --manifest-path sdks/rust/Cargo.toml --all-features
+   uv run pytest sdks/python/tests/ --ignore=sdks/python/tests/integration/
+
+   # Live integration tests
+   ANTHROPIC_API_KEY=... cargo test --features full --test anthropic_live -- --test-threads=1
+   ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
+   ```
+
+5. **Commit and tag**:
+   ```bash
+   git add -p  # review each change
+   git commit -m "chore: release vX.Y.Z"
+   git tag -a vX.Y.Z -m "vX.Y.Z — <summary>"
+   git push origin main --tags
+   ```
+
+### What Goes in the CHANGELOG
+
+| Category | When to use |
+|----------|-------------|
+| **Added** | New features, new providers, new API methods |
+| **Changed** | Breaking changes, dependency swaps, behavior changes |
+| **Fixed** | Bug fixes, OAuth fixes, error handling improvements |
+| **Removed** | Deprecated features, removed dependencies |
+
+### What Docs to Update
+
+| Change type | Files to update |
+|-------------|----------------|
+| New provider | Both READMEs + AGENTS.md provider table + architecture doc |
+| New API method | Both READMEs (examples) + AGENTS.md (types) |
+| Auth change | Both READMEs (Auth Matrix) + architecture doc (Provider Notes) |
+| Dependency change | AGENTS.md (coding standards) + architecture doc (optional deps) |
+| Test infrastructure | AGENTS.md (Before Pushing) + architecture doc (Testing Strategy) |
 
 ---
 
