@@ -78,9 +78,72 @@ cargo clippy --features full -- -D warnings
 
 ---
 
+## Cross-language Consistency Rules
+
+1. Field name `input` (not `args`, not `params`) for tool call payloads — everywhere
+2. `tool_call_id` (snake_case in Rust/Python), `toolCallId` (camelCase in TypeScript)
+3. `ChatResponse.tool_calls` is always a `Vec`/`list`/`array` — never optional
+4. `Message::tool_result(id, content)` constructor must exist in all languages
+
+---
+
+## Provider Serialization (CRITICAL — do not mix up)
+
+**Anthropic:**
+- Assistant + tool calls → `content: [{"type":"tool_use","id":...,"name":...,"input":...}]`
+- Tool result → `role:"user", content:[{"type":"tool_result","tool_use_id":...,"content":...}]`
+- System prompt → top-level `"system"` field, NOT in messages array
+
+**OpenAI / MiniMax:**
+- Assistant + tool calls → top-level `"tool_calls":[{"id":...,"type":"function","function":{"name":...,"arguments":"<JSON string>"}}]`
+- Note: `arguments` is a **JSON string**, not an object
+- Tool result → `role:"tool", tool_call_id:..., content:...`
+
+---
+
 ## What NOT to Do
 
 - Do not add sync wrappers to Python (use `asyncio.run()` at the call site)
 - Do not share code between Python and Rust via FFI or subprocess
 - Do not add provider-specific logic outside `providers/` (Python) or per-provider modules (Rust)
 - Do not break the `LlmClient` Protocol in motosan-chat compatibility
+
+---
+
+## Before Committing
+
+```bash
+# Rust
+cd sdks/rust
+cargo fmt
+cargo clippy --all-features -- -D warnings
+cargo test --all-features
+
+# Python
+cd sdks/python
+uv run ruff check .
+uv run pytest tests/ --ignore=tests/integration/
+```
+
+## Pre-push Gate
+
+A pre-push hook (`scripts/pre-push-gate.sh`) runs automatically:
+1. Python unit tests (mock)
+2. Rust unit tests (mock)
+3. Python live Anthropic integration tests
+4. Rust live Anthropic integration tests
+
+Live tests require `ANTHROPIC_API_KEY`. Skip with `git push --no-verify` in emergencies.
+
+## Releasing
+
+| SDK | Tag format | Triggers |
+|-----|-----------|----------|
+| Rust | `rust-v0.3.3` | `publish-rust.yml` → crates.io |
+| Python | `python-v0.4.2` | `publish-python.yml` → PyPI |
+
+Checklist:
+1. Update CHANGELOGs (`sdks/rust/CHANGELOG.md`, `sdks/python/CHANGELOG.md`)
+2. Bump version in `Cargo.toml` / `pyproject.toml`
+3. Update `AGENTS.md` + `llms.txt` + `skills/motosan-ai/SKILL.md` version numbers
+4. Commit, tag (`rust-vX.Y.Z` / `python-vX.Y.Z`), push with tags
