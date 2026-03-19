@@ -1,0 +1,66 @@
+# motosan-ai
+
+Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, and ThinkStripper built in.
+
+Current versions: Python 0.4.2 / Rust 0.3.3
+
+## Install
+
+```bash
+# Python — pick your providers
+pip install "motosan-ai[anthropic]"
+pip install "motosan-ai[openai]"
+pip install "motosan-ai[anthropic,openai,ollama,minimax]"
+
+# Rust — pick features in Cargo.toml
+motosan-ai = { version = "0.3.3", features = ["anthropic"] }
+# features: anthropic | openai | minimax | ollama | full
+```
+
+## Environment Variables
+
+| Provider | Env var |
+|----------|---------|
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| MiniMax | `MINIMAX_API_KEY` |
+| Ollama | (none — local) |
+
+## Quick Start (Python)
+
+```python
+from motosan_ai import Client, Provider, Message
+
+client = Client.anthropic()  # reads ANTHROPIC_API_KEY
+# or: Client.openai() / Client.ollama() / Client.minimax()
+
+resp = await client.chat([Message.user("Hello!")])
+print(resp.content)
+```
+
+## Quick Start (Rust)
+
+```rust
+use motosan_ai::{Client, Provider, Message};
+
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key(std::env::var("ANTHROPIC_API_KEY").unwrap())
+    .build();
+
+let resp = client.chat(vec![Message::user("Hello!")]).await?;
+println!("{}", resp.content);
+```
+
+## Guides
+
+- [Python API reference](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/skills/motosan-ai/references/python-api.md)
+- [Rust API reference](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/skills/motosan-ai/references/rust-api.md)
+- [Tool use & multi-turn](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/skills/motosan-ai/references/tool-use.md)
+- [Streaming & ThinkStripper](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/skills/motosan-ai/references/streaming.md)
+
+## Source
+
+- GitHub: https://github.com/motosan-dev/motosan-ai
+- PyPI: https://pypi.org/project/motosan-ai/
+- crates.io: https://crates.io/crates/motosan-ai
