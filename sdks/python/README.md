@@ -233,3 +233,7 @@ uv sync --extra full --extra dev
 uv run ruff check motosan_ai/
 uv run pytest -q
 ```
+
+## For AI Agents
+
+If you're an AI coding assistant, fetch [`llms.txt`](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/llms.txt) for a quick-start guide with API examples, tool use patterns, and streaming setup.

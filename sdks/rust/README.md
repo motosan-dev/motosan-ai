@@ -228,3 +228,7 @@ When updating model defaults, verify against official provider documentation:
 - MiniMax API docs: https://www.minimax.io/platform/document
 
 Prefer stable aliases for defaults and keep dated snapshots listed in `src/models.rs`.
+
+## For AI Agents
+
+If you're an AI coding assistant, fetch [`llms.txt`](https://raw.githubusercontent.com/motosan-dev/motosan-ai/main/llms.txt) for a quick-start guide with API examples, tool use patterns, and streaming setup.
