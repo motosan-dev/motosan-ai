@@ -432,7 +432,26 @@ impl ProviderImpl for AnthropicProvider {
                     match message.role {
                         Role::System => sys_parts.push(message.content.clone()),
                         Role::User => {
-                            msgs.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
+                            if !message.content_blocks.is_empty() {
+                                let blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
+                                    match block {
+                                        ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+                                        ContentBlock::Image { source } => match source {
+                                            ImageSource::Base64 { media_type, data } => json!({
+                                                "type": "image",
+                                                "source": {"type": "base64", "media_type": media_type, "data": data}
+                                            }),
+                                            ImageSource::Url { url } => json!({
+                                                "type": "image",
+                                                "source": {"type": "url", "url": url}
+                                            }),
+                                        },
+                                    }
+                                }).collect();
+                                msgs.push(json!({"role": "user", "content": blocks}));
+                            } else {
+                                msgs.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
+                            }
                         }
                         Role::Assistant => {
                             if message.tool_calls.is_empty() {
