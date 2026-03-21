@@ -6,7 +6,9 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
+use crate::types::{
+    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
+};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -299,7 +301,29 @@ impl OpenAIRequestBuilder {
 
         for message in &self.req.messages {
             match message.role {
-                Role::User => messages.push(json!({"role": "user", "content": message.content})),
+                Role::User => {
+                    if !message.content_blocks.is_empty() {
+                        // Use structured content blocks (vision/multimodal)
+                        let blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
+                            match block {
+                                ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+                                ContentBlock::Image { source } => match source {
+                                    ImageSource::Base64 { media_type, data } => json!({
+                                        "type": "image_url",
+                                        "image_url": {"url": format!("data:{media_type};base64,{data}")}
+                                    }),
+                                    ImageSource::Url { url } => json!({
+                                        "type": "image_url",
+                                        "image_url": {"url": url}
+                                    }),
+                                },
+                            }
+                        }).collect();
+                        messages.push(json!({"role": "user", "content": blocks}));
+                    } else {
+                        messages.push(json!({"role": "user", "content": message.content}));
+                    }
+                }
                 Role::Assistant => {
                     if message.tool_calls.is_empty() {
                         messages.push(json!({"role": "assistant", "content": message.content}));
