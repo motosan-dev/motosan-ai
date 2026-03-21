@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.4.0] - 2026-03-21
+
+### Added
+- **No breaking changes** — version bump to align with feature completeness
+
 ## [0.3.3] - 2026-03-18
 
 ### Fixed
