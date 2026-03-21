@@ -108,7 +108,10 @@ async fn anthropic_stream_setup_token_uses_bearer_and_oauth_beta_header() {
     let mock = server
         .mock("POST", "/v1/messages")
         .match_header("authorization", "Bearer sk-ant-oat01-stream-token")
-        .match_header("anthropic-beta", Matcher::Regex("oauth-2025-04-20".to_string()))
+        .match_header(
+            "anthropic-beta",
+            Matcher::Regex("oauth-2025-04-20".to_string()),
+        )
         .match_header("anthropic-version", "2023-06-01")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
