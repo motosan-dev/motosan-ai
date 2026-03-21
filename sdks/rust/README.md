@@ -42,6 +42,50 @@ while let Some(event) = stream.next().await {
 # }
 ```
 
+## Vision / Multimodal
+
+Send images alongside text using `Message::user_with_image()`:
+
+```rust
+use motosan_ai::{Client, Message, Provider};
+
+# async fn demo_vision() -> Result<(), Box<dyn std::error::Error>> {
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key(std::env::var("ANTHROPIC_API_KEY")?)
+    .build()?;
+
+let response = client.chat(vec![
+    Message::user_with_image(
+        "What is in this image?",
+        &base64_png_data,    // base64-encoded image
+        "image/png",
+    ),
+]).await?;
+println!("{}", response.content);
+# Ok(())
+# }
+```
+
+For multiple content blocks, use `Message::user_with_blocks()`:
+
+```rust
+use motosan_ai::{ContentBlock, ImageSource, Message};
+
+let msg = Message::user_with_blocks(vec![
+    ContentBlock::Text { text: "Compare these two images".to_string() },
+    ContentBlock::Image { source: ImageSource::Base64 {
+        media_type: "image/png".to_string(),
+        data: first_image_b64.to_string(),
+    }},
+    ContentBlock::Image { source: ImageSource::Url {
+        url: "https://example.com/second.png".to_string(),
+    }},
+]);
+```
+
+Works with both Anthropic and OpenAI providers. The SDK automatically converts to each provider's native format.
+
 ## Build
 
 ```bash

@@ -5,7 +5,17 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 ## [0.4.0] - 2026-03-21
 
 ### Added
-- **No breaking changes** — version bump to align with feature completeness
+- **Vision / Multimodal content support** — send images alongside text in messages
+  - `ContentBlock` enum: `Text { text }` and `Image { source }` variants
+  - `ImageSource` enum: `Base64 { media_type, data }` and `Url { url }` variants
+  - `Message::user_with_image(text, base64_data, media_type)` — create a message with text + base64 image
+  - `Message::user_with_blocks(blocks)` — create a message with arbitrary content blocks
+  - `Message.content_blocks: Vec<ContentBlock>` field (backward compatible, defaults to empty)
+- **Anthropic provider**: serializes `content_blocks` as `{"type": "image", "source": {"type": "base64", ...}}` format (works with both API key and OAuth streaming path)
+- **OpenAI provider**: serializes `content_blocks` as `{"type": "image_url", "image_url": {"url": "data:...;base64,..."}}` format
+
+### Fixed
+- **Anthropic OAuth streaming path**: content_blocks now correctly serialized in the OAuth streaming code path (previously only the non-streaming path handled them)
 
 ## [0.3.3] - 2026-03-18
 
