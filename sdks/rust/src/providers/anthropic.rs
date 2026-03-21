@@ -8,7 +8,9 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
+use crate::types::{
+    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
+};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -121,7 +123,25 @@ impl AnthropicRequestBuilder {
             match message.role {
                 Role::System => extracted_systems.push(message.content.clone()),
                 Role::User => {
-                    if self.oauth {
+                    if !message.content_blocks.is_empty() {
+                        // Use structured content blocks (vision/multimodal)
+                        let blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
+                            match block {
+                                ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+                                ContentBlock::Image { source } => match source {
+                                    ImageSource::Base64 { media_type, data } => json!({
+                                        "type": "image",
+                                        "source": {"type": "base64", "media_type": media_type, "data": data}
+                                    }),
+                                    ImageSource::Url { url } => json!({
+                                        "type": "image",
+                                        "source": {"type": "url", "url": url}
+                                    }),
+                                },
+                            }
+                        }).collect();
+                        messages.push(json!({"role": "user", "content": blocks}));
+                    } else if self.oauth {
                         messages.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
                     } else {
                         messages.push(json!({"role": "user", "content": message.content}));
