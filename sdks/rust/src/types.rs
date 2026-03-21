@@ -14,6 +14,8 @@ pub enum Role {
 pub struct Message {
     pub role: Role,
     pub content: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub content_blocks: Vec<ContentBlock>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Vec<ToolCall>,
 }
@@ -23,6 +25,7 @@ impl Message {
         Self {
             role: Role::User,
             content: content.into(),
+            content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
         }
@@ -32,6 +35,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
         }
@@ -44,6 +48,7 @@ impl Message {
         Self {
             role: Role::Assistant,
             content: content.into(),
+            content_blocks: vec![],
             tool_call_id: None,
             tool_calls,
         }
@@ -53,6 +58,7 @@ impl Message {
         Self {
             role: Role::System,
             content: content.into(),
+            content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
         }
@@ -66,8 +72,50 @@ impl Message {
         Self {
             role: Role::Tool,
             content: content.into(),
+            content_blocks: vec![],
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
+        }
+    }
+
+    /// Create a user message with an image (base64)
+    pub fn user_with_image(text: &str, base64_data: &str, media_type: &str) -> Self {
+        Self {
+            role: Role::User,
+            content: text.to_string(),
+            content_blocks: vec![
+                ContentBlock::Text {
+                    text: text.to_string(),
+                },
+                ContentBlock::Image {
+                    source: ImageSource::Base64 {
+                        media_type: media_type.to_string(),
+                        data: base64_data.to_string(),
+                    },
+                },
+            ],
+            tool_call_id: None,
+            tool_calls: vec![],
+        }
+    }
+
+    /// Create a user message with multiple content blocks
+    pub fn user_with_blocks(blocks: Vec<ContentBlock>) -> Self {
+        // Extract text from first text block for backward compat content field
+        let content = blocks
+            .iter()
+            .find_map(|b| match b {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        Self {
+            role: Role::User,
+            content,
+            content_blocks: blocks,
+            tool_call_id: None,
+            tool_calls: vec![],
         }
     }
 }
@@ -203,14 +251,14 @@ pub enum StreamEventType {
     ToolCallEnd,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Text { text: String },
     Image { source: ImageSource },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
     Base64 { media_type: String, data: String },

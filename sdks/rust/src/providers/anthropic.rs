@@ -251,8 +251,8 @@ impl ProviderImpl for AnthropicProvider {
                         }
                     }
                     crate::types::StreamEventType::ToolCallEnd => {
-                        let input: serde_json::Value = serde_json::from_str(&current_tc_args)
-                            .unwrap_or_else(|_| json!({}));
+                        let input: serde_json::Value =
+                            serde_json::from_str(&current_tc_args).unwrap_or_else(|_| json!({}));
                         tool_calls.push(ToolCall {
                             id: std::mem::take(&mut current_tc_id),
                             name: std::mem::take(&mut current_tc_name),
@@ -272,7 +272,10 @@ impl ProviderImpl for AnthropicProvider {
             return Ok(ChatResponse {
                 content,
                 model: self.model.clone(),
-                usage: crate::types::Usage { input_tokens: 0, output_tokens: 0 },
+                usage: crate::types::Usage {
+                    input_tokens: 0,
+                    output_tokens: 0,
+                },
                 stop_reason,
                 tool_calls,
             });
@@ -432,12 +435,18 @@ impl ProviderImpl for AnthropicProvider {
                         }
                     }
                 }
-                let sys = if sys_parts.is_empty() { None } else { Some(sys_parts.join("\n")) };
+                let sys = if sys_parts.is_empty() {
+                    None
+                } else {
+                    Some(sys_parts.join("\n"))
+                };
                 (msgs, sys)
             };
             let user_system = req.system.or(extracted_system);
             let prefix = "You are Claude Code, Anthropic's official CLI for Claude.";
-            let mut system_blocks = vec![json!({"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}})];
+            let mut system_blocks = vec![
+                json!({"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}),
+            ];
             if let Some(s) = user_system {
                 system_blocks.push(json!({"type": "text", "text": s}));
             }
@@ -465,7 +474,9 @@ impl ProviderImpl for AnthropicProvider {
             }
             if let Some(po) = req.provider_options {
                 if let Some(map) = po.as_object() {
-                    for (k, v) in map { body[k] = v.clone(); }
+                    for (k, v) in map {
+                        body[k] = v.clone();
+                    }
                 }
             }
             body

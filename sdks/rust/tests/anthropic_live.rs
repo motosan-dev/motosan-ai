@@ -113,9 +113,7 @@ async fn live_system_prompt() {
     };
 
     let request = ChatRequest::builder()
-        .message(Message::user(
-            "What is your name? Reply in one sentence.",
-        ))
+        .message(Message::user("What is your name? Reply in one sentence."))
         .system("Your name is TestBot. Always introduce yourself as TestBot.")
         .build();
 
@@ -165,9 +163,7 @@ async fn live_tool_use_single_turn() {
     };
 
     let request = ChatRequest::builder()
-        .message(Message::user(
-            "What's the weather in Tokyo? Use the tool.",
-        ))
+        .message(Message::user("What's the weather in Tokyo? Use the tool."))
         .tools(vec![Tool {
             name: "get_weather".to_string(),
             description: Some("Get current weather for a city".to_string()),
@@ -237,10 +233,7 @@ async fn live_tool_use_multi_turn() {
         .messages(vec![
             Message::user("What's the weather in Taipei? Use get_weather tool."),
             Message::assistant_with_tool_calls(&resp1.content, resp1.tool_calls.clone()),
-            Message::tool_result(
-                &tc.id,
-                r#"{"temperature": 28, "condition": "Sunny"}"#,
-            ),
+            Message::tool_result(&tc.id, r#"{"temperature": 28, "condition": "Sunny"}"#),
         ])
         .tools(tools)
         .build();
@@ -268,9 +261,7 @@ async fn live_stream_tool_use() {
     };
 
     let request = ChatRequest::builder()
-        .message(Message::user(
-            "Use the calculate tool to compute 2+2.",
-        ))
+        .message(Message::user("Use the calculate tool to compute 2+2."))
         .tools(vec![Tool {
             name: "calculate".to_string(),
             description: Some("Calculate a math expression".to_string()),
@@ -282,10 +273,7 @@ async fn live_stream_tool_use() {
         }])
         .build();
 
-    let mut stream = client
-        .stream_with(request)
-        .await
-        .expect("stream failed");
+    let mut stream = client.stream_with(request).await.expect("stream failed");
 
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
@@ -316,10 +304,7 @@ async fn live_stream_tool_use() {
         .iter()
         .filter(|e| e.event_type == StreamEventType::ToolCallStart)
         .collect();
-    assert_eq!(
-        starts[0].tool_call_name.as_deref(),
-        Some("calculate")
-    );
+    assert_eq!(starts[0].tool_call_name.as_deref(), Some("calculate"));
     assert!(starts[0].tool_call_id.is_some());
 
     let args: String = events
@@ -327,8 +312,7 @@ async fn live_stream_tool_use() {
         .filter(|e| e.event_type.clone() == StreamEventType::ToolCallArgs)
         .filter_map(|e| e.tool_call_args_delta.as_deref())
         .collect();
-    let parsed: serde_json::Value =
-        serde_json::from_str(&args).expect("failed to parse tool args");
+    let parsed: serde_json::Value = serde_json::from_str(&args).expect("failed to parse tool args");
     assert!(
         parsed.get("expression").is_some(),
         "Expected expression in args, got: {:?}",
