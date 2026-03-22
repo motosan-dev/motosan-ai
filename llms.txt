@@ -493,11 +493,17 @@ Python and Rust SDKs are versioned and released **independently**.
 # 2. Update CHANGELOG
 #    sdks/python/CHANGELOG.md → ## [0.5.0] - YYYY-MM-DD
 
-# 3. Commit
-git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md
+# 3. Update version references in:
+#    - README.md (root) — Languages table, provider table
+#    - AGENTS.md — "Current versions" section, Releasing table
+#    - llms.txt — header version line, Install section
+#    - skills/motosan-ai/SKILL.md — header version, Install section
+
+# 4. Commit
+git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
 git commit -m "chore: release python-v0.5.0"
 
-# 4. Tag + push (triggers publish-python.yml → PyPI)
+# 5. Tag + push (triggers publish-python.yml → PyPI)
 git tag -a python-v0.5.0 -m "python-v0.5.0 — summary"
 git push origin main python-v0.5.0
 ```
@@ -506,18 +512,24 @@ git push origin main python-v0.5.0
 
 ```bash
 # 1. Bump version
-#    sdks/rust/Cargo.toml → version = "0.3.4"
+#    sdks/rust/Cargo.toml → version = "0.4.1"
 
 # 2. Update CHANGELOG
-#    sdks/rust/CHANGELOG.md → ## [0.3.4] - YYYY-MM-DD
+#    sdks/rust/CHANGELOG.md → ## [0.4.1] - YYYY-MM-DD
 
-# 3. Commit
-git add sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md
-git commit -m "chore: release rust-v0.3.4"
+# 3. Update version references in:
+#    - README.md (root) — Languages table, provider table
+#    - AGENTS.md — "Current versions" section, Releasing table
+#    - llms.txt — header version line, Install section
+#    - skills/motosan-ai/SKILL.md — header version, Install section
 
-# 4. Tag + push (triggers publish-rust.yml → crates.io)
-git tag -a rust-v0.3.4 -m "rust-v0.3.4 — summary"
-git push origin main rust-v0.3.4
+# 4. Commit
+git add sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
+git commit -m "chore: release rust-v0.4.1"
+
+# 5. Tag + push (triggers publish-rust.yml → crates.io)
+git tag -a rust-v0.4.1 -m "rust-v0.4.1 — summary"
+git push origin main rust-v0.4.1
 ```
 
 ### CI Pipeline

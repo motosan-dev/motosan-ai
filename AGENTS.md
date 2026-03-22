@@ -145,5 +145,5 @@ Live tests require `ANTHROPIC_API_KEY`. Skip with `git push --no-verify` in emer
 Checklist:
 1. Update CHANGELOGs (`sdks/rust/CHANGELOG.md`, `sdks/python/CHANGELOG.md`)
 2. Bump version in `Cargo.toml` / `pyproject.toml`
-3. Update `AGENTS.md` + `llms.txt` + `skills/motosan-ai/SKILL.md` version numbers
+3. Update version numbers in: `README.md` (root), `AGENTS.md`, `llms.txt`, `skills/motosan-ai/SKILL.md`
 4. Commit, tag (`rust-vX.Y.Z` / `python-vX.Y.Z`), push with tags
