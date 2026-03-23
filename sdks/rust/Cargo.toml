@@ -20,7 +20,6 @@ minimax = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tok
 ollama = ["openai"]
 ollama_native = ["ollama", "dep:reqwest", "dep:tokio", "dep:tokio-stream", "dep:bytes"]
 agent-tool = ["dep:motosan-agent-tool"]
-agent-loop = ["dep:motosan-agent-loop", "agent-tool"]
 full = ["anthropic", "openai", "minimax", "ollama", "ollama_native"]
 
 [dependencies]
@@ -31,7 +30,6 @@ serde_json = "1"
 thiserror = "2"
 
 motosan-agent-tool = { version = "0.2", optional = true }
-motosan-agent-loop = { git = "https://github.com/motosan-dev/motosan-agent-loop.git", tag = "v0.1.0", optional = true }
 bytes = { version = "1", optional = true }
 reqwest = { version = "0.12", optional = true, features = ["json", "stream", "rustls-tls"] }
 eventsource-stream = { version = "0.2", optional = true }

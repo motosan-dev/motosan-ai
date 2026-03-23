@@ -10,9 +10,6 @@ pub mod types;
 #[cfg(feature = "agent-tool")]
 pub mod tool_compat;
 
-#[cfg(feature = "agent-loop")]
-mod agent_loop_impl;
-
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;
 pub use models::{
