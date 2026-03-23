@@ -191,6 +191,12 @@ impl ChatRequestBuilder {
         self
     }
 
+    #[cfg(feature = "agent-tool")]
+    pub fn tool_defs(mut self, defs: &[motosan_agent_tool::ToolDef]) -> Self {
+        self.tools = Some(defs.iter().cloned().map(Tool::from).collect());
+        self
+    }
+
     pub fn provider_options(mut self, provider_options: Value) -> Self {
         self.provider_options = Some(provider_options);
         self
