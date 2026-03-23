@@ -10,6 +10,7 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
     ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
+    ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -222,6 +223,23 @@ impl AnthropicRequestBuilder {
                 .collect();
             if !mapped_tools.is_empty() {
                 body["tools"] = json!(mapped_tools);
+            }
+        }
+        if let Some(tool_choice) = &self.req.tool_choice {
+            match tool_choice {
+                ToolChoice::Auto => {
+                    body["tool_choice"] = json!({"type": "auto"});
+                }
+                ToolChoice::Required => {
+                    body["tool_choice"] = json!({"type": "any"});
+                }
+                ToolChoice::None => {
+                    // Anthropic doesn't have a "none" tool_choice; remove tools to prevent calls
+                    body.as_object_mut().map(|m| m.remove("tools"));
+                }
+                ToolChoice::Tool { name } => {
+                    body["tool_choice"] = json!({"type": "tool", "name": name});
+                }
             }
         }
         if let Some(mcp_servers) = &self.req.mcp_servers {
@@ -540,6 +558,22 @@ impl ProviderImpl for AnthropicProvider {
                 })).collect();
                 if !mapped.is_empty() {
                     body["tools"] = json!(mapped);
+                }
+            }
+            if let Some(tool_choice) = &req.tool_choice {
+                match tool_choice {
+                    ToolChoice::Auto => {
+                        body["tool_choice"] = json!({"type": "auto"});
+                    }
+                    ToolChoice::Required => {
+                        body["tool_choice"] = json!({"type": "any"});
+                    }
+                    ToolChoice::None => {
+                        body.as_object_mut().map(|m| m.remove("tools"));
+                    }
+                    ToolChoice::Tool { name } => {
+                        body["tool_choice"] = json!({"type": "tool", "name": name});
+                    }
                 }
             }
             if let Some(mcp_servers) = &req.mcp_servers {

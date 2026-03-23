@@ -1,6 +1,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Controls how the model selects which tool (if any) to call.
+///
+/// - `Auto` — the model decides whether to call a tool (default behavior).
+/// - `Required` — the model must call at least one tool.
+/// - `None` — the model must not call any tool.
+/// - `Tool { name }` — the model must call the specific named tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolChoice {
+    Auto,
+    Required,
+    None,
+    Tool { name: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -157,6 +172,8 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     pub provider_options: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerConfig>>,
@@ -176,6 +193,7 @@ pub struct ChatRequestBuilder {
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     tools: Option<Vec<Tool>>,
+    tool_choice: Option<ToolChoice>,
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
 }
@@ -216,6 +234,11 @@ impl ChatRequestBuilder {
         self
     }
 
+    pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+
     #[cfg(feature = "agent-tool")]
     pub fn tool_defs(mut self, defs: &[motosan_agent_tool::ToolDef]) -> Self {
         self.tools = Some(defs.iter().cloned().map(Tool::from).collect());
@@ -247,6 +270,7 @@ impl ChatRequestBuilder {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             tools: self.tools,
+            tool_choice: self.tool_choice,
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
         }
