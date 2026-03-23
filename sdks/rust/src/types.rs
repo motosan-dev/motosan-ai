@@ -127,6 +127,28 @@ pub struct Tool {
     pub input_schema: Option<Value>,
 }
 
+/// Server-side MCP server transport type.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum McpServerType {
+    Url,
+}
+
+/// Configuration for a server-side MCP server.
+///
+/// When included in a `ChatRequest`, the provider connects to the MCP server
+/// on the server side — the client never manages the MCP connection directly.
+/// Currently supported by the Anthropic provider only.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct McpServerConfig {
+    #[serde(rename = "type")]
+    pub kind: McpServerType,
+    pub url: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_token: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
@@ -136,6 +158,8 @@ pub struct ChatRequest {
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<Tool>>,
     pub provider_options: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<McpServerConfig>>,
 }
 
 impl ChatRequest {
@@ -153,6 +177,7 @@ pub struct ChatRequestBuilder {
     max_tokens: Option<u32>,
     tools: Option<Vec<Tool>>,
     provider_options: Option<Value>,
+    mcp_servers: Option<Vec<McpServerConfig>>,
 }
 
 impl ChatRequestBuilder {
@@ -202,6 +227,18 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// Add a single server-side MCP server configuration.
+    pub fn mcp_server(mut self, server: McpServerConfig) -> Self {
+        self.mcp_servers.get_or_insert_with(Vec::new).push(server);
+        self
+    }
+
+    /// Set the full list of server-side MCP server configurations.
+    pub fn mcp_servers(mut self, servers: Vec<McpServerConfig>) -> Self {
+        self.mcp_servers = Some(servers);
+        self
+    }
+
     pub fn build(self) -> ChatRequest {
         ChatRequest {
             messages: self.messages,
@@ -211,6 +248,7 @@ impl ChatRequestBuilder {
             max_tokens: self.max_tokens,
             tools: self.tools,
             provider_options: self.provider_options,
+            mcp_servers: self.mcp_servers,
         }
     }
 }

@@ -224,6 +224,25 @@ impl AnthropicRequestBuilder {
                 body["tools"] = json!(mapped_tools);
             }
         }
+        if let Some(mcp_servers) = &self.req.mcp_servers {
+            let servers: Vec<Value> = mcp_servers
+                .iter()
+                .map(|s| {
+                    let mut obj = json!({
+                        "type": s.kind,
+                        "url": s.url,
+                        "name": s.name,
+                    });
+                    if let Some(token) = &s.authorization_token {
+                        obj["authorization_token"] = json!(token);
+                    }
+                    obj
+                })
+                .collect();
+            if !servers.is_empty() {
+                body["mcp_servers"] = json!(servers);
+            }
+        }
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
                 for (key, value) in map {
@@ -509,6 +528,25 @@ impl ProviderImpl for AnthropicProvider {
                 })).collect();
                 if !mapped.is_empty() {
                     body["tools"] = json!(mapped);
+                }
+            }
+            if let Some(mcp_servers) = &req.mcp_servers {
+                let servers: Vec<Value> = mcp_servers
+                    .iter()
+                    .map(|s| {
+                        let mut obj = json!({
+                            "type": s.kind,
+                            "url": s.url,
+                            "name": s.name,
+                        });
+                        if let Some(token) = &s.authorization_token {
+                            obj["authorization_token"] = json!(token);
+                        }
+                        obj
+                    })
+                    .collect();
+                if !servers.is_empty() {
+                    body["mcp_servers"] = json!(servers);
                 }
             }
             if let Some(po) = req.provider_options {
