@@ -293,6 +293,7 @@ pub enum StreamEventType {
     ToolCallStart,
     ToolCallArgs,
     ToolCallEnd,
+    Usage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -321,6 +322,9 @@ pub struct StreamEvent {
     pub tool_call_args_delta: Option<String>,
     #[serde(default)]
     pub event_type: StreamEventType,
+    /// Token usage reported via `message_start` or `message_delta` SSE events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 impl StreamEvent {
@@ -332,6 +336,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
+            usage: None,
         }
     }
 
@@ -343,6 +348,19 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
+            usage: None,
+        }
+    }
+
+    pub fn usage(usage: Usage) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Usage,
+            usage: Some(usage),
         }
     }
 
@@ -354,6 +372,7 @@ impl StreamEvent {
             tool_call_name: Some(name.into()),
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallStart,
+            usage: None,
         }
     }
 
@@ -365,6 +384,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
+            usage: None,
         }
     }
 
@@ -376,6 +396,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
+            usage: None,
         }
     }
 
@@ -387,6 +408,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
+            usage: None,
         }
     }
 
@@ -398,6 +420,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
+            usage: None,
         }
     }
 }
