@@ -8,6 +8,7 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
     ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
+    ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -394,6 +395,22 @@ impl OpenAIRequestBuilder {
                 .collect();
             if !mapped_tools.is_empty() {
                 body["tools"] = json!(mapped_tools);
+            }
+        }
+        if let Some(tool_choice) = &self.req.tool_choice {
+            match tool_choice {
+                ToolChoice::Auto => {
+                    body["tool_choice"] = json!("auto");
+                }
+                ToolChoice::Required => {
+                    body["tool_choice"] = json!("required");
+                }
+                ToolChoice::None => {
+                    body["tool_choice"] = json!("none");
+                }
+                ToolChoice::Tool { name } => {
+                    body["tool_choice"] = json!({"type": "function", "function": {"name": name}});
+                }
             }
         }
         if let Some(provider_options) = self.req.provider_options {
