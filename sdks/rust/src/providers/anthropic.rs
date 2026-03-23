@@ -270,6 +270,8 @@ impl ProviderImpl for AnthropicProvider {
             let mut current_tc_id = String::new();
             let mut current_tc_name = String::new();
             let mut current_tc_args = String::new();
+            let mut input_tokens: u32 = 0;
+            let mut output_tokens: u32 = 0;
 
             while let Some(event) = stream.next().await {
                 if event.done {
@@ -278,6 +280,16 @@ impl ProviderImpl for AnthropicProvider {
                 match event.event_type {
                     crate::types::StreamEventType::Text => {
                         content.push_str(&event.content);
+                    }
+                    crate::types::StreamEventType::Usage => {
+                        if let Some(ref usage) = event.usage {
+                            // message_start carries input_tokens;
+                            // message_delta carries output_tokens.
+                            // Accumulate both so we capture whichever event
+                            // reports non-zero values.
+                            input_tokens += usage.input_tokens;
+                            output_tokens += usage.output_tokens;
+                        }
                     }
                     crate::types::StreamEventType::ToolCallStart => {
                         current_tc_id = event.tool_call_id.unwrap_or_default();
@@ -312,8 +324,8 @@ impl ProviderImpl for AnthropicProvider {
                 content,
                 model: self.model.clone(),
                 usage: crate::types::Usage {
-                    input_tokens: 0,
-                    output_tokens: 0,
+                    input_tokens,
+                    output_tokens,
                 },
                 stop_reason,
                 tool_calls,
@@ -658,6 +670,49 @@ impl Stream for AnthropicStreamAdapter {
                     };
 
                     match event_type {
+                        "message_start" => {
+                            if let Some(usage) = payload.get("message").and_then(|m| m.get("usage"))
+                            {
+                                let input_tokens = usage
+                                    .get("input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                                    as u32;
+                                let output_tokens = usage
+                                    .get("output_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                                    as u32;
+                                return Poll::Ready(Some(StreamEvent::usage(
+                                    crate::types::Usage {
+                                        input_tokens,
+                                        output_tokens,
+                                    },
+                                )));
+                            }
+                            continue;
+                        }
+                        "message_delta" => {
+                            if let Some(usage) = payload.get("usage") {
+                                let input_tokens = usage
+                                    .get("input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                                    as u32;
+                                let output_tokens = usage
+                                    .get("output_tokens")
+                                    .and_then(Value::as_u64)
+                                    .unwrap_or(0)
+                                    as u32;
+                                return Poll::Ready(Some(StreamEvent::usage(
+                                    crate::types::Usage {
+                                        input_tokens,
+                                        output_tokens,
+                                    },
+                                )));
+                            }
+                            continue;
+                        }
                         "content_block_start" => {
                             let block = payload.get("content_block");
                             if let Some(block) = block {
