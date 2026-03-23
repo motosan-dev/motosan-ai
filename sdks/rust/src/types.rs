@@ -1,6 +1,16 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Configuration for extended thinking (Anthropic).
+///
+/// When enabled the provider will include a `thinking` block in the request
+/// and surface any thinking content in [`ChatResponse::thinking`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    /// Token budget for extended thinking (Anthropic typical range: 1024-32000).
+    pub budget_tokens: u32,
+}
+
 /// Controls how the model selects which tool (if any) to call.
 ///
 /// - `Auto` — the model decides whether to call a tool (default behavior).
@@ -177,6 +187,8 @@ pub struct ChatRequest {
     pub provider_options: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
 }
 
 impl ChatRequest {
@@ -196,6 +208,7 @@ pub struct ChatRequestBuilder {
     tool_choice: Option<ToolChoice>,
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
+    thinking: Option<ThinkingConfig>,
 }
 
 impl ChatRequestBuilder {
@@ -262,6 +275,15 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// Enable extended thinking with a token budget.
+    ///
+    /// When thinking is enabled on the Anthropic provider, temperature is
+    /// automatically forced to 1.0 (an Anthropic API constraint).
+    pub fn thinking(mut self, budget_tokens: u32) -> Self {
+        self.thinking = Some(ThinkingConfig { budget_tokens });
+        self
+    }
+
     pub fn build(self) -> ChatRequest {
         ChatRequest {
             messages: self.messages,
@@ -273,6 +295,7 @@ impl ChatRequestBuilder {
             tool_choice: self.tool_choice,
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
+            thinking: self.thinking,
         }
     }
 }
@@ -280,6 +303,9 @@ impl ChatRequestBuilder {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatResponse {
     pub content: String,
+    /// Raw thinking content when extended thinking is enabled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub model: String,
     pub usage: Usage,

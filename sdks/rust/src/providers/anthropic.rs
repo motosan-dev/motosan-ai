@@ -205,11 +205,20 @@ impl AnthropicRequestBuilder {
                 body["system"] = json!(system_prompt);
             }
         }
-        if let Some(temperature) = self.req.temperature {
+        // When thinking is enabled, Anthropic requires temperature=1.0.
+        if self.req.thinking.is_some() {
+            body["temperature"] = json!(1.0);
+        } else if let Some(temperature) = self.req.temperature {
             body["temperature"] = json!(temperature);
         }
         let max_tokens = self.req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         body["max_tokens"] = json!(max_tokens);
+        if let Some(ref thinking) = self.req.thinking {
+            body["thinking"] = json!({
+                "type": "enabled",
+                "budget_tokens": thinking.budget_tokens,
+            });
+        }
         if let Some(tools) = self.req.tools {
             let mapped_tools: Vec<Value> = tools
                 .into_iter()
@@ -340,6 +349,7 @@ impl ProviderImpl for AnthropicProvider {
 
             return Ok(ChatResponse {
                 content,
+                thinking: None,
                 model: self.model.clone(),
                 usage: crate::types::Usage {
                     input_tokens,
@@ -399,17 +409,31 @@ impl ProviderImpl for AnthropicProvider {
             return Err(map_http_error(status.as_u16(), message));
         }
 
-        let content = payload
-            .get("content")
-            .and_then(Value::as_array)
+        let content_blocks = payload.get("content").and_then(Value::as_array);
+
+        let content = content_blocks
             .map(|items| {
                 items
                     .iter()
+                    .filter(|item| item.get("type").and_then(Value::as_str) != Some("thinking"))
                     .filter_map(|item| item.get("text").and_then(Value::as_str))
                     .collect::<Vec<_>>()
                     .join("")
             })
             .unwrap_or_default();
+
+        let thinking = content_blocks.and_then(|items| {
+            let parts: Vec<&str> = items
+                .iter()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("thinking"))
+                .filter_map(|item| item.get("thinking").and_then(Value::as_str))
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join(""))
+            }
+        });
 
         let tool_calls = payload
             .get("content")
@@ -463,6 +487,7 @@ impl ProviderImpl for AnthropicProvider {
 
         Ok(ChatResponseBuilder::new(DEFAULT_ANTHROPIC_MODEL)
             .content(content)
+            .thinking(thinking)
             .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
@@ -547,8 +572,16 @@ impl ProviderImpl for AnthropicProvider {
                 "stream": true,
                 "system": system_blocks,
             });
-            if let Some(temperature) = req.temperature {
+            if req.thinking.is_some() {
+                body["temperature"] = json!(1.0);
+            } else if let Some(temperature) = req.temperature {
                 body["temperature"] = json!(temperature);
+            }
+            if let Some(ref thinking) = req.thinking {
+                body["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": thinking.budget_tokens,
+                });
             }
             if let Some(tools) = req.tools {
                 let mapped: Vec<Value> = tools.into_iter().map(|t| json!({

@@ -60,6 +60,7 @@ pub trait ProviderImpl: Send + Sync {
 ))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
+    thinking: Option<String>,
     tool_calls: Vec<ToolCall>,
     model: String,
     usage: Usage,
@@ -76,6 +77,7 @@ impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
         Self {
             content: String::new(),
+            thinking: None,
             tool_calls: Vec::new(),
             model: default_model.into(),
             usage: Usage {
@@ -88,6 +90,11 @@ impl ChatResponseBuilder {
 
     pub(crate) fn content(mut self, content: impl Into<String>) -> Self {
         self.content = content.into();
+        self
+    }
+
+    pub(crate) fn thinking(mut self, thinking: Option<String>) -> Self {
+        self.thinking = thinking;
         self
     }
 
@@ -117,6 +124,7 @@ impl ChatResponseBuilder {
     pub(crate) fn build(self) -> ChatResponse {
         ChatResponse {
             content: self.content,
+            thinking: self.thinking,
             tool_calls: self.tool_calls,
             model: self.model,
             usage: self.usage,
