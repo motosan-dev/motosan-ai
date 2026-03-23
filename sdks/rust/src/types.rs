@@ -12,6 +12,39 @@ pub struct ThinkingConfig {
     pub budget_tokens: u32,
 }
 
+/// A system prompt block with optional cache control.
+///
+/// Use [`SystemBlock::new`] for a plain block and [`SystemBlock::cached`] for
+/// a block that should be covered by Anthropic prompt caching.  When sent to
+/// non-Anthropic providers the blocks are joined with newlines into a single
+/// string and the `cache_control` flag is silently ignored.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemBlock {
+    pub text: String,
+    /// Shorthand for `cache_control: { type: "ephemeral" }` in the Anthropic
+    /// API.  Non-Anthropic providers silently ignore this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache_control: bool,
+}
+
+impl SystemBlock {
+    /// Create a new system block without caching.
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            cache_control: false,
+        }
+    }
+
+    /// Create a new system block with prompt caching enabled.
+    pub fn cached(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            cache_control: true,
+        }
+    }
+}
+
 /// Controls how the model selects which tool (if any) to call.
 ///
 /// - `Auto` — the model decides whether to call a tool (default behavior).
@@ -274,6 +307,13 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub model: Option<String>,
     pub system: Option<String>,
+    /// Array of system prompt blocks with per-block cache control.
+    ///
+    /// When set, this takes priority over the plain `system` string.  The
+    /// Anthropic provider serializes these as an array of text blocks; other
+    /// providers join the block texts with newlines into a single string.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_blocks: Option<Vec<SystemBlock>>,
     /// When `true`, the Anthropic provider serializes the system prompt with
     /// `cache_control: { type: "ephemeral" }`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -303,6 +343,7 @@ pub struct ChatRequestBuilder {
     messages: Vec<Message>,
     model: Option<String>,
     system: Option<String>,
+    system_blocks: Option<Vec<SystemBlock>>,
     system_cache: bool,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
@@ -343,6 +384,27 @@ impl ChatRequestBuilder {
     pub fn system_cached(mut self, system: impl Into<String>) -> Self {
         self.system = Some(system.into());
         self.system_cache = true;
+        self
+    }
+
+    /// Append a single [`SystemBlock`] to the system blocks list.
+    ///
+    /// Can be called multiple times to accumulate blocks.  When
+    /// `system_blocks` is set it takes priority over the plain `system`
+    /// string for the Anthropic provider.  Other providers flatten the blocks
+    /// into a newline-joined string.
+    pub fn system_block(mut self, block: SystemBlock) -> Self {
+        self.system_blocks.get_or_insert_with(Vec::new).push(block);
+        self
+    }
+
+    /// Set the full list of system blocks, replacing any previously added.
+    ///
+    /// When `system_blocks` is set it takes priority over the plain `system`
+    /// string for the Anthropic provider.  Other providers flatten the blocks
+    /// into a newline-joined string.
+    pub fn system_blocks(mut self, blocks: Vec<SystemBlock>) -> Self {
+        self.system_blocks = Some(blocks);
         self
     }
 
@@ -431,6 +493,7 @@ impl ChatRequestBuilder {
             messages: self.messages,
             model: self.model,
             system: self.system,
+            system_blocks: self.system_blocks,
             system_cache: self.system_cache,
             temperature: self.temperature,
             max_tokens: self.max_tokens,
@@ -799,5 +862,74 @@ mod tests {
         assert_eq!(content[1]["source"]["type"], "base64");
         assert_eq!(content[1]["source"]["media_type"], "application/pdf");
         assert_eq!(content[1]["source"]["data"], "JVBERi0xLjQK");
+    }
+
+    #[test]
+    fn system_block_new_defaults_cache_control_false() {
+        let block = SystemBlock::new("Hello");
+        assert_eq!(block.text, "Hello");
+        assert!(!block.cache_control);
+    }
+
+    #[test]
+    fn system_block_cached_sets_cache_control_true() {
+        let block = SystemBlock::cached("Cached prompt");
+        assert_eq!(block.text, "Cached prompt");
+        assert!(block.cache_control);
+    }
+
+    #[test]
+    fn system_block_serde_roundtrip() {
+        let block = SystemBlock::cached("test");
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["text"], "test");
+        assert_eq!(json["cache_control"], true);
+
+        let plain = SystemBlock::new("plain");
+        let json = serde_json::to_value(&plain).unwrap();
+        assert_eq!(json["text"], "plain");
+        // cache_control should be skipped when false
+        assert!(json.get("cache_control").is_none());
+    }
+
+    #[test]
+    fn builder_system_block_appends() {
+        let req = ChatRequest::builder()
+            .system_block(SystemBlock::cached("Base instructions"))
+            .system_block(SystemBlock::new("Dynamic context"))
+            .message(Message::user("Hello"))
+            .build();
+
+        let blocks = req.system_blocks.unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].text, "Base instructions");
+        assert!(blocks[0].cache_control);
+        assert_eq!(blocks[1].text, "Dynamic context");
+        assert!(!blocks[1].cache_control);
+    }
+
+    #[test]
+    fn builder_system_blocks_replaces() {
+        let req = ChatRequest::builder()
+            .system_block(SystemBlock::new("Will be replaced"))
+            .system_blocks(vec![SystemBlock::cached("A"), SystemBlock::new("B")])
+            .message(Message::user("Hi"))
+            .build();
+
+        let blocks = req.system_blocks.unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].text, "A");
+        assert_eq!(blocks[1].text, "B");
+    }
+
+    #[test]
+    fn builder_system_blocks_not_set_by_default() {
+        let req = ChatRequest::builder()
+            .system("Plain system")
+            .message(Message::user("Hi"))
+            .build();
+
+        assert!(req.system_blocks.is_none());
+        assert_eq!(req.system.as_deref(), Some("Plain system"));
     }
 }

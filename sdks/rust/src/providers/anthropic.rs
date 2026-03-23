@@ -10,7 +10,7 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
     ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, Role, StopReason,
-    StreamEvent, ToolCall, ToolChoice,
+    StreamEvent, SystemBlock, ToolCall, ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -113,6 +113,21 @@ fn serialize_content_block(block: &ContentBlock) -> Value {
             }),
         },
     }
+}
+
+/// Serialize a slice of [`SystemBlock`]s to the Anthropic JSON array format.
+fn serialize_system_blocks(blocks: &[SystemBlock]) -> Value {
+    let arr: Vec<Value> = blocks
+        .iter()
+        .map(|b| {
+            let mut obj = json!({"type": "text", "text": b.text});
+            if b.cache_control {
+                obj["cache_control"] = json!({"type": "ephemeral"});
+            }
+            obj
+        })
+        .collect();
+    json!(arr)
 }
 
 struct AnthropicRequestBuilder {
@@ -233,7 +248,12 @@ impl AnthropicRequestBuilder {
         if self.stream {
             body["stream"] = json!(true);
         }
-        if let Some(system_prompt) = system {
+        // Priority: system_blocks > system string.
+        if let Some(ref blocks) = self.req.system_blocks {
+            if !blocks.is_empty() {
+                body["system"] = serialize_system_blocks(blocks);
+            }
+        } else if let Some(system_prompt) = system {
             if self.oauth || self.req.system_cache {
                 body["system"] = json!([{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]);
             } else {
@@ -552,13 +572,24 @@ impl ProviderImpl for AnthropicProvider {
                 };
                 (msgs, sys)
             };
-            let user_system = req.system.or(extracted_system);
             let prefix = "You are Claude Code, Anthropic's official CLI for Claude.";
-            let mut system_blocks = vec![
+            let mut oauth_system_blocks = vec![
                 json!({"type": "text", "text": prefix, "cache_control": {"type": "ephemeral"}}),
             ];
-            if let Some(s) = user_system {
-                system_blocks.push(json!({"type": "text", "text": s}));
+            if let Some(ref blocks) = req.system_blocks {
+                // Use explicit system_blocks — serialize each with its own cache_control.
+                for b in blocks {
+                    let mut obj = json!({"type": "text", "text": b.text});
+                    if b.cache_control {
+                        obj["cache_control"] = json!({"type": "ephemeral"});
+                    }
+                    oauth_system_blocks.push(obj);
+                }
+            } else {
+                let user_system = req.system.or(extracted_system);
+                if let Some(s) = user_system {
+                    oauth_system_blocks.push(json!({"type": "text", "text": s}));
+                }
             }
             let model = req.model.unwrap_or_else(|| self.model.clone());
             let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
@@ -567,7 +598,7 @@ impl ProviderImpl for AnthropicProvider {
                 "messages": messages,
                 "max_tokens": max_tokens,
                 "stream": true,
-                "system": system_blocks,
+                "system": oauth_system_blocks,
             });
             if req.thinking.is_some() {
                 body["temperature"] = json!(1.0);

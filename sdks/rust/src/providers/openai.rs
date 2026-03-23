@@ -148,7 +148,15 @@ impl OpenAIProvider {
     async fn chat_via_responses(&self, req: &ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let mut instructions_parts = Vec::new();
-        if let Some(system) = &req.system {
+        // system_blocks takes priority over system string
+        if let Some(blocks) = &req.system_blocks {
+            for b in blocks {
+                let trimmed = b.text.trim();
+                if !trimmed.is_empty() {
+                    instructions_parts.push(trimmed.to_string());
+                }
+            }
+        } else if let Some(system) = &req.system {
             let trimmed = system.trim();
             if !trimmed.is_empty() {
                 instructions_parts.push(trimmed.to_string());
@@ -298,7 +306,17 @@ impl OpenAIRequestBuilder {
             .unwrap_or_else(|| self.default_model.clone());
         let mut messages = Vec::new();
 
-        if let Some(system) = &self.req.system {
+        // system_blocks takes priority over system string
+        if let Some(blocks) = &self.req.system_blocks {
+            let joined: String = blocks
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if !joined.is_empty() {
+                messages.push(json!({"role": "system", "content": joined}));
+            }
+        } else if let Some(system) = &self.req.system {
             messages.push(json!({"role": "system", "content": system}));
         }
 

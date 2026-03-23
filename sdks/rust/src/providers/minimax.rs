@@ -205,7 +205,15 @@ impl MinimaxRequestBuilder {
             .clone()
             .unwrap_or_else(|| self.default_model.clone());
         let mut system_parts = Vec::new();
-        if let Some(system) = &self.req.system {
+        // system_blocks takes priority over system string
+        if let Some(blocks) = &self.req.system_blocks {
+            for b in blocks {
+                let trimmed = b.text.trim();
+                if !trimmed.is_empty() {
+                    system_parts.push(trimmed.to_string());
+                }
+            }
+        } else if let Some(system) = &self.req.system {
             let trimmed = system.trim();
             if !trimmed.is_empty() {
                 system_parts.push(trimmed.to_string());
