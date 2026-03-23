@@ -9,8 +9,8 @@ use crate::providers::{
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
-    ToolChoice,
+    ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, Role, StopReason,
+    StreamEvent, ToolCall, ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -88,6 +88,33 @@ impl AnthropicProvider {
     }
 }
 
+/// Serialize a [`ContentBlock`] to the Anthropic JSON format.
+fn serialize_content_block(block: &ContentBlock) -> Value {
+    match block {
+        ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+        ContentBlock::Image { source } => match source {
+            ImageSource::Base64 { media_type, data } => json!({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": data}
+            }),
+            ImageSource::Url { url } => json!({
+                "type": "image",
+                "source": {"type": "url", "url": url}
+            }),
+        },
+        ContentBlock::Document { source } => match source {
+            DocumentSource::Base64 { media_type, data } => json!({
+                "type": "document",
+                "source": {"type": "base64", "media_type": media_type, "data": data}
+            }),
+            DocumentSource::Url { url } => json!({
+                "type": "document",
+                "source": {"type": "url", "url": url}
+            }),
+        },
+    }
+}
+
 struct AnthropicRequestBuilder {
     req: ChatRequest,
     default_model: String,
@@ -125,22 +152,12 @@ impl AnthropicRequestBuilder {
                 Role::System => extracted_systems.push(message.content.clone()),
                 Role::User => {
                     if !message.content_blocks.is_empty() {
-                        // Use structured content blocks (vision/multimodal)
-                        let mut blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
-                            match block {
-                                ContentBlock::Text { text } => json!({"type": "text", "text": text}),
-                                ContentBlock::Image { source } => match source {
-                                    ImageSource::Base64 { media_type, data } => json!({
-                                        "type": "image",
-                                        "source": {"type": "base64", "media_type": media_type, "data": data}
-                                    }),
-                                    ImageSource::Url { url } => json!({
-                                        "type": "image",
-                                        "source": {"type": "url", "url": url}
-                                    }),
-                                },
-                            }
-                        }).collect();
+                        // Use structured content blocks (vision/multimodal/document)
+                        let mut blocks: Vec<Value> = message
+                            .content_blocks
+                            .iter()
+                            .map(serialize_content_block)
+                            .collect();
                         // Apply cache_control to the last content block
                         if message.cache {
                             if let Some(last) = blocks.last_mut() {
@@ -271,6 +288,11 @@ impl AnthropicRequestBuilder {
                 ToolChoice::Tool { name } => {
                     body["tool_choice"] = json!({"type": "tool", "name": name});
                 }
+            }
+        }
+        if let Some(ref stop_sequences) = self.req.stop_sequences {
+            if !stop_sequences.is_empty() {
+                body["stop_sequences"] = json!(stop_sequences);
             }
         }
         if let Some(mcp_servers) = &self.req.mcp_servers {
@@ -446,6 +468,7 @@ impl ProviderImpl for AnthropicProvider {
             Some("end_turn") => StopReason::EndTurn,
             Some("max_tokens") => StopReason::MaxTokens,
             Some("tool_use") => StopReason::ToolUse,
+            Some("stop_sequence") => StopReason::StopSequence,
             Some("stop") => StopReason::Stop,
             _ => StopReason::Other,
         };
@@ -473,21 +496,11 @@ impl ProviderImpl for AnthropicProvider {
                         Role::System => sys_parts.push(message.content.clone()),
                         Role::User => {
                             if !message.content_blocks.is_empty() {
-                                let mut blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
-                                    match block {
-                                        ContentBlock::Text { text } => json!({"type": "text", "text": text}),
-                                        ContentBlock::Image { source } => match source {
-                                            ImageSource::Base64 { media_type, data } => json!({
-                                                "type": "image",
-                                                "source": {"type": "base64", "media_type": media_type, "data": data}
-                                            }),
-                                            ImageSource::Url { url } => json!({
-                                                "type": "image",
-                                                "source": {"type": "url", "url": url}
-                                            }),
-                                        },
-                                    }
-                                }).collect();
+                                let mut blocks: Vec<Value> = message
+                                    .content_blocks
+                                    .iter()
+                                    .map(serialize_content_block)
+                                    .collect();
                                 if message.cache {
                                     if let Some(last) = blocks.last_mut() {
                                         last["cache_control"] = json!({"type": "ephemeral"});
@@ -597,6 +610,11 @@ impl ProviderImpl for AnthropicProvider {
                     ToolChoice::Tool { name } => {
                         body["tool_choice"] = json!({"type": "tool", "name": name});
                     }
+                }
+            }
+            if let Some(ref stop_sequences) = req.stop_sequences {
+                if !stop_sequences.is_empty() {
+                    body["stop_sequences"] = json!(stop_sequences);
                 }
             }
             if let Some(mcp_servers) = &req.mcp_servers {

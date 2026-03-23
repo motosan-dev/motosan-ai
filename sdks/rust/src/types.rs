@@ -1,3 +1,4 @@
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -175,6 +176,64 @@ impl Message {
         self.cache = true;
         self
     }
+
+    /// Create a user message with a PDF document (base64-encoded).
+    ///
+    /// Supported by the Anthropic provider. Other providers will return
+    /// an `UnsupportedFeature` error.
+    pub fn user_with_pdf_base64(text: &str, base64_data: &str) -> Self {
+        Self {
+            role: Role::User,
+            content: text.to_string(),
+            content_blocks: vec![
+                ContentBlock::Text {
+                    text: text.to_string(),
+                },
+                ContentBlock::Document {
+                    source: DocumentSource::Base64 {
+                        media_type: "application/pdf".to_string(),
+                        data: base64_data.to_string(),
+                    },
+                },
+            ],
+            tool_call_id: None,
+            tool_calls: vec![],
+            cache: false,
+        }
+    }
+
+    /// Create a user message with a PDF document from a URL.
+    ///
+    /// Supported by the Anthropic provider. Other providers will return
+    /// an `UnsupportedFeature` error.
+    pub fn user_with_pdf_url(text: &str, url: &str) -> Self {
+        Self {
+            role: Role::User,
+            content: text.to_string(),
+            content_blocks: vec![
+                ContentBlock::Text {
+                    text: text.to_string(),
+                },
+                ContentBlock::Document {
+                    source: DocumentSource::Url {
+                        url: url.to_string(),
+                    },
+                },
+            ],
+            tool_call_id: None,
+            tool_calls: vec![],
+            cache: false,
+        }
+    }
+
+    /// Create a user message with a PDF document from raw bytes.
+    ///
+    /// The bytes are automatically base64-encoded. Supported by the Anthropic
+    /// provider. Other providers will return an `UnsupportedFeature` error.
+    pub fn user_with_pdf_bytes(text: &str, bytes: &[u8]) -> Self {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        Self::user_with_pdf_base64(text, &encoded)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -229,6 +288,8 @@ pub struct ChatRequest {
     pub mcp_servers: Option<Vec<McpServerConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
 }
 
 impl ChatRequest {
@@ -250,6 +311,7 @@ pub struct ChatRequestBuilder {
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
     thinking: Option<ThinkingConfig>,
+    stop_sequences: Option<Vec<String>>,
 }
 
 impl ChatRequestBuilder {
@@ -350,6 +412,20 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// Add a single stop sequence. Can be called multiple times to accumulate sequences.
+    pub fn stop(mut self, sequence: impl Into<String>) -> Self {
+        self.stop_sequences
+            .get_or_insert_with(Vec::new)
+            .push(sequence.into());
+        self
+    }
+
+    /// Set the full list of stop sequences, replacing any previously added.
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
+        self
+    }
+
     pub fn build(self) -> ChatRequest {
         ChatRequest {
             messages: self.messages,
@@ -363,6 +439,7 @@ impl ChatRequestBuilder {
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
             thinking: self.thinking,
+            stop_sequences: self.stop_sequences,
         }
     }
 }
@@ -405,6 +482,7 @@ pub enum StopReason {
     MaxTokens,
     ToolUse,
     Stop,
+    StopSequence,
     Other,
 }
 
@@ -424,11 +502,23 @@ pub enum StreamEventType {
 pub enum ContentBlock {
     Text { text: String },
     Image { source: ImageSource },
+    Document { source: DocumentSource },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageSource {
+    Base64 { media_type: String, data: String },
+    Url { url: String },
+}
+
+/// Source for a document content block (e.g. PDF).
+///
+/// Currently supported by the Anthropic provider only. Other providers will
+/// return an `UnsupportedFeature` error when a `Document` block is encountered.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DocumentSource {
     Base64 { media_type: String, data: String },
     Url { url: String },
 }
@@ -545,5 +635,169 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallEnd,
             usage: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn document_source_base64_serde_roundtrip() {
+        let source = DocumentSource::Base64 {
+            media_type: "application/pdf".to_string(),
+            data: "JVBERi0xLjQK".to_string(),
+        };
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "base64");
+        assert_eq!(json["media_type"], "application/pdf");
+        assert_eq!(json["data"], "JVBERi0xLjQK");
+
+        let deserialized: DocumentSource = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, source);
+    }
+
+    #[test]
+    fn document_source_url_serde_roundtrip() {
+        let source = DocumentSource::Url {
+            url: "https://example.com/doc.pdf".to_string(),
+        };
+        let json = serde_json::to_value(&source).unwrap();
+        assert_eq!(json["type"], "url");
+        assert_eq!(json["url"], "https://example.com/doc.pdf");
+
+        let deserialized: DocumentSource = serde_json::from_value(json).unwrap();
+        assert_eq!(deserialized, source);
+    }
+
+    #[test]
+    fn content_block_document_serde() {
+        let block = ContentBlock::Document {
+            source: DocumentSource::Base64 {
+                media_type: "application/pdf".to_string(),
+                data: "JVBERi0xLjQK".to_string(),
+            },
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "document");
+        assert_eq!(json["source"]["type"], "base64");
+        assert_eq!(json["source"]["media_type"], "application/pdf");
+    }
+
+    #[test]
+    fn user_with_pdf_base64_creates_correct_message() {
+        let msg = Message::user_with_pdf_base64("Summarize this", "JVBERi0xLjQK");
+        assert_eq!(msg.role, Role::User);
+        assert_eq!(msg.content, "Summarize this");
+        assert_eq!(msg.content_blocks.len(), 2);
+
+        match &msg.content_blocks[0] {
+            ContentBlock::Text { text } => assert_eq!(text, "Summarize this"),
+            _ => panic!("Expected Text block"),
+        }
+        match &msg.content_blocks[1] {
+            ContentBlock::Document { source } => match source {
+                DocumentSource::Base64 { media_type, data } => {
+                    assert_eq!(media_type, "application/pdf");
+                    assert_eq!(data, "JVBERi0xLjQK");
+                }
+                _ => panic!("Expected Base64 source"),
+            },
+            _ => panic!("Expected Document block"),
+        }
+    }
+
+    #[test]
+    fn user_with_pdf_url_creates_correct_message() {
+        let msg = Message::user_with_pdf_url("Analyze this", "https://example.com/doc.pdf");
+        assert_eq!(msg.role, Role::User);
+        assert_eq!(msg.content, "Analyze this");
+        assert_eq!(msg.content_blocks.len(), 2);
+
+        match &msg.content_blocks[1] {
+            ContentBlock::Document { source } => match source {
+                DocumentSource::Url { url } => {
+                    assert_eq!(url, "https://example.com/doc.pdf");
+                }
+                _ => panic!("Expected Url source"),
+            },
+            _ => panic!("Expected Document block"),
+        }
+    }
+
+    #[test]
+    fn user_with_pdf_bytes_auto_encodes_base64() {
+        let fake_pdf = b"%PDF-1.4\n";
+        let msg = Message::user_with_pdf_bytes("Read this", fake_pdf);
+        assert_eq!(msg.content_blocks.len(), 2);
+
+        match &msg.content_blocks[1] {
+            ContentBlock::Document { source } => match source {
+                DocumentSource::Base64 { media_type, data } => {
+                    assert_eq!(media_type, "application/pdf");
+                    // Verify the base64 decodes back to original bytes
+                    let decoded = base64::engine::general_purpose::STANDARD
+                        .decode(data)
+                        .unwrap();
+                    assert_eq!(decoded, fake_pdf);
+                }
+                _ => panic!("Expected Base64 source"),
+            },
+            _ => panic!("Expected Document block"),
+        }
+    }
+
+    #[test]
+    fn anthropic_document_block_serialization() {
+        // Simulate what the Anthropic provider does: serialize a message with
+        // document content blocks into the expected JSON structure.
+        let msg = Message::user_with_pdf_base64("Summarize this contract", "JVBERi0xLjQK");
+
+        let blocks: Vec<serde_json::Value> = msg
+            .content_blocks
+            .iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => {
+                    serde_json::json!({"type": "text", "text": text})
+                }
+                ContentBlock::Image { source } => match source {
+                    ImageSource::Base64 { media_type, data } => serde_json::json!({
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": media_type, "data": data}
+                    }),
+                    ImageSource::Url { url } => serde_json::json!({
+                        "type": "image",
+                        "source": {"type": "url", "url": url}
+                    }),
+                },
+                ContentBlock::Document { source } => match source {
+                    DocumentSource::Base64 { media_type, data } => serde_json::json!({
+                        "type": "document",
+                        "source": {"type": "base64", "media_type": media_type, "data": data}
+                    }),
+                    DocumentSource::Url { url } => serde_json::json!({
+                        "type": "document",
+                        "source": {"type": "url", "url": url}
+                    }),
+                },
+            })
+            .collect();
+
+        let message_json = serde_json::json!({
+            "role": "user",
+            "content": blocks,
+        });
+
+        // Verify the structure matches Anthropic's expected format
+        let content = message_json["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "Summarize this contract");
+
+        assert_eq!(content[1]["type"], "document");
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "application/pdf");
+        assert_eq!(content[1]["source"]["data"], "JVBERi0xLjQK");
     }
 }
