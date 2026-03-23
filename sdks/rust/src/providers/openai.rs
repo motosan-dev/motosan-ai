@@ -2,7 +2,8 @@ use crate::error::MotosanError;
 use crate::models::DEFAULT_OPENAI_MODEL;
 use crate::providers::{
     extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
-    parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
+    parse_retry_after, reject_document_blocks, sleep_before_retry, ChatResponseBuilder,
+    ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -11,20 +12,6 @@ use crate::types::{
     ToolChoice,
 };
 
-/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
-fn reject_document_blocks(req: &ChatRequest) -> Result<(), MotosanError> {
-    for message in &req.messages {
-        for block in &message.content_blocks {
-            if matches!(block, ContentBlock::Document { .. }) {
-                return Err(MotosanError::UnsupportedFeature(
-                    "Document content blocks (PDF) are not supported by the OpenAI provider"
-                        .to_string(),
-                ));
-            }
-        }
-    }
-    Ok(())
-}
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -334,7 +321,7 @@ impl OpenAIRequestBuilder {
                                     }),
                                 },
                                 // Document blocks are rejected before reaching this point.
-                                ContentBlock::Document { .. } => json!({"type": "text", "text": "[unsupported document block]"}),
+                                ContentBlock::Document { .. } => unreachable!("Document blocks should be rejected before serialization"),
                             }
                         }).collect();
                         messages.push(json!({"role": "user", "content": blocks}));
@@ -445,7 +432,7 @@ impl OpenAIRequestBuilder {
 #[async_trait]
 impl ProviderImpl for OpenAIProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        reject_document_blocks(&req)?;
+        reject_document_blocks(&req, "OpenAI")?;
         let fallback_request = req.clone();
         let body = OpenAIRequestBuilder::new(req, self.model.clone()).build();
         let mut attempt = 0;
@@ -562,7 +549,7 @@ impl ProviderImpl for OpenAIProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        reject_document_blocks(&req)?;
+        reject_document_blocks(&req, "OpenAI")?;
         let body = OpenAIRequestBuilder::new(req, self.model.clone())
             .stream(true)
             .build();
