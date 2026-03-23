@@ -68,7 +68,18 @@ impl OllamaProvider {
 
         let mut messages: Vec<Value> = Vec::new();
 
-        if let Some(system) = &req.system {
+        // system_blocks takes priority over system string
+        if let Some(blocks) = &req.system_blocks {
+            let joined: String = blocks
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let trimmed = joined.trim();
+            if !trimmed.is_empty() {
+                messages.push(json!({"role": "system", "content": trimmed}));
+            }
+        } else if let Some(system) = &req.system {
             let trimmed = system.trim();
             if !trimmed.is_empty() {
                 messages.push(json!({"role": "system", "content": trimmed}));
