@@ -18,6 +18,13 @@ pub use models::{
 };
 pub use providers::Provider;
 pub use retry::RetryPolicy;
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
+pub use stream::collect_stream;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{
     ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, ImageSource, McpServerConfig,
