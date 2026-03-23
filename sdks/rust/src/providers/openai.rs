@@ -10,6 +10,21 @@ use crate::types::{
     ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
     ToolChoice,
 };
+
+/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
+fn reject_document_blocks(req: &ChatRequest) -> Result<(), MotosanError> {
+    for message in &req.messages {
+        for block in &message.content_blocks {
+            if matches!(block, ContentBlock::Document { .. }) {
+                return Err(MotosanError::UnsupportedFeature(
+                    "Document content blocks (PDF) are not supported by the OpenAI provider"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -318,6 +333,8 @@ impl OpenAIRequestBuilder {
                                         "image_url": {"url": url}
                                     }),
                                 },
+                                // Document blocks are rejected before reaching this point.
+                                ContentBlock::Document { .. } => json!({"type": "text", "text": "[unsupported document block]"}),
                             }
                         }).collect();
                         messages.push(json!({"role": "user", "content": blocks}));
@@ -428,6 +445,7 @@ impl OpenAIRequestBuilder {
 #[async_trait]
 impl ProviderImpl for OpenAIProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        reject_document_blocks(&req)?;
         let fallback_request = req.clone();
         let body = OpenAIRequestBuilder::new(req, self.model.clone()).build();
         let mut attempt = 0;
@@ -544,6 +562,7 @@ impl ProviderImpl for OpenAIProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        reject_document_blocks(&req)?;
         let body = OpenAIRequestBuilder::new(req, self.model.clone())
             .stream(true)
             .build();

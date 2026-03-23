@@ -6,7 +6,24 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
+use crate::types::{
+    ChatRequest, ChatResponse, ContentBlock, Role, StopReason, StreamEvent, ToolCall,
+};
+
+/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
+fn reject_document_blocks(req: &ChatRequest) -> Result<(), MotosanError> {
+    for message in &req.messages {
+        for block in &message.content_blocks {
+            if matches!(block, ContentBlock::Document { .. }) {
+                return Err(MotosanError::UnsupportedFeature(
+                    "Document content blocks (PDF) are not supported by the MiniMax provider"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -325,6 +342,7 @@ impl MinimaxRequestBuilder {
 #[async_trait]
 impl ProviderImpl for MinimaxProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        reject_document_blocks(&req)?;
         let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone()).build();
         let mut attempt = 0;
@@ -444,6 +462,7 @@ impl ProviderImpl for MinimaxProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        reject_document_blocks(&req)?;
         let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone())
             .stream(true)

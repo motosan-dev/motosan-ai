@@ -6,7 +6,24 @@ use crate::providers::{
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
+use crate::types::{
+    ChatRequest, ChatResponse, ContentBlock, Role, StopReason, StreamEvent, ToolCall,
+};
+
+/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
+fn reject_document_blocks(req: &ChatRequest) -> Result<(), MotosanError> {
+    for message in &req.messages {
+        for block in &message.content_blocks {
+            if matches!(block, ContentBlock::Document { .. }) {
+                return Err(MotosanError::UnsupportedFeature(
+                    "Document content blocks (PDF) are not supported by the Ollama provider"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
 use async_trait::async_trait;
 use futures_core::Stream;
 use reqwest::Client;
@@ -211,6 +228,7 @@ impl OllamaProvider {
 #[async_trait]
 impl ProviderImpl for OllamaProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        reject_document_blocks(&req)?;
         let body = self.build_request_body(&req, false);
         let mut attempt = 0;
         let payload: Value;
@@ -315,6 +333,7 @@ impl ProviderImpl for OllamaProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        reject_document_blocks(&req)?;
         let body = self.build_request_body(&req, true);
         let mut attempt = 0;
 
