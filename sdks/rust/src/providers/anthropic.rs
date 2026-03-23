@@ -290,74 +290,10 @@ impl ProviderImpl for AnthropicProvider {
         // OAuth tokens require streaming + Claude Code identity.
         // Redirect to stream path and collect the full response.
         if is_oauth {
-            use tokio_stream::StreamExt;
-            let mut stream = self.stream(req).await?;
-            let mut content = String::new();
-            let mut tool_calls: Vec<ToolCall> = Vec::new();
-            let mut current_tc_id = String::new();
-            let mut current_tc_name = String::new();
-            let mut current_tc_args = String::new();
-            let mut input_tokens: u32 = 0;
-            let mut output_tokens: u32 = 0;
-
-            while let Some(event) = stream.next().await {
-                if event.done {
-                    break;
-                }
-                match event.event_type {
-                    crate::types::StreamEventType::Text => {
-                        content.push_str(&event.content);
-                    }
-                    crate::types::StreamEventType::Usage => {
-                        if let Some(ref usage) = event.usage {
-                            // message_start carries input_tokens;
-                            // message_delta carries output_tokens.
-                            // Accumulate both so we capture whichever event
-                            // reports non-zero values.
-                            input_tokens += usage.input_tokens;
-                            output_tokens += usage.output_tokens;
-                        }
-                    }
-                    crate::types::StreamEventType::ToolCallStart => {
-                        current_tc_id = event.tool_call_id.unwrap_or_default();
-                        current_tc_name = event.tool_call_name.unwrap_or_default();
-                        current_tc_args.clear();
-                    }
-                    crate::types::StreamEventType::ToolCallArgs => {
-                        if let Some(delta) = &event.tool_call_args_delta {
-                            current_tc_args.push_str(delta);
-                        }
-                    }
-                    crate::types::StreamEventType::ToolCallEnd => {
-                        let input: serde_json::Value =
-                            serde_json::from_str(&current_tc_args).unwrap_or_else(|_| json!({}));
-                        tool_calls.push(ToolCall {
-                            id: std::mem::take(&mut current_tc_id),
-                            name: std::mem::take(&mut current_tc_name),
-                            input,
-                        });
-                        current_tc_args.clear();
-                    }
-                }
-            }
-
-            let stop_reason = if tool_calls.is_empty() {
-                crate::types::StopReason::EndTurn
-            } else {
-                crate::types::StopReason::ToolUse
-            };
-
-            return Ok(ChatResponse {
-                content,
-                thinking: None,
-                model: self.model.clone(),
-                usage: crate::types::Usage {
-                    input_tokens,
-                    output_tokens,
-                },
-                stop_reason,
-                tool_calls,
-            });
+            let stream = self.stream(req).await?;
+            let mut response = crate::stream::collect_stream(stream).await;
+            response.model = self.model.clone();
+            return Ok(response);
         }
 
         let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth).build();

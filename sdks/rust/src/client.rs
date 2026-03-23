@@ -82,6 +82,57 @@ impl Client {
         Ok(Self::wrap_with_think_stripper(raw))
     }
 
+    /// Stream a chat request and collect the full response into a [`ChatResponse`].
+    ///
+    /// This is a convenience wrapper around [`stream`](Self::stream) +
+    /// [`collect_stream`](crate::stream::collect_stream) that removes the
+    /// boilerplate of manually consuming stream events.
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "openai",
+        feature = "minimax",
+        feature = "ollama_native"
+    ))]
+    pub async fn stream_collect(
+        &self,
+        messages: Vec<Message>,
+    ) -> Result<ChatResponse, MotosanError> {
+        let stream = self.stream(messages).await?;
+        let mut response = crate::stream::collect_stream(stream).await;
+        if let Some(model) = &self.model {
+            response.model = model.clone();
+        }
+        Ok(response)
+    }
+
+    /// Stream a fully-configured [`ChatRequest`] and collect the response.
+    ///
+    /// Like [`stream_collect`](Self::stream_collect) but accepts an already-
+    /// built request for full control over system prompt, tools, temperature,
+    /// etc.
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "openai",
+        feature = "minimax",
+        feature = "ollama_native"
+    ))]
+    pub async fn stream_collect_with(
+        &self,
+        request: ChatRequest,
+    ) -> Result<ChatResponse, MotosanError> {
+        let model_hint = request
+            .model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_default();
+        let stream = self.stream_with(request).await?;
+        let mut response = crate::stream::collect_stream(stream).await;
+        if response.model.is_empty() {
+            response.model = model_hint;
+        }
+        Ok(response)
+    }
+
     fn wrap_with_think_stripper(raw: BoxStream) -> BoxStream {
         Box::pin(ThinkStripperStream {
             inner: raw,
