@@ -22,5 +22,5 @@ pub use stream::{BoxStream, StreamEvent};
 pub use types::{
     ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, ImageSource, McpServerConfig,
     McpServerType, Message, Role, StopReason, StreamEventType, ThinkingConfig, Tool, ToolCall,
-    Usage,
+    ToolChoice, Usage,
 };

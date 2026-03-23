@@ -11,6 +11,21 @@ pub struct ThinkingConfig {
     pub budget_tokens: u32,
 }
 
+/// Controls how the model selects which tool (if any) to call.
+///
+/// - `Auto` — the model decides whether to call a tool (default behavior).
+/// - `Required` — the model must call at least one tool.
+/// - `None` — the model must not call any tool.
+/// - `Tool { name }` — the model must call the specific named tool.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolChoice {
+    Auto,
+    Required,
+    None,
+    Tool { name: String },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -167,6 +182,8 @@ pub struct ChatRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<Tool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
     pub provider_options: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerConfig>>,
@@ -188,6 +205,7 @@ pub struct ChatRequestBuilder {
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     tools: Option<Vec<Tool>>,
+    tool_choice: Option<ToolChoice>,
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
     thinking: Option<ThinkingConfig>,
@@ -226,6 +244,11 @@ impl ChatRequestBuilder {
 
     pub fn tools(mut self, tools: Vec<Tool>) -> Self {
         self.tools = Some(tools);
+        self
+    }
+
+    pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
         self
     }
 
@@ -269,6 +292,7 @@ impl ChatRequestBuilder {
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             tools: self.tools,
+            tool_choice: self.tool_choice,
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
             thinking: self.thinking,
@@ -319,6 +343,7 @@ pub enum StreamEventType {
     ToolCallStart,
     ToolCallArgs,
     ToolCallEnd,
+    Usage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -347,6 +372,9 @@ pub struct StreamEvent {
     pub tool_call_args_delta: Option<String>,
     #[serde(default)]
     pub event_type: StreamEventType,
+    /// Token usage reported via `message_start` or `message_delta` SSE events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Usage>,
 }
 
 impl StreamEvent {
@@ -358,6 +386,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
+            usage: None,
         }
     }
 
@@ -369,6 +398,19 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
+            usage: None,
+        }
+    }
+
+    pub fn usage(usage: Usage) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Usage,
+            usage: Some(usage),
         }
     }
 
@@ -380,6 +422,7 @@ impl StreamEvent {
             tool_call_name: Some(name.into()),
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallStart,
+            usage: None,
         }
     }
 
@@ -391,6 +434,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
+            usage: None,
         }
     }
 
@@ -402,6 +446,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
+            usage: None,
         }
     }
 
@@ -413,6 +458,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
+            usage: None,
         }
     }
 
@@ -424,6 +470,7 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
+            usage: None,
         }
     }
 }
