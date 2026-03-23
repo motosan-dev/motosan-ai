@@ -251,6 +251,11 @@ impl AnthropicRequestBuilder {
                 }
             }
         }
+        if let Some(ref stop_sequences) = self.req.stop_sequences {
+            if !stop_sequences.is_empty() {
+                body["stop_sequences"] = json!(stop_sequences);
+            }
+        }
         if let Some(mcp_servers) = &self.req.mcp_servers {
             let servers: Vec<Value> = mcp_servers
                 .iter()
@@ -417,6 +422,7 @@ impl ProviderImpl for AnthropicProvider {
             Some("end_turn") => StopReason::EndTurn,
             Some("max_tokens") => StopReason::MaxTokens,
             Some("tool_use") => StopReason::ToolUse,
+            Some("stop_sequence") => StopReason::StopSequence,
             Some("stop") => StopReason::Stop,
             _ => StopReason::Other,
         };
@@ -543,6 +549,11 @@ impl ProviderImpl for AnthropicProvider {
                     ToolChoice::Tool { name } => {
                         body["tool_choice"] = json!({"type": "tool", "name": name});
                     }
+                }
+            }
+            if let Some(ref stop_sequences) = req.stop_sequences {
+                if !stop_sequences.is_empty() {
+                    body["stop_sequences"] = json!(stop_sequences);
                 }
             }
             if let Some(mcp_servers) = &req.mcp_servers {
