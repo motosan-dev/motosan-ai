@@ -3,9 +3,7 @@
 use mockito::Matcher;
 use motosan_ai::providers::anthropic::AnthropicProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{
-    collect_stream, ChatRequest, Message, StopReason, StreamEvent, Tool,
-};
+use motosan_ai::{collect_stream, ChatRequest, Message, StopReason, StreamEvent, Tool};
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
