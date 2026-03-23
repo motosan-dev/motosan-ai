@@ -20,7 +20,7 @@ impl LlmClient for Client {
         let ai_messages: Vec<AiMessage> = messages
             .into_iter()
             .map(loop_message_to_ai_message)
-            .collect();
+            .collect::<motosan_agent_loop::Result<Vec<_>>>()?;
 
         // Build ChatRequest, attaching tool definitions when provided.
         let mut req = ChatRequest::builder().messages(ai_messages);
@@ -38,11 +38,11 @@ impl LlmClient for Client {
         if !response.tool_calls.is_empty() {
             let items: Vec<ToolCallItem> = response
                 .tool_calls
-                .iter()
+                .into_iter()
                 .map(|tc| ToolCallItem {
-                    id: tc.id.clone(),
-                    name: tc.name.clone(),
-                    args: tc.input.clone(),
+                    id: tc.id,
+                    name: tc.name,
+                    args: tc.input,
                 })
                 .collect();
             Ok(LlmResponse::ToolCalls(items))
@@ -53,27 +53,35 @@ impl LlmClient for Client {
 }
 
 /// Convert a [`motosan_agent_loop::Message`] into a [`motosan_ai::Message`].
-fn loop_message_to_ai_message(msg: LoopMessage) -> AiMessage {
+///
+/// Returns an error if a `Tool` message is missing its `tool_call_id`.
+fn loop_message_to_ai_message(msg: LoopMessage) -> motosan_agent_loop::Result<AiMessage> {
     match msg.role {
-        LoopRole::User => AiMessage::user(&msg.content),
-        LoopRole::System => AiMessage::system(&msg.content),
+        LoopRole::User => Ok(AiMessage::user(&msg.content)),
+        LoopRole::System => Ok(AiMessage::system(&msg.content)),
         LoopRole::Tool => {
-            AiMessage::tool_result(msg.tool_call_id.unwrap_or_default(), &msg.content)
+            let tool_call_id = msg
+                .tool_call_id
+                .ok_or_else(|| AgentError::Llm("Tool message missing tool_call_id".to_string()))?;
+            Ok(AiMessage::tool_result(tool_call_id, &msg.content))
         }
         LoopRole::Assistant => {
             if msg.tool_calls.is_empty() {
-                AiMessage::assistant(&msg.content)
+                Ok(AiMessage::assistant(&msg.content))
             } else {
                 let tcs: Vec<AiToolCall> = msg
                     .tool_calls
-                    .iter()
+                    .into_iter()
                     .map(|tc| AiToolCall {
-                        id: tc.id.clone(),
-                        name: tc.name.clone(),
+                        id: tc.id,
+                        name: tc.name,
+                        // `ToolCallRef` carries only `id` and `name`; the original
+                        // arguments are not preserved in the loop message, so we
+                        // use `Value::Null` as a placeholder.
                         input: serde_json::Value::Null,
                     })
                     .collect();
-                AiMessage::assistant_with_tool_calls(&msg.content, tcs)
+                Ok(AiMessage::assistant_with_tool_calls(&msg.content, tcs))
             }
         }
     }
@@ -97,7 +105,7 @@ mod tests {
     #[test]
     fn convert_user_message() {
         let loop_msg = LoopMessage::user("hello");
-        let ai_msg = loop_message_to_ai_message(loop_msg);
+        let ai_msg = loop_message_to_ai_message(loop_msg).unwrap();
 
         assert_eq!(ai_msg.role, crate::types::Role::User);
         assert_eq!(ai_msg.content, "hello");
@@ -111,7 +119,7 @@ mod tests {
     #[test]
     fn convert_system_message() {
         let loop_msg = LoopMessage::system("You are helpful.");
-        let ai_msg = loop_message_to_ai_message(loop_msg);
+        let ai_msg = loop_message_to_ai_message(loop_msg).unwrap();
 
         assert_eq!(ai_msg.role, crate::types::Role::System);
         assert_eq!(ai_msg.content, "You are helpful.");
@@ -123,7 +131,7 @@ mod tests {
     #[test]
     fn convert_assistant_message() {
         let loop_msg = LoopMessage::assistant("Sure, let me help.");
-        let ai_msg = loop_message_to_ai_message(loop_msg);
+        let ai_msg = loop_message_to_ai_message(loop_msg).unwrap();
 
         assert_eq!(ai_msg.role, crate::types::Role::Assistant);
         assert_eq!(ai_msg.content, "Sure, let me help.");
@@ -148,7 +156,7 @@ mod tests {
                 },
             ],
         );
-        let ai_msg = loop_message_to_ai_message(loop_msg);
+        let ai_msg = loop_message_to_ai_message(loop_msg).unwrap();
 
         assert_eq!(ai_msg.role, crate::types::Role::Assistant);
         assert_eq!(ai_msg.content, "Let me search.");
@@ -166,11 +174,31 @@ mod tests {
     #[test]
     fn convert_tool_result_message() {
         let loop_msg = LoopMessage::tool_result("call_abc", "result data");
-        let ai_msg = loop_message_to_ai_message(loop_msg);
+        let ai_msg = loop_message_to_ai_message(loop_msg).unwrap();
 
         assert_eq!(ai_msg.role, crate::types::Role::Tool);
         assert_eq!(ai_msg.content, "result data");
         assert_eq!(ai_msg.tool_call_id.as_deref(), Some("call_abc"));
         assert!(ai_msg.tool_calls.is_empty());
+    }
+
+    // -----------------------------------------------------------
+    // Message conversion: Tool message without tool_call_id → error
+    // -----------------------------------------------------------
+    #[test]
+    fn convert_tool_message_missing_id_returns_error() {
+        let loop_msg = LoopMessage {
+            role: LoopRole::Tool,
+            content: "result".to_string(),
+            tool_call_id: None,
+            tool_calls: vec![],
+        };
+        let result = loop_message_to_ai_message(loop_msg);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("tool_call_id"),
+            "error should mention tool_call_id: {err_msg}"
+        );
     }
 }
