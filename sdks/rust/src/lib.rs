@@ -7,6 +7,9 @@ pub mod stream;
 pub mod think_stripper;
 pub mod types;
 
+#[cfg(feature = "agent-tool")]
+pub mod tool_compat;
+
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;
 pub use models::{
