@@ -2,6 +2,19 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.5.0] - 2026-03-24
+
+### Added
+- `agent-tool` feature gate with `motosan-agent-tool` integration (`From<ToolDef> for Tool`, optional dependency).
+- `collect_stream()` helper and `Client::stream_collect` methods for buffering stream into `ChatResponse`.
+- `ToolChoice` enum for controlling tool selection (`Auto`, `Any`, `None`, `Specific`).
+- First-class extended thinking support in `ChatRequest`.
+- Server-side MCP support in `ChatRequest`.
+
+### Fixed
+- Capture usage tokens from stream events in OAuth collect path.
+- Fail-fast on missing `tool_call_id` + clarify Null args handling.
+
 ## [0.4.0] - 2026-03-21
 
 ### Added

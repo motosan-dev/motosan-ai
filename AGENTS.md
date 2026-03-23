@@ -10,7 +10,7 @@ Read this before writing any code.
 
 Current versions:
 - ✅ Python SDK v0.4.2 (`sdks/python/`) — published to PyPI
-- ✅ Rust SDK v0.3.3 (`sdks/rust/`) — published to crates.io
+- ✅ Rust SDK v0.5.0 (`sdks/rust/`) — published to crates.io
 - ⏳ TypeScript SDK (`sdks/typescript/`) — planned (M3)
 
 ---
@@ -139,7 +139,7 @@ Live tests require `ANTHROPIC_API_KEY`. Skip with `git push --no-verify` in emer
 
 | SDK | Tag format | Triggers |
 |-----|-----------|----------|
-| Rust | `rust-v0.3.3` | `publish-rust.yml` → crates.io |
+| Rust | `rust-v0.5.0` | `publish-rust.yml` → crates.io |
 | Python | `python-v0.4.2` | `publish-python.yml` → PyPI |
 
 Checklist:
