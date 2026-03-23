@@ -189,6 +189,8 @@ pub struct ChatRequest {
     pub mcp_servers: Option<Vec<McpServerConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
 }
 
 impl ChatRequest {
@@ -209,6 +211,7 @@ pub struct ChatRequestBuilder {
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
     thinking: Option<ThinkingConfig>,
+    stop_sequences: Option<Vec<String>>,
 }
 
 impl ChatRequestBuilder {
@@ -284,6 +287,20 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// Add a single stop sequence. Can be called multiple times to accumulate sequences.
+    pub fn stop(mut self, sequence: impl Into<String>) -> Self {
+        self.stop_sequences
+            .get_or_insert_with(Vec::new)
+            .push(sequence.into());
+        self
+    }
+
+    /// Set the full list of stop sequences, replacing any previously added.
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
+        self
+    }
+
     pub fn build(self) -> ChatRequest {
         ChatRequest {
             messages: self.messages,
@@ -296,6 +313,7 @@ impl ChatRequestBuilder {
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
             thinking: self.thinking,
+            stop_sequences: self.stop_sequences,
         }
     }
 }
@@ -332,6 +350,7 @@ pub enum StopReason {
     MaxTokens,
     ToolUse,
     Stop,
+    StopSequence,
     Other,
 }
 

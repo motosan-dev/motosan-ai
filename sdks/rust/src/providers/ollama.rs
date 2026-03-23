@@ -139,6 +139,11 @@ impl OllamaProvider {
         if let Some(num_ctx) = self.num_ctx {
             options.insert("num_ctx".to_string(), json!(num_ctx));
         }
+        if let Some(stop_sequences) = &req.stop_sequences {
+            if !stop_sequences.is_empty() {
+                options.insert("stop".to_string(), json!(stop_sequences));
+            }
+        }
         if !options.is_empty() {
             body["options"] = Value::Object(options);
         }

@@ -413,6 +413,11 @@ impl OpenAIRequestBuilder {
                 }
             }
         }
+        if let Some(ref stop_sequences) = self.req.stop_sequences {
+            if !stop_sequences.is_empty() {
+                body["stop"] = json!(stop_sequences);
+            }
+        }
         if let Some(provider_options) = self.req.provider_options {
             if let Some(map) = provider_options.as_object() {
                 for (key, value) in map {
