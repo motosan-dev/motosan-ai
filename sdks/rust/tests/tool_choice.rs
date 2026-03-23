@@ -87,6 +87,7 @@ fn chat_request_serialization_includes_tool_choice_when_set() {
             name: "get_weather".to_string(),
             description: Some("Get weather".to_string()),
             input_schema: None,
+            cache: false,
         }])
         .tool_choice(ToolChoice::Tool {
             name: "get_weather".to_string(),

@@ -83,6 +83,8 @@ impl ChatResponseBuilder {
             usage: Usage {
                 input_tokens: 0,
                 output_tokens: 0,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
             },
             stop_reason: StopReason::Other,
         }
@@ -112,7 +114,19 @@ impl ChatResponseBuilder {
         self.usage = Usage {
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
         };
+        self
+    }
+
+    pub(crate) fn cache_usage(
+        mut self,
+        cache_creation_input_tokens: Option<u32>,
+        cache_read_input_tokens: Option<u32>,
+    ) -> Self {
+        self.usage.cache_creation_input_tokens = cache_creation_input_tokens;
+        self.usage.cache_read_input_tokens = cache_read_input_tokens;
         self
     }
 

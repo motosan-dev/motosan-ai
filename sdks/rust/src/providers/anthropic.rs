@@ -126,7 +126,7 @@ impl AnthropicRequestBuilder {
                 Role::User => {
                     if !message.content_blocks.is_empty() {
                         // Use structured content blocks (vision/multimodal)
-                        let blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
+                        let mut blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
                             match block {
                                 ContentBlock::Text { text } => json!({"type": "text", "text": text}),
                                 ContentBlock::Image { source } => match source {
@@ -141,7 +141,16 @@ impl AnthropicRequestBuilder {
                                 },
                             }
                         }).collect();
+                        // Apply cache_control to the last content block
+                        if message.cache {
+                            if let Some(last) = blocks.last_mut() {
+                                last["cache_control"] = json!({"type": "ephemeral"});
+                            }
+                        }
                         messages.push(json!({"role": "user", "content": blocks}));
+                    } else if message.cache {
+                        // Cached plain-text message: serialize as content block with cache_control
+                        messages.push(json!({"role": "user", "content": [{"type": "text", "text": message.content, "cache_control": {"type": "ephemeral"}}]}));
                     } else if self.oauth {
                         messages.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
                     } else {
@@ -150,7 +159,11 @@ impl AnthropicRequestBuilder {
                 }
                 Role::Assistant => {
                     if message.tool_calls.is_empty() {
-                        messages.push(json!({"role": "assistant", "content": message.content}));
+                        if message.cache {
+                            messages.push(json!({"role": "assistant", "content": [{"type": "text", "text": message.content, "cache_control": {"type": "ephemeral"}}]}));
+                        } else {
+                            messages.push(json!({"role": "assistant", "content": message.content}));
+                        }
                     } else {
                         let mut blocks = Vec::new();
                         if !message.content.is_empty() {
@@ -163,6 +176,11 @@ impl AnthropicRequestBuilder {
                                 "name": tool_call.name,
                                 "input": tool_call.input,
                             }));
+                        }
+                        if message.cache {
+                            if let Some(last) = blocks.last_mut() {
+                                last["cache_control"] = json!({"type": "ephemeral"});
+                            }
                         }
                         messages.push(json!({"role": "assistant", "content": blocks}));
                     }
@@ -199,7 +217,7 @@ impl AnthropicRequestBuilder {
             body["stream"] = json!(true);
         }
         if let Some(system_prompt) = system {
-            if self.oauth {
+            if self.oauth || self.req.system_cache {
                 body["system"] = json!([{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}]);
             } else {
                 body["system"] = json!(system_prompt);
@@ -223,11 +241,15 @@ impl AnthropicRequestBuilder {
             let mapped_tools: Vec<Value> = tools
                 .into_iter()
                 .map(|tool| {
-                    json!({
+                    let mut obj = json!({
                         "name": tool.name,
                         "description": tool.description.unwrap_or_default(),
                         "input_schema": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
-                    })
+                    });
+                    if tool.cache {
+                        obj["cache_control"] = json!({"type": "ephemeral"});
+                    }
+                    obj
                 })
                 .collect();
             if !mapped_tools.is_empty() {
@@ -402,16 +424,23 @@ impl ProviderImpl for AnthropicProvider {
             .unwrap_or(DEFAULT_ANTHROPIC_MODEL)
             .to_string();
 
-        let input_tokens = payload
-            .get("usage")
-            .and_then(|usage| usage.get("input_tokens"))
+        let usage_obj = payload.get("usage");
+        let input_tokens = usage_obj
+            .and_then(|u| u.get("input_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
-        let output_tokens = payload
-            .get("usage")
-            .and_then(|usage| usage.get("output_tokens"))
+        let output_tokens = usage_obj
+            .and_then(|u| u.get("output_tokens"))
             .and_then(Value::as_u64)
             .unwrap_or(0) as u32;
+        let cache_creation_input_tokens = usage_obj
+            .and_then(|u| u.get("cache_creation_input_tokens"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32);
+        let cache_read_input_tokens = usage_obj
+            .and_then(|u| u.get("cache_read_input_tokens"))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32);
 
         let stop_reason = match payload.get("stop_reason").and_then(Value::as_str) {
             Some("end_turn") => StopReason::EndTurn,
@@ -427,6 +456,7 @@ impl ProviderImpl for AnthropicProvider {
             .tool_calls(tool_calls)
             .model(model)
             .usage(input_tokens, output_tokens)
+            .cache_usage(cache_creation_input_tokens, cache_read_input_tokens)
             .stop_reason(stop_reason)
             .build())
     }
@@ -443,7 +473,7 @@ impl ProviderImpl for AnthropicProvider {
                         Role::System => sys_parts.push(message.content.clone()),
                         Role::User => {
                             if !message.content_blocks.is_empty() {
-                                let blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
+                                let mut blocks: Vec<Value> = message.content_blocks.iter().map(|block| {
                                     match block {
                                         ContentBlock::Text { text } => json!({"type": "text", "text": text}),
                                         ContentBlock::Image { source } => match source {
@@ -458,14 +488,27 @@ impl ProviderImpl for AnthropicProvider {
                                         },
                                     }
                                 }).collect();
+                                if message.cache {
+                                    if let Some(last) = blocks.last_mut() {
+                                        last["cache_control"] = json!({"type": "ephemeral"});
+                                    }
+                                }
                                 msgs.push(json!({"role": "user", "content": blocks}));
+                            } else if message.cache {
+                                msgs.push(json!({"role": "user", "content": [{"type": "text", "text": message.content, "cache_control": {"type": "ephemeral"}}]}));
                             } else {
                                 msgs.push(json!({"role": "user", "content": [{"type": "text", "text": message.content}]}));
                             }
                         }
                         Role::Assistant => {
                             if message.tool_calls.is_empty() {
-                                msgs.push(json!({"role": "assistant", "content": message.content}));
+                                if message.cache {
+                                    msgs.push(json!({"role": "assistant", "content": [{"type": "text", "text": message.content, "cache_control": {"type": "ephemeral"}}]}));
+                                } else {
+                                    msgs.push(
+                                        json!({"role": "assistant", "content": message.content}),
+                                    );
+                                }
                             } else {
                                 let mut blocks = Vec::new();
                                 if !message.content.is_empty() {
@@ -473,6 +516,11 @@ impl ProviderImpl for AnthropicProvider {
                                 }
                                 for tc in &message.tool_calls {
                                     blocks.push(json!({"type": "tool_use", "id": tc.id, "name": tc.name, "input": tc.input}));
+                                }
+                                if message.cache {
+                                    if let Some(last) = blocks.last_mut() {
+                                        last["cache_control"] = json!({"type": "ephemeral"});
+                                    }
                                 }
                                 msgs.push(json!({"role": "assistant", "content": blocks}));
                             }
@@ -520,11 +568,17 @@ impl ProviderImpl for AnthropicProvider {
                 });
             }
             if let Some(tools) = req.tools {
-                let mapped: Vec<Value> = tools.into_iter().map(|t| json!({
-                    "name": t.name,
-                    "description": t.description.unwrap_or_default(),
-                    "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
-                })).collect();
+                let mapped: Vec<Value> = tools.into_iter().map(|t| {
+                    let mut obj = json!({
+                        "name": t.name,
+                        "description": t.description.unwrap_or_default(),
+                        "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                    });
+                    if t.cache {
+                        obj["cache_control"] = json!({"type": "ephemeral"});
+                    }
+                    obj
+                }).collect();
                 if !mapped.is_empty() {
                     body["tools"] = json!(mapped);
                 }
@@ -686,10 +740,20 @@ impl Stream for AnthropicStreamAdapter {
                                     .and_then(Value::as_u64)
                                     .unwrap_or(0)
                                     as u32;
+                                let cache_creation = usage
+                                    .get("cache_creation_input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .map(|v| v as u32);
+                                let cache_read = usage
+                                    .get("cache_read_input_tokens")
+                                    .and_then(Value::as_u64)
+                                    .map(|v| v as u32);
                                 return Poll::Ready(Some(StreamEvent::usage(
                                     crate::types::Usage {
                                         input_tokens,
                                         output_tokens,
+                                        cache_creation_input_tokens: cache_creation,
+                                        cache_read_input_tokens: cache_read,
                                     },
                                 )));
                             }
@@ -711,6 +775,8 @@ impl Stream for AnthropicStreamAdapter {
                                     crate::types::Usage {
                                         input_tokens,
                                         output_tokens,
+                                        cache_creation_input_tokens: None,
+                                        cache_read_input_tokens: None,
                                     },
                                 )));
                             }

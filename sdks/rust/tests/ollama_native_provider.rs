@@ -129,6 +129,7 @@ async fn ollama_native_tool_calls_generates_id() {
             input_schema: Some(
                 json!({"type":"object","properties":{"location":{"type":"string"}}}),
             ),
+            cache: false,
         }])
         .build();
 
@@ -357,6 +358,7 @@ async fn ollama_native_stream_single_tool_call_emits_3_events() {
             input_schema: Some(
                 json!({"type": "object", "properties": {"city": {"type": "string"}}}),
             ),
+            cache: false,
         }])
         .build();
 

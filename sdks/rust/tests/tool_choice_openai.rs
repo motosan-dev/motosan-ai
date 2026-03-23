@@ -11,6 +11,7 @@ fn dummy_tool() -> Tool {
         name: "get_weather".to_string(),
         description: Some("Get weather info".to_string()),
         input_schema: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+        cache: false,
     }
 }
 
