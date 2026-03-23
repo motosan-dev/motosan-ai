@@ -7,6 +7,8 @@ use crate::error::MotosanError;
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
+#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
+use crate::types::ContentBlock;
 use crate::types::{ChatRequest, ChatResponse};
 #[cfg(any(
     feature = "anthropic",
@@ -213,6 +215,25 @@ pub(crate) async fn sleep_before_retry(
     };
 
     tokio::time::sleep(delay).await;
+}
+
+/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
+#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
+pub(crate) fn reject_document_blocks(
+    req: &ChatRequest,
+    provider_name: &str,
+) -> Result<(), MotosanError> {
+    for message in &req.messages {
+        for block in &message.content_blocks {
+            if matches!(block, ContentBlock::Document { .. }) {
+                return Err(MotosanError::UnsupportedFeature(format!(
+                    "Document content blocks (PDF) are not supported by the {} provider",
+                    provider_name
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "anthropic")]

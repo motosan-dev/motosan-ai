@@ -2,11 +2,13 @@ use crate::error::MotosanError;
 use crate::models::DEFAULT_MINIMAX_MODEL;
 use crate::providers::{
     extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
-    parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
+    parse_retry_after, reject_document_blocks, sleep_before_retry, ChatResponseBuilder,
+    ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, Role, StopReason, StreamEvent, ToolCall};
+
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures_core::Stream;
@@ -330,6 +332,7 @@ impl MinimaxRequestBuilder {
 #[async_trait]
 impl ProviderImpl for MinimaxProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        reject_document_blocks(&req, "MiniMax")?;
         let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone()).build();
         let mut attempt = 0;
@@ -449,6 +452,7 @@ impl ProviderImpl for MinimaxProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        reject_document_blocks(&req, "MiniMax")?;
         let expose_reasoning = self.resolve_expose_reasoning(&req);
         let body = MinimaxRequestBuilder::new(req, self.model.clone())
             .stream(true)

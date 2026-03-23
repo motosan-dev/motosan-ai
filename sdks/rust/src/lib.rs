@@ -27,7 +27,7 @@ pub use retry::RetryPolicy;
 pub use stream::collect_stream;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{
-    ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, ImageSource, McpServerConfig,
-    McpServerType, Message, Role, StopReason, StreamEventType, ThinkingConfig, Tool, ToolCall,
-    ToolChoice, Usage,
+    ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, DocumentSource, ImageSource,
+    McpServerConfig, McpServerType, Message, Role, StopReason, StreamEventType, ThinkingConfig,
+    Tool, ToolCall, ToolChoice, Usage,
 };

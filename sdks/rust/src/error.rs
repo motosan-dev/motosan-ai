@@ -16,4 +16,6 @@ pub enum MotosanError {
     Network(String),
     #[error("stream error: {0}")]
     Stream(String),
+    #[error("unsupported feature: {0}")]
+    UnsupportedFeature(String),
 }
