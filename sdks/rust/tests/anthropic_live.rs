@@ -172,6 +172,7 @@ async fn live_tool_use_single_turn() {
                 "properties": {"city": {"type": "string", "description": "City name"}},
                 "required": ["city"]
             })),
+            cache: false,
         }])
         .build();
 
@@ -208,6 +209,7 @@ async fn live_tool_use_multi_turn() {
             "properties": {"city": {"type": "string"}},
             "required": ["city"]
         })),
+        cache: false,
     }];
 
     // Turn 1: model calls tool
@@ -270,6 +272,7 @@ async fn live_stream_tool_use() {
                 "properties": {"expression": {"type": "string", "description": "Math expression"}},
                 "required": ["expression"]
             })),
+            cache: false,
         }])
         .build();
 

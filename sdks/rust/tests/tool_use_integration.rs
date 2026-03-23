@@ -41,6 +41,7 @@ async fn anthropic_serializes_tools_and_extracts_tool_use() {
             name: "get_weather".to_string(),
             description: Some("Get weather by city".to_string()),
             input_schema: Some(json!({"type":"object","properties":{"city":{"type":"string"}}})),
+            cache: false,
         }])
         .build();
 
@@ -95,6 +96,7 @@ async fn openai_serializes_tools_and_extracts_tool_calls() {
             name: "get_weather".to_string(),
             description: Some("Get weather by city".to_string()),
             input_schema: Some(json!({"type":"object","properties":{"city":{"type":"string"}}})),
+            cache: false,
         }])
         .build();
 
@@ -150,6 +152,7 @@ async fn minimax_serializes_tools_and_extracts_tool_calls() {
             name: "get_weather".to_string(),
             description: Some("Get weather by city".to_string()),
             input_schema: Some(json!({"type":"object","properties":{"city":{"type":"string"}}})),
+            cache: false,
         }])
         .build();
 
@@ -199,6 +202,7 @@ async fn anthropic_multi_turn_tool_use_roundtrip() {
                     input_schema: Some(
                         json!({"type":"object","properties":{"city":{"type":"string"}}}),
                     ),
+                    cache: false,
                 }])
                 .build(),
         )
@@ -289,6 +293,7 @@ async fn openai_multi_turn_tool_use_roundtrip() {
                     input_schema: Some(
                         json!({"type":"object","properties":{"city":{"type":"string"}}}),
                     ),
+                    cache: false,
                 }])
                 .build(),
         )
@@ -382,6 +387,7 @@ async fn minimax_multi_turn_tool_use_roundtrip() {
                     input_schema: Some(
                         json!({"type":"object","properties":{"city":{"type":"string"}}}),
                     ),
+                    cache: false,
                 }])
                 .build(),
         )

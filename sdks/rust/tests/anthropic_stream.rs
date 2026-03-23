@@ -295,6 +295,7 @@ async fn anthropic_stream_emits_tool_use_events() {
             input_schema: Some(
                 json!({"type": "object", "properties": {"city": {"type": "string"}}}),
             ),
+            cache: false,
         }])
         .build();
 

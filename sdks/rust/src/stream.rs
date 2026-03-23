@@ -36,6 +36,8 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut current_tc_args = String::new();
     let mut input_tokens: u32 = 0;
     let mut output_tokens: u32 = 0;
+    let mut cache_creation_input_tokens: Option<u32> = None;
+    let mut cache_read_input_tokens: Option<u32> = None;
 
     while let Some(event) = stream.next().await {
         if event.done {
@@ -49,6 +51,12 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
                 if let Some(ref usage) = event.usage {
                     input_tokens += usage.input_tokens;
                     output_tokens += usage.output_tokens;
+                    if let Some(v) = usage.cache_creation_input_tokens {
+                        *cache_creation_input_tokens.get_or_insert(0) += v;
+                    }
+                    if let Some(v) = usage.cache_read_input_tokens {
+                        *cache_read_input_tokens.get_or_insert(0) += v;
+                    }
                 }
             }
             StreamEventType::ToolCallStart => {
@@ -87,6 +95,8 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         usage: Usage {
             input_tokens,
             output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
         },
         stop_reason,
         tool_calls,

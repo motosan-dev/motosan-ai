@@ -10,6 +10,7 @@ impl From<ToolDef> for Tool {
             name: def.name,
             description: Some(def.description),
             input_schema: Some(def.input_schema),
+            cache: false,
         }
     }
 }
@@ -56,6 +57,7 @@ mod tests {
             name: "search".into(),
             description: None,
             input_schema: None,
+            cache: false,
         };
 
         let def: ToolDef = tool.into();
@@ -73,6 +75,7 @@ mod tests {
             input_schema: Some(
                 json!({"type": "object", "properties": {"expr": {"type": "string"}}}),
             ),
+            cache: false,
         };
 
         let def: ToolDef = tool.into();

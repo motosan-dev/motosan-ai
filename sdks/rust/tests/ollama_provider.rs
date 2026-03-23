@@ -120,6 +120,7 @@ async fn ollama_chat_with_tool_calls() {
             name: "get_weather".to_string(),
             description: Some("Get weather by city".to_string()),
             input_schema: Some(json!({"type":"object","properties":{"city":{"type":"string"}}})),
+            cache: false,
         }])
         .build();
 

@@ -387,6 +387,7 @@ async fn openai_stream_emits_tool_call_events() {
             input_schema: Some(
                 json!({"type": "object", "properties": {"city": {"type": "string"}}}),
             ),
+            cache: false,
         }])
         .build();
 

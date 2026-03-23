@@ -44,6 +44,11 @@ pub struct Message {
     pub content_blocks: Vec<ContentBlock>,
     pub tool_call_id: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    /// When `true`, the provider may apply prompt caching to this message's
+    /// content (Anthropic `cache_control`).  Non-Anthropic providers silently
+    /// ignore this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache: bool,
 }
 
 impl Message {
@@ -54,6 +59,19 @@ impl Message {
             content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
+            cache: false,
+        }
+    }
+
+    /// Create a user message and mark it as cacheable (Anthropic prompt caching).
+    pub fn user_with_cache(content: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: content.into(),
+            content_blocks: vec![],
+            tool_call_id: None,
+            tool_calls: Vec::new(),
+            cache: true,
         }
     }
 
@@ -64,6 +82,7 @@ impl Message {
             content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
+            cache: false,
         }
     }
 
@@ -77,6 +96,7 @@ impl Message {
             content_blocks: vec![],
             tool_call_id: None,
             tool_calls,
+            cache: false,
         }
     }
 
@@ -87,6 +107,7 @@ impl Message {
             content_blocks: vec![],
             tool_call_id: None,
             tool_calls: Vec::new(),
+            cache: false,
         }
     }
 
@@ -101,6 +122,7 @@ impl Message {
             content_blocks: vec![],
             tool_call_id: Some(tool_call_id.into()),
             tool_calls: Vec::new(),
+            cache: false,
         }
     }
 
@@ -122,6 +144,7 @@ impl Message {
             ],
             tool_call_id: None,
             tool_calls: vec![],
+            cache: false,
         }
     }
 
@@ -142,7 +165,16 @@ impl Message {
             content_blocks: blocks,
             tool_call_id: None,
             tool_calls: vec![],
+            cache: false,
         }
+    }
+
+    /// Mark this message's content as cacheable (Anthropic prompt caching).
+    ///
+    /// Non-Anthropic providers silently ignore this flag.
+    pub fn with_cache(mut self) -> Self {
+        self.cache = true;
+        self
     }
 
     /// Create a user message with a PDF document (base64-encoded).
@@ -166,6 +198,7 @@ impl Message {
             ],
             tool_call_id: None,
             tool_calls: vec![],
+            cache: false,
         }
     }
 
@@ -189,6 +222,7 @@ impl Message {
             ],
             tool_call_id: None,
             tool_calls: vec![],
+            cache: false,
         }
     }
 
@@ -207,6 +241,10 @@ pub struct Tool {
     pub name: String,
     pub description: Option<String>,
     pub input_schema: Option<Value>,
+    /// When `true`, the Anthropic provider will attach `cache_control` to this
+    /// tool definition.  Non-Anthropic providers silently ignore this flag.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cache: bool,
 }
 
 /// Server-side MCP server transport type.
@@ -236,6 +274,10 @@ pub struct ChatRequest {
     pub messages: Vec<Message>,
     pub model: Option<String>,
     pub system: Option<String>,
+    /// When `true`, the Anthropic provider serializes the system prompt with
+    /// `cache_control: { type: "ephemeral" }`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub system_cache: bool,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub tools: Option<Vec<Tool>>,
@@ -261,6 +303,7 @@ pub struct ChatRequestBuilder {
     messages: Vec<Message>,
     model: Option<String>,
     system: Option<String>,
+    system_cache: bool,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
     tools: Option<Vec<Tool>>,
@@ -292,6 +335,17 @@ impl ChatRequestBuilder {
         self
     }
 
+    /// Set the system prompt and mark it as cacheable (Anthropic prompt caching).
+    ///
+    /// When sent to Anthropic, the system prompt will be serialized as a content
+    /// block with `cache_control: { type: "ephemeral" }`.  Non-Anthropic
+    /// providers silently ignore the caching hint.
+    pub fn system_cached(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(system.into());
+        self.system_cache = true;
+        self
+    }
+
     pub fn temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
         self
@@ -303,6 +357,20 @@ impl ChatRequestBuilder {
     }
 
     pub fn tools(mut self, tools: Vec<Tool>) -> Self {
+        self.tools = Some(tools);
+        self
+    }
+
+    /// Set the tools and mark the last tool as cacheable (Anthropic prompt
+    /// caching).
+    ///
+    /// Per the Anthropic API, `cache_control` is placed on the **last** tool in
+    /// the list so that the entire tools array is covered by a single cache
+    /// breakpoint.  Non-Anthropic providers silently ignore the caching hint.
+    pub fn tools_cached(mut self, mut tools: Vec<Tool>) -> Self {
+        if let Some(last) = tools.last_mut() {
+            last.cache = true;
+        }
         self.tools = Some(tools);
         self
     }
@@ -363,6 +431,7 @@ impl ChatRequestBuilder {
             messages: self.messages,
             model: self.model,
             system: self.system,
+            system_cache: self.system_cache,
             temperature: self.temperature,
             max_tokens: self.max_tokens,
             tools: self.tools,
@@ -398,6 +467,12 @@ pub struct ToolCall {
 pub struct Usage {
     pub input_tokens: u32,
     pub output_tokens: u32,
+    /// Tokens written to the prompt cache (Anthropic only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_tokens: Option<u32>,
+    /// Tokens read from the prompt cache (Anthropic only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
