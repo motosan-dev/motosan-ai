@@ -7,6 +7,7 @@ use motosan_ai::{
     ChatRequest, McpServerConfig, McpServerType, McpToolConfig, Message, DEFAULT_ANTHROPIC_MODEL,
 };
 use serde_json::json;
+use tokio_stream::StreamExt;
 
 #[tokio::test]
 async fn anthropic_request_includes_mcp_servers_and_toolset() {
@@ -280,4 +281,126 @@ async fn mcp_tool_configs_replaces_auto_generated() {
             denied_tools: vec!["dangerous_tool".to_string()],
         }
     );
+}
+
+/// When both OAuth (setup token) and MCP servers are active, a single merged
+/// `anthropic-beta` header must be sent containing both `oauth-2025-04-20`
+/// and `mcp-client-2025-11-20`.
+#[tokio::test]
+async fn oauth_plus_mcp_sends_single_merged_beta_header() {
+    let mut server = mockito::Server::new_async().await;
+
+    // OAuth chat() delegates to stream(), so mock must return SSE format.
+    let sse_body = [
+        "event: message_start",
+        &format!(
+            "data: {}",
+            json!({
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": DEFAULT_ANTHROPIC_MODEL,
+                    "usage": {"input_tokens": 5, "output_tokens": 0}
+                }
+            })
+        ),
+        "",
+        "event: content_block_delta",
+        &format!(
+            "data: {}",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "merged"}})
+        ),
+        "",
+        "event: message_delta",
+        &format!(
+            "data: {}",
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}})
+        ),
+        "",
+        "event: message_stop",
+        &format!("data: {}", json!({"type": "message_stop"})),
+        "",
+    ]
+    .join("\n");
+
+    // Expect exactly ONE anthropic-beta header that contains BOTH betas.
+    let expected_beta =
+        "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,mcp-client-2025-11-20";
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("authorization", "Bearer sk-ant-oat01-mcp-oauth-test")
+        .match_header("anthropic-beta", expected_beta)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("sk-ant-oat01-mcp-oauth-test", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .mcp_server(McpServerConfig {
+            kind: McpServerType::Url,
+            url: "https://mcp.example.com/sse".to_string(),
+            name: "linear".to_string(),
+            authorization_token: None,
+        })
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "merged");
+    mock.assert_async().await;
+}
+
+/// Stream path with OAuth + MCP also sends a single merged beta header.
+#[tokio::test]
+async fn oauth_plus_mcp_stream_sends_single_merged_beta_header() {
+    let mut server = mockito::Server::new_async().await;
+
+    let sse_body = [
+        "event: content_block_delta",
+        &format!(
+            "data: {}",
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "streamed"}})
+        ),
+        "",
+        "event: message_stop",
+        &format!("data: {}", json!({"type": "message_stop"})),
+        "",
+    ]
+    .join("\n");
+
+    let expected_beta =
+        "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14,mcp-client-2025-11-20";
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("authorization", "Bearer sk-ant-oat01-stream-mcp-test")
+        .match_header("anthropic-beta", expected_beta)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("sk-ant-oat01-stream-mcp-test", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .mcp_server(McpServerConfig {
+            kind: McpServerType::Url,
+            url: "https://mcp.example.com/sse".to_string(),
+            name: "linear".to_string(),
+            authorization_token: None,
+        })
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream");
+    let mut text = String::new();
+    while let Some(event) = stream.next().await {
+        text.push_str(&event.content);
+    }
+    assert_eq!(text, "streamed");
+    mock.assert_async().await;
 }
