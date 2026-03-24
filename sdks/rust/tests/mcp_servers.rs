@@ -3,15 +3,18 @@
 use mockito::Matcher;
 use motosan_ai::providers::anthropic::AnthropicProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, McpServerConfig, McpServerType, Message, DEFAULT_ANTHROPIC_MODEL};
+use motosan_ai::{
+    ChatRequest, McpServerConfig, McpServerType, McpToolConfig, Message, DEFAULT_ANTHROPIC_MODEL,
+};
 use serde_json::json;
 
 #[tokio::test]
-async fn anthropic_request_includes_mcp_servers() {
+async fn anthropic_request_includes_mcp_servers_and_toolset() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
         .mock("POST", "/v1/messages")
         .match_header("x-api-key", "test-key")
+        .match_header("anthropic-beta", "mcp-client-2025-11-20")
         .match_body(Matcher::Regex(
             r#""mcp_servers".*"type"\s*:\s*"url""#.to_string(),
         ))
@@ -19,6 +22,10 @@ async fn anthropic_request_includes_mcp_servers() {
             r#""url"\s*:\s*"https://mcp\.example\.com/sse""#.to_string(),
         ))
         .match_body(Matcher::Regex(r#""name"\s*:\s*"linear""#.to_string()))
+        .match_body(Matcher::Regex(r#""type"\s*:\s*"mcp_toolset""#.to_string()))
+        .match_body(Matcher::Regex(
+            r#""server_label"\s*:\s*"linear""#.to_string(),
+        ))
         .with_status(200)
         .with_body(
             json!({
@@ -88,6 +95,7 @@ async fn chat_request_without_mcp_servers_omits_field() {
 
     let serialized = serde_json::to_value(&request).unwrap();
     assert!(serialized.get("mcp_servers").is_none());
+    assert!(serialized.get("mcp_tool_configs").is_none());
 }
 
 #[tokio::test]
@@ -112,6 +120,22 @@ async fn chat_request_builder_mcp_server_accumulates() {
     assert_eq!(servers.len(), 2);
     assert_eq!(servers[0].name, "server1");
     assert_eq!(servers[1].name, "server2");
+
+    // Auto-populated mcp_tool_configs
+    let configs = request.mcp_tool_configs.as_ref().unwrap();
+    assert_eq!(configs.len(), 2);
+    assert_eq!(
+        configs[0],
+        McpToolConfig::All {
+            mcp_server_name: "server1".to_string()
+        }
+    );
+    assert_eq!(
+        configs[1],
+        McpToolConfig::All {
+            mcp_server_name: "server2".to_string()
+        }
+    );
 }
 
 #[tokio::test]
@@ -135,4 +159,125 @@ async fn chat_request_builder_mcp_servers_replaces() {
     let servers = request.mcp_servers.as_ref().unwrap();
     assert_eq!(servers.len(), 1);
     assert_eq!(servers[0].name, "new");
+
+    // mcp_tool_configs also replaced
+    let configs = request.mcp_tool_configs.as_ref().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0],
+        McpToolConfig::All {
+            mcp_server_name: "new".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn mcp_tool_config_allowed_mode() {
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .mcp_server(McpServerConfig {
+            kind: McpServerType::Url,
+            url: "https://mcp.example.com/sse".to_string(),
+            name: "linear".to_string(),
+            authorization_token: None,
+        })
+        .mcp_tool_config(McpToolConfig::Allowed {
+            mcp_server_name: "linear".to_string(),
+            allowed_tools: vec!["list_issues".to_string(), "create_issue".to_string()],
+        })
+        .build();
+
+    let configs = request.mcp_tool_configs.as_ref().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0],
+        McpToolConfig::Allowed {
+            mcp_server_name: "linear".to_string(),
+            allowed_tools: vec!["list_issues".to_string(), "create_issue".to_string()],
+        }
+    );
+}
+
+#[tokio::test]
+async fn mcp_tool_config_denied_mode() {
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .mcp_server(McpServerConfig {
+            kind: McpServerType::Url,
+            url: "https://mcp.example.com/sse".to_string(),
+            name: "linear".to_string(),
+            authorization_token: None,
+        })
+        .mcp_tool_config(McpToolConfig::Denied {
+            mcp_server_name: "linear".to_string(),
+            denied_tools: vec!["delete_issue".to_string()],
+        })
+        .build();
+
+    let configs = request.mcp_tool_configs.as_ref().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0],
+        McpToolConfig::Denied {
+            mcp_server_name: "linear".to_string(),
+            denied_tools: vec!["delete_issue".to_string()],
+        }
+    );
+}
+
+#[tokio::test]
+async fn no_beta_header_without_mcp() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .match_header("anthropic-beta", Matcher::Missing)
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn mcp_tool_configs_replaces_auto_generated() {
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .mcp_server(McpServerConfig {
+            kind: McpServerType::Url,
+            url: "https://mcp.example.com/sse".to_string(),
+            name: "linear".to_string(),
+            authorization_token: None,
+        })
+        .mcp_tool_configs(vec![McpToolConfig::Denied {
+            mcp_server_name: "linear".to_string(),
+            denied_tools: vec!["dangerous_tool".to_string()],
+        }])
+        .build();
+
+    let configs = request.mcp_tool_configs.as_ref().unwrap();
+    assert_eq!(configs.len(), 1);
+    assert_eq!(
+        configs[0],
+        McpToolConfig::Denied {
+            mcp_server_name: "linear".to_string(),
+            denied_tools: vec!["dangerous_tool".to_string()],
+        }
+    );
 }
