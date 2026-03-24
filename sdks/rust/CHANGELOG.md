@@ -2,6 +2,13 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.5.1] - 2026-03-24
+
+### Fixed
+- Merge `anthropic-beta` headers into a single header when OAuth + MCP are both active (#149).
+- `has_mcp` now checks both `mcp_servers` and `mcp_tool_configs` (#150).
+- `mcp_toolset` serialization uses `mcp_server_name` instead of `server_label` (#153).
+
 ## [0.5.0] - 2026-03-24
 
 ### Added
