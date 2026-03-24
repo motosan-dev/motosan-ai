@@ -60,10 +60,6 @@ impl AnthropicProvider {
         if Self::is_setup_token(&self.api_key) {
             request
                 .header("authorization", format!("Bearer {}", self.api_key))
-                .header(
-                    "anthropic-beta",
-                    "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14",
-                )
                 .header("user-agent", "claude-code/1.0.33")
                 .header("x-app", "cli")
         } else {
@@ -71,14 +67,32 @@ impl AnthropicProvider {
         }
     }
 
+    fn build_beta_header(has_mcp: bool, is_oauth: bool) -> Option<String> {
+        let mut betas = vec![];
+        if is_oauth {
+            betas.push("claude-code-20250219");
+            betas.push("oauth-2025-04-20");
+            betas.push("fine-grained-tool-streaming-2025-05-14");
+            betas.push("interleaved-thinking-2025-05-14");
+        }
+        if has_mcp {
+            betas.push("mcp-client-2025-11-20");
+        }
+        if betas.is_empty() {
+            None
+        } else {
+            Some(betas.join(","))
+        }
+    }
+
     fn apply_beta_header(
         request: reqwest::RequestBuilder,
         has_mcp: bool,
+        is_oauth: bool,
     ) -> reqwest::RequestBuilder {
-        if has_mcp {
-            request.header("anthropic-beta", "mcp-client-2025-11-20")
-        } else {
-            request
+        match Self::build_beta_header(has_mcp, is_oauth) {
+            Some(header) => request.header("anthropic-beta", header),
+            None => request,
         }
     }
 
@@ -413,7 +427,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
-            let request = Self::apply_beta_header(request, has_mcp);
+            let request = Self::apply_beta_header(request, has_mcp, is_oauth);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
@@ -742,7 +756,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
-            let request = Self::apply_beta_header(request, has_mcp);
+            let request = Self::apply_beta_header(request, has_mcp, is_oauth);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
