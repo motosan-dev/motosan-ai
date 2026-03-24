@@ -25,7 +25,7 @@ async fn anthropic_request_includes_mcp_servers_and_toolset() {
         .match_body(Matcher::Regex(r#""name"\s*:\s*"linear""#.to_string()))
         .match_body(Matcher::Regex(r#""type"\s*:\s*"mcp_toolset""#.to_string()))
         .match_body(Matcher::Regex(
-            r#""server_label"\s*:\s*"linear""#.to_string(),
+            r#""mcp_server_name"\s*:\s*"linear""#.to_string(),
         ))
         .with_status(200)
         .with_body(
