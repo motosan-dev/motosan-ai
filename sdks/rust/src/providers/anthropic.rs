@@ -402,7 +402,8 @@ impl ProviderImpl for AnthropicProvider {
             return Ok(response);
         }
 
-        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty());
+        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty())
+            || req.mcp_tool_configs.as_ref().is_some_and(|c| !c.is_empty());
         let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth).build();
         let mut attempt = 0;
         let payload: Value;
@@ -550,7 +551,8 @@ impl ProviderImpl for AnthropicProvider {
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
         let is_oauth = Self::is_setup_token(&self.api_key);
-        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty());
+        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty())
+            || req.mcp_tool_configs.as_ref().is_some_and(|c| !c.is_empty());
         let body = if is_oauth {
             // OAuth: build body manually with system as array of blocks
             let (messages, extracted_system) = {
