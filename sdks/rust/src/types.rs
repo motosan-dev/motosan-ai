@@ -302,6 +302,26 @@ pub struct McpServerConfig {
     pub authorization_token: Option<String>,
 }
 
+/// Controls which tools from an MCP server are available to the model.
+///
+/// Serialized as `{ "type": "mcp_toolset", "server_label": "...", ... }` in the
+/// Anthropic `tools` array (API version `mcp-client-2025-11-20`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum McpToolConfig {
+    /// Expose all tools from the named MCP server.
+    All { mcp_server_name: String },
+    /// Expose only the listed tools from the named MCP server.
+    Allowed {
+        mcp_server_name: String,
+        allowed_tools: Vec<String>,
+    },
+    /// Expose all tools except the listed ones from the named MCP server.
+    Denied {
+        mcp_server_name: String,
+        denied_tools: Vec<String>,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatRequest {
     pub messages: Vec<Message>,
@@ -326,6 +346,13 @@ pub struct ChatRequest {
     pub provider_options: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp_servers: Option<Vec<McpServerConfig>>,
+    /// Per-server tool filtering for server-side MCP.
+    ///
+    /// Each entry becomes a `{ "type": "mcp_toolset", ... }` item in the
+    /// Anthropic `tools` array.  When `mcp_servers` is set but this field is
+    /// `None`, the builder auto-populates an `All` entry for every server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_configs: Option<Vec<McpToolConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -351,6 +378,7 @@ pub struct ChatRequestBuilder {
     tool_choice: Option<ToolChoice>,
     provider_options: Option<Value>,
     mcp_servers: Option<Vec<McpServerConfig>>,
+    mcp_tool_configs: Option<Vec<McpToolConfig>>,
     thinking: Option<ThinkingConfig>,
     stop_sequences: Option<Vec<String>>,
 }
@@ -454,14 +482,71 @@ impl ChatRequestBuilder {
     }
 
     /// Add a single server-side MCP server configuration.
+    ///
+    /// Also auto-adds a [`McpToolConfig::All`] entry so that all tools from
+    /// the server are exposed by default.  Use [`mcp_tool_config`] afterwards
+    /// to override with allowed/denied lists.
     pub fn mcp_server(mut self, server: McpServerConfig) -> Self {
+        self.mcp_tool_configs
+            .get_or_insert_with(Vec::new)
+            .push(McpToolConfig::All {
+                mcp_server_name: server.name.clone(),
+            });
         self.mcp_servers.get_or_insert_with(Vec::new).push(server);
         self
     }
 
     /// Set the full list of server-side MCP server configurations.
+    ///
+    /// Also auto-populates [`McpToolConfig::All`] entries for each server.
+    /// Use [`mcp_tool_config`] or [`mcp_tool_configs`] afterwards to override.
     pub fn mcp_servers(mut self, servers: Vec<McpServerConfig>) -> Self {
+        self.mcp_tool_configs = Some(
+            servers
+                .iter()
+                .map(|s| McpToolConfig::All {
+                    mcp_server_name: s.name.clone(),
+                })
+                .collect(),
+        );
         self.mcp_servers = Some(servers);
+        self
+    }
+
+    /// Add a single MCP tool configuration, overriding the auto-generated
+    /// `All` entry for the same server name (if any).
+    pub fn mcp_tool_config(mut self, config: McpToolConfig) -> Self {
+        let name = match &config {
+            McpToolConfig::All { mcp_server_name }
+            | McpToolConfig::Allowed {
+                mcp_server_name, ..
+            }
+            | McpToolConfig::Denied {
+                mcp_server_name, ..
+            } => mcp_server_name.clone(),
+        };
+        let configs = self.mcp_tool_configs.get_or_insert_with(Vec::new);
+        // Replace existing entry for same server name
+        if let Some(pos) = configs.iter().position(|c| match c {
+            McpToolConfig::All { mcp_server_name }
+            | McpToolConfig::Allowed {
+                mcp_server_name, ..
+            }
+            | McpToolConfig::Denied {
+                mcp_server_name, ..
+            } => *mcp_server_name == name,
+        }) {
+            configs[pos] = config;
+        } else {
+            configs.push(config);
+        }
+        self
+    }
+
+    /// Set the full list of MCP tool configurations, replacing any previously
+    /// added (including auto-generated ones).
+    pub fn mcp_tool_configs(mut self, configs: Vec<McpToolConfig>) -> Self {
+        self.mcp_tool_configs = Some(configs);
         self
     }
 
@@ -501,6 +586,7 @@ impl ChatRequestBuilder {
             tool_choice: self.tool_choice,
             provider_options: self.provider_options,
             mcp_servers: self.mcp_servers,
+            mcp_tool_configs: self.mcp_tool_configs,
             thinking: self.thinking,
             stop_sequences: self.stop_sequences,
         }

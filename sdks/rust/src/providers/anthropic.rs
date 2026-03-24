@@ -9,8 +9,8 @@ use crate::providers::{
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, Role, StopReason,
-    StreamEvent, SystemBlock, ToolCall, ToolChoice,
+    ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, McpToolConfig, Role,
+    StopReason, StreamEvent, SystemBlock, ToolCall, ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -71,6 +71,17 @@ impl AnthropicProvider {
         }
     }
 
+    fn apply_beta_header(
+        request: reqwest::RequestBuilder,
+        has_mcp: bool,
+    ) -> reqwest::RequestBuilder {
+        if has_mcp {
+            request.header("anthropic-beta", "mcp-client-2025-11-20")
+        } else {
+            request
+        }
+    }
+
     fn with_auth_hint(status_code: u16, message: String, is_setup_token: bool) -> String {
         if status_code != 401 {
             return message;
@@ -128,6 +139,32 @@ fn serialize_system_blocks(blocks: &[SystemBlock]) -> Value {
         })
         .collect();
     json!(arr)
+}
+
+/// Serialize a [`McpToolConfig`] to the Anthropic `mcp_toolset` JSON format.
+fn serialize_mcp_tool_config(config: &McpToolConfig) -> Value {
+    match config {
+        McpToolConfig::All { mcp_server_name } => json!({
+            "type": "mcp_toolset",
+            "server_label": mcp_server_name,
+        }),
+        McpToolConfig::Allowed {
+            mcp_server_name,
+            allowed_tools,
+        } => json!({
+            "type": "mcp_toolset",
+            "server_label": mcp_server_name,
+            "allowed_tools": allowed_tools,
+        }),
+        McpToolConfig::Denied {
+            mcp_server_name,
+            denied_tools,
+        } => json!({
+            "type": "mcp_toolset",
+            "server_label": mcp_server_name,
+            "denied_tools": denied_tools,
+        }),
+    }
 }
 
 struct AnthropicRequestBuilder {
@@ -274,10 +311,10 @@ impl AnthropicRequestBuilder {
                 "budget_tokens": thinking.budget_tokens,
             });
         }
-        if let Some(tools) = self.req.tools {
-            let mapped_tools: Vec<Value> = tools
-                .into_iter()
-                .map(|tool| {
+        {
+            let mut all_tools: Vec<Value> = Vec::new();
+            if let Some(tools) = self.req.tools {
+                for tool in tools {
                     let mut obj = json!({
                         "name": tool.name,
                         "description": tool.description.unwrap_or_default(),
@@ -286,11 +323,16 @@ impl AnthropicRequestBuilder {
                     if tool.cache {
                         obj["cache_control"] = json!({"type": "ephemeral"});
                     }
-                    obj
-                })
-                .collect();
-            if !mapped_tools.is_empty() {
-                body["tools"] = json!(mapped_tools);
+                    all_tools.push(obj);
+                }
+            }
+            if let Some(ref mcp_tool_configs) = self.req.mcp_tool_configs {
+                for config in mcp_tool_configs {
+                    all_tools.push(serialize_mcp_tool_config(config));
+                }
+            }
+            if !all_tools.is_empty() {
+                body["tools"] = json!(all_tools);
             }
         }
         if let Some(tool_choice) = &self.req.tool_choice {
@@ -360,6 +402,7 @@ impl ProviderImpl for AnthropicProvider {
             return Ok(response);
         }
 
+        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty());
         let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth).build();
         let mut attempt = 0;
         let payload: Value;
@@ -369,6 +412,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
+            let request = Self::apply_beta_header(request, has_mcp);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
@@ -506,6 +550,7 @@ impl ProviderImpl for AnthropicProvider {
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
         let is_oauth = Self::is_setup_token(&self.api_key);
+        let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty());
         let body = if is_oauth {
             // OAuth: build body manually with system as array of blocks
             let (messages, extracted_system) = {
@@ -611,20 +656,28 @@ impl ProviderImpl for AnthropicProvider {
                     "budget_tokens": thinking.budget_tokens,
                 });
             }
-            if let Some(tools) = req.tools {
-                let mapped: Vec<Value> = tools.into_iter().map(|t| {
-                    let mut obj = json!({
-                        "name": t.name,
-                        "description": t.description.unwrap_or_default(),
-                        "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
-                    });
-                    if t.cache {
-                        obj["cache_control"] = json!({"type": "ephemeral"});
+            {
+                let mut all_tools: Vec<Value> = Vec::new();
+                if let Some(tools) = req.tools {
+                    for t in tools {
+                        let mut obj = json!({
+                            "name": t.name,
+                            "description": t.description.unwrap_or_default(),
+                            "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                        });
+                        if t.cache {
+                            obj["cache_control"] = json!({"type": "ephemeral"});
+                        }
+                        all_tools.push(obj);
                     }
-                    obj
-                }).collect();
-                if !mapped.is_empty() {
-                    body["tools"] = json!(mapped);
+                }
+                if let Some(ref mcp_tool_configs) = req.mcp_tool_configs {
+                    for config in mcp_tool_configs {
+                        all_tools.push(serialize_mcp_tool_config(config));
+                    }
+                }
+                if !all_tools.is_empty() {
+                    body["tools"] = json!(all_tools);
                 }
             }
             if let Some(tool_choice) = &req.tool_choice {
@@ -687,6 +740,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
+            let request = Self::apply_beta_header(request, has_mcp);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
