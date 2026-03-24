@@ -283,6 +283,55 @@ async fn mcp_tool_configs_replaces_auto_generated() {
     );
 }
 
+/// Direct `ChatRequest` construction with only `mcp_tool_configs` (no `mcp_servers`)
+/// must still trigger the beta header.
+#[tokio::test]
+async fn beta_header_sent_when_only_mcp_tool_configs_present() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .match_header("anthropic-beta", "mcp-client-2025-11-20")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+
+    // Construct ChatRequest directly (bypassing builder) with only mcp_tool_configs
+    let request = ChatRequest {
+        messages: vec![Message::user("hello")],
+        model: None,
+        system: None,
+        system_blocks: None,
+        system_cache: false,
+        temperature: None,
+        max_tokens: None,
+        tools: None,
+        tool_choice: None,
+        provider_options: None,
+        mcp_servers: None,
+        mcp_tool_configs: Some(vec![McpToolConfig::All {
+            mcp_server_name: "linear".to_string(),
+        }]),
+        thinking: None,
+        stop_sequences: None,
+    };
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
 /// When both OAuth (setup token) and MCP servers are active, a single merged
 /// `anthropic-beta` header must be sent containing both `oauth-2025-04-20`
 /// and `mcp-client-2025-11-20`.
