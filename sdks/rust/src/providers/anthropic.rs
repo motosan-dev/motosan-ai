@@ -160,14 +160,14 @@ fn serialize_mcp_tool_config(config: &McpToolConfig) -> Value {
     match config {
         McpToolConfig::All { mcp_server_name } => json!({
             "type": "mcp_toolset",
-            "server_label": mcp_server_name,
+            "mcp_server_name": mcp_server_name,
         }),
         McpToolConfig::Allowed {
             mcp_server_name,
             allowed_tools,
         } => json!({
             "type": "mcp_toolset",
-            "server_label": mcp_server_name,
+            "mcp_server_name": mcp_server_name,
             "allowed_tools": allowed_tools,
         }),
         McpToolConfig::Denied {
@@ -175,7 +175,7 @@ fn serialize_mcp_tool_config(config: &McpToolConfig) -> Value {
             denied_tools,
         } => json!({
             "type": "mcp_toolset",
-            "server_label": mcp_server_name,
+            "mcp_server_name": mcp_server_name,
             "denied_tools": denied_tools,
         }),
     }
