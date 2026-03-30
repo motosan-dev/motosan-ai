@@ -10,21 +10,46 @@ cd "$REPO_ROOT"
 
 echo "=== Pre-push gate ==="
 
+# Skip gracefully if tools are not available (no nix/direnv environment)
+if ! command -v cargo &>/dev/null; then
+    echo "ℹ️  cargo not found — skipping Rust tests. Install via nix develop or rustup."
+    SKIP_RUST=1
+else
+    SKIP_RUST=0
+fi
+
+if ! command -v uv &>/dev/null; then
+    echo "ℹ️  uv not found — skipping Python tests. Install via nix develop or https://astral.sh/uv"
+    SKIP_PYTHON=1
+else
+    SKIP_PYTHON=0
+fi
+
+if [ "$SKIP_RUST" = "1" ] && [ "$SKIP_PYTHON" = "1" ]; then
+    echo "ℹ️  No tools available — skipping all checks."
+    echo "=== Pre-push gate SKIPPED ==="
+    exit 0
+fi
+
 # 1. Python unit tests (fast, no API needed)
-echo "[1/4] Running Python unit tests..."
-uv run pytest sdks/python/tests/ -q --ignore=sdks/python/tests/integration/ || {
-    echo "❌ Python unit tests failed. Push blocked."
-    exit 1
-}
-echo "✅ Python unit tests passed."
+if [ "$SKIP_PYTHON" = "0" ]; then
+    echo "[1/2] Running Python unit tests..."
+    uv run pytest sdks/python/tests/ -q --ignore=sdks/python/tests/integration/ || {
+        echo "❌ Python unit tests failed. Push blocked."
+        exit 1
+    }
+    echo "✅ Python unit tests passed."
+fi
 
 # 2. Rust unit tests (mock, no API needed)
-echo "[2/4] Running Rust unit tests..."
-cargo test --manifest-path sdks/rust/Cargo.toml --all-features -q || {
-    echo "❌ Rust unit tests failed. Push blocked."
-    exit 1
-}
-echo "✅ Rust unit tests passed."
+if [ "$SKIP_RUST" = "0" ]; then
+    echo "[2/2] Running Rust unit tests..."
+    cargo test --manifest-path sdks/rust/Cargo.toml --all-features -q || {
+        echo "❌ Rust unit tests failed. Push blocked."
+        exit 1
+    }
+    echo "✅ Rust unit tests passed."
+fi
 
 # 3. Resolve API key for live tests
 if [ -z "${ANTHROPIC_API_KEY:-}" ]; then

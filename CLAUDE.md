@@ -10,7 +10,7 @@ check-python  # ruff → format check → pytest
 test-live     # Anthropic integration tests (auto-resolves API key)
 ```
 
-Requires `nix develop` (direnv auto-activates on `cd`).
+`nix develop` provides a reproducible environment (direnv auto-activates on `cd`). Not required — `cargo` and `uv` work standalone too.
 
 ## Rules That Prevent Mistakes
 

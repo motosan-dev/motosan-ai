@@ -95,9 +95,10 @@ async for event in await client.stream([Message.user("Hello")]):
 
 ## Development
 
-Requires [Nix](https://nixos.org/) + [direnv](https://direnv.net/). `cd` into the project to auto-activate.
-
 ```bash
+# Optional: Nix + direnv for a fully reproducible environment
+# cd into the project — direnv auto-activates nix develop
+
 fmt           # Format everything (Rust + Python + TOML + Nix)
 check-all     # Full CI gate (lint + test both SDKs)
 test-live     # Anthropic integration tests

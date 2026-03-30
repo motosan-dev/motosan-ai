@@ -6,8 +6,8 @@ set -euo pipefail
 # Skip with: git commit --no-verify
 
 if ! command -v treefmt &>/dev/null; then
-    echo "⚠️  treefmt not found. Run 'nix develop' to enter the dev shell."
-    exit 1
+    echo "ℹ️  treefmt not found — skipping format check. Install via nix develop or https://treefmt.com"
+    exit 0
 fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
