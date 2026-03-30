@@ -47,7 +47,11 @@ impl ThinkStripper {
                 match self.buf.find("<think>") {
                     None => {
                         let keep = "<think>".len() - 1;
-                        let safe = self.buf.len().saturating_sub(keep);
+                        let mut safe = self.buf.len().saturating_sub(keep);
+                        // Ensure we split on a char boundary (important for multi-byte UTF-8)
+                        while safe > 0 && !self.buf.is_char_boundary(safe) {
+                            safe -= 1;
+                        }
                         output.push_str(&self.buf[..safe]);
                         self.buf = self.buf[safe..].to_string();
                         break;

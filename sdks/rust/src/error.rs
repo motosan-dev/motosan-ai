@@ -16,6 +16,8 @@ pub enum MotosanError {
     Network(String),
     #[error("stream error: {0}")]
     Stream(String),
+    #[error("stream read timeout: no data received within {0} seconds")]
+    StreamReadTimeout(u64),
     #[error("unsupported feature: {0}")]
     UnsupportedFeature(String),
 }

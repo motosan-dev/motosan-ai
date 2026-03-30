@@ -4,6 +4,7 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::think_stripper::ThinkStripper;
 use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventType};
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct Client {
@@ -19,6 +20,7 @@ pub struct Client {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
+    stream_read_timeout: Option<Duration>,
 }
 
 impl Client {
@@ -40,6 +42,10 @@ impl Client {
 
     pub fn retry_policy(&self) -> &RetryPolicy {
         &self.retry_policy
+    }
+
+    pub fn stream_read_timeout(&self) -> Option<Duration> {
+        self.stream_read_timeout
     }
 
     pub fn minimax_expose_reasoning(&self) -> bool {
@@ -201,6 +207,23 @@ impl Client {
     }
 
     async fn dispatch_stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
+        let raw = self.dispatch_stream_inner(request).await?;
+        #[cfg(any(
+            feature = "anthropic",
+            feature = "openai",
+            feature = "minimax",
+            feature = "ollama_native"
+        ))]
+        if let Some(timeout) = self.stream_read_timeout {
+            return Ok(Box::pin(ReadTimeoutStream::new(raw, timeout)));
+        }
+        Ok(raw)
+    }
+
+    async fn dispatch_stream_inner(
+        &self,
+        request: ChatRequest,
+    ) -> Result<BoxStream, MotosanError> {
         match self.provider {
             Provider::Anthropic => {
                 #[cfg(feature = "anthropic")]
@@ -354,6 +377,7 @@ pub struct ClientBuilder {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: Option<RetryPolicy>,
+    stream_read_timeout_secs: Option<u64>,
 }
 
 impl ClientBuilder {
@@ -427,6 +451,11 @@ impl ClientBuilder {
         self
     }
 
+    pub fn stream_read_timeout_secs(mut self, secs: u64) -> Self {
+        self.stream_read_timeout_secs = Some(secs);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -450,7 +479,74 @@ impl ClientBuilder {
             ollama_keep_alive: self.ollama_keep_alive,
             ollama_num_ctx: self.ollama_num_ctx,
             retry_policy: self.retry_policy.unwrap_or_default(),
+            stream_read_timeout: self
+                .stream_read_timeout_secs
+                .map(Duration::from_secs),
         })
+    }
+}
+
+/// Stream wrapper that terminates the stream if no event arrives within the
+/// configured read timeout. This prevents the client from hanging indefinitely
+/// when a provider stops sending SSE events mid-stream.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
+struct ReadTimeoutStream {
+    inner: BoxStream,
+    timeout: Duration,
+    deadline: std::pin::Pin<Box<tokio::time::Sleep>>,
+}
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
+impl ReadTimeoutStream {
+    fn new(inner: BoxStream, timeout: Duration) -> Self {
+        Self {
+            inner,
+            timeout,
+            deadline: Box::pin(tokio::time::sleep(timeout)),
+        }
+    }
+}
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native"
+))]
+impl futures_core::Stream for ReadTimeoutStream {
+    type Item = StreamEvent;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::future::Future;
+        use std::task::Poll;
+
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(event)) => {
+                let timeout = self.timeout;
+                self.deadline
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + timeout);
+                Poll::Ready(Some(event))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => match self.deadline.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            },
+        }
     }
 }
 

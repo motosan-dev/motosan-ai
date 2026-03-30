@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.4.2 · Rust 0.5.1
+- Python 0.4.2 · Rust 0.5.2
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.5.1", features = ["anthropic"] }
+motosan-ai = { version = "0.5.2", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 ```
 
@@ -161,6 +161,7 @@ let client = Client::builder()
     .api_key(std::env::var("ANTHROPIC_API_KEY")?)  // required
     .model("claude-sonnet-4-6")       // optional
     .retry_policy(RetryPolicy::new()) // optional
+    .stream_read_timeout_secs(30)      // optional — terminate stream after 30s of silence
     .build()?;
 ```
 
@@ -278,6 +279,7 @@ match client.chat(messages).await {
     Err(MotosanError::ProviderError(msg)) => eprintln!("Provider: {msg}"),
     Err(MotosanError::Network(msg)) => eprintln!("Network: {msg}"),
     Err(MotosanError::Stream(msg)) => eprintln!("Stream: {msg}"),
+    Err(MotosanError::StreamReadTimeout(secs)) => eprintln!("Stream timed out after {secs}s"),
 }
 ```
 

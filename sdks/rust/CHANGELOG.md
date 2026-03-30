@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.5.2] - 2026-03-30
+
+### Added
+- Configurable **stream read timeout** via `ClientBuilder::stream_read_timeout_secs(secs)` — terminates SSE streams that stop sending events mid-stream, preventing indefinite hangs (#155).
+- `MotosanError::StreamReadTimeout` error variant for timeout-specific error handling.
+
+### Fixed
+- `ThinkStripper`: split on UTF-8 char boundaries to avoid panic on multi-byte characters.
+
 ## [0.5.1] - 2026-03-24
 
 ### Fixed

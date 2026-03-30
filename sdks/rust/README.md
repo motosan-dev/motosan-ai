@@ -98,6 +98,8 @@ cargo build -p motosan-ai --all-features
 - `anthropic`
 - `openai`
 - `minimax`
+- `ollama` (OpenAI-compatible mode)
+- `ollama_native` (native `/api/chat` endpoint with NDJSON streaming)
 - `full` (enables all providers)
 
 ## Model Defaults
@@ -105,6 +107,7 @@ cargo build -p motosan-ai --all-features
 - Anthropic: `claude-sonnet-4-6`
 - OpenAI: `gpt-5.3-codex`
 - MiniMax: `MiniMax-M2.5-highspeed`
+- Ollama: `llama3.2`
 
 Override per client:
 
@@ -183,6 +186,39 @@ let client = Client::builder()
     .api_key("...")
     .retry_policy(retry_policy)
     .build()?;
+```
+
+## Stream Read Timeout
+
+By default, SSE streams wait indefinitely for the next event. If the provider stops
+sending data mid-stream (e.g. with large `tool_result` context), the client hangs.
+
+Set a per-chunk read timeout to terminate the stream after a period of silence:
+
+```rust
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key("...")
+    .stream_read_timeout_secs(30)  // terminate after 30s of silence
+    .build()?;
+```
+
+When the timeout fires, the stream ends (`None`). This works with all providers.
+
+## Collect Stream
+
+Buffer a streaming response into a single `ChatResponse`:
+
+```rust
+// Convenience — stream + collect in one call
+let resp = client.stream_collect(vec![Message::user("hello")]).await?;
+println!("{}", resp.content);
+
+// Full control variant
+let request = ChatRequest::builder()
+    .messages(vec![Message::user("hello")])
+    .build();
+let resp = client.stream_collect_with(request).await?;
 ```
 
 ## Anthropic Auth Matrix

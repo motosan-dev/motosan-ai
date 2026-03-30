@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-motosan-ai = { version = "0.3.3", features = ["anthropic"] }
+motosan-ai = { version = "0.5.2", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 ```
 
@@ -55,6 +55,9 @@ Provider variants: `Provider::Anthropic` | `Provider::OpenAI` | `Provider::Minim
 .ollama_think("qwq")       // reasoning model name
 .ollama_keep_alive("5m")   // keep model loaded
 .ollama_num_ctx(4096)       // context window size
+
+// Stream read timeout (all providers)
+.stream_read_timeout_secs(30)  // terminate stream after 30s of silence
 ```
 
 ## Core Methods
@@ -134,6 +137,23 @@ while let Some(event) = stream.next().await {
 }
 ```
 
+### `stream_collect()` — stream + collect into ChatResponse
+
+```rust
+let resp = client.stream_collect(vec![Message::user("Hello")]).await?;
+println!("{}", resp.content);
+```
+
+### `stream_collect_with()` — full control variant
+
+```rust
+let request = ChatRequest::builder()
+    .messages(vec![Message::user("Hello")])
+    .tools(tools)
+    .build();
+let resp = client.stream_collect_with(request).await?;
+```
+
 ## BoxStream Type
 
 ```rust
@@ -151,7 +171,8 @@ pub struct StreamEvent {
     pub tool_call_id: Option<String>,
     pub tool_call_name: Option<String>,
     pub tool_call_args_delta: Option<String>,
-    pub event_type: StreamEventType,  // Text | ToolCallStart | ToolCallArgs | ToolCallEnd
+    pub usage: Option<Usage>,
+    pub event_type: StreamEventType,  // Text | ToolCallStart | ToolCallArgs | ToolCallEnd | Usage
 }
 ```
 
@@ -205,6 +226,8 @@ match result {
     Err(MotosanError::ProviderError(msg)) => ...,
     Err(MotosanError::Network(msg)) => ...,
     Err(MotosanError::Stream(msg)) => ...,
+    Err(MotosanError::StreamReadTimeout(secs)) => ...,  // stream silence exceeded timeout
+    Err(MotosanError::UnsupportedFeature(msg)) => ...,
 }
 ```
 
