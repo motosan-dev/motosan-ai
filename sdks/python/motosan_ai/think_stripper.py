@@ -31,7 +31,7 @@ class ThinkStripper:
                     if len(self._buf) > keep:
                         self._buf = self._buf[-keep:]
                     break
-                self._buf = self._buf[end + len("</think>"):]
+                self._buf = self._buf[end + len("</think>") :]
                 self._in_think = False
             else:
                 start = self._buf.find("<think>")
@@ -43,7 +43,7 @@ class ThinkStripper:
                         self._buf = self._buf[safe:]
                     break
                 output.append(self._buf[:start])
-                self._buf = self._buf[start + len("<think>"):]
+                self._buf = self._buf[start + len("<think>") :]
                 self._in_think = True
 
         return "".join(output)

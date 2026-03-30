@@ -1,0 +1,27 @@
+[global]
+excludes = [
+  "**/target/**",
+  "**/.venv/**",
+  "**/node_modules/**",
+  "**/.direnv/**",
+  "**/uv.lock",
+]
+
+[formatter.rust]
+command = "rustfmt"
+options = ["--edition", "2021"]
+includes = ["*.rs"]
+
+[formatter.python]
+command = "ruff"
+options = ["format"]
+includes = ["*.py"]
+
+[formatter.toml]
+command = "taplo"
+options = ["format"]
+includes = ["*.toml"]
+
+[formatter.nix]
+command = "nixpkgs-fmt"
+includes = ["*.nix"]

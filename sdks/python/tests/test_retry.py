@@ -1,12 +1,12 @@
 import pytest
 
-from motosan_ai.retry import with_retry, _parse_retry_after, _is_retryable
 from motosan_ai.error import (
     AuthError,
     NetworkError,
     ProviderError,
     RateLimitError,
 )
+from motosan_ai.retry import _is_retryable, _parse_retry_after, with_retry
 
 
 class TestParseRetryAfter:

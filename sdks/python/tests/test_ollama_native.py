@@ -6,8 +6,7 @@ import respx
 
 from motosan_ai import Client, Provider
 from motosan_ai.providers.ollama import OllamaProvider
-from motosan_ai.types import ChatRequest, Message, StopReason, StreamEvent, Tool, ToolCall
-
+from motosan_ai.types import ChatRequest, Message, StopReason, Tool, ToolCall
 
 BASE_URL = "http://localhost:11434"
 CHAT_URL = f"{BASE_URL}/api/chat"
@@ -62,9 +61,7 @@ async def test_chat_with_system(provider):
             },
         )
     )
-    await provider.chat(
-        ChatRequest(messages=[Message.user("hi")], system="You are helpful.")
-    )
+    await provider.chat(ChatRequest(messages=[Message.user("hi")], system="You are helpful."))
     body = json.loads(route.calls[0].request.content)
     assert body["messages"][0] == {"role": "system", "content": "You are helpful."}
 
@@ -170,9 +167,7 @@ async def test_stream_basic(provider):
         '{"message":{"content":"lo"},"done":false}\n'
         '{"done":true}\n'
     )
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(200, text=ndjson)
-    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
     events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("hi")]))]
     texts = [e.content for e in events if not e.done]
     assert texts == ["hel", "lo"]
@@ -187,9 +182,7 @@ async def test_stream_thinking(think_provider):
         '{"message":{"content":"answer"},"done":false}\n'
         '{"done":true}\n'
     )
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(200, text=ndjson)
-    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
     events = [e async for e in think_provider.stream(ChatRequest(messages=[Message.user("hi")]))]
     texts = [e.content for e in events if not e.done]
     assert texts == ["let me think...", "answer"]
@@ -271,7 +264,6 @@ def test_client_ollama_native_with_options():
 
 def test_client_ollama_compat_still_works(monkeypatch):
     """native=False (default) should still use OpenAIProvider."""
-    import motosan_ai.providers.openai as m
 
     class FakeAsyncOpenAI:
         def __init__(self, api_key, base_url=None):
@@ -282,6 +274,7 @@ def test_client_ollama_compat_still_works(monkeypatch):
     )
 
     from motosan_ai.providers.openai import OpenAIProvider
+
     client = Client.ollama()
     assert isinstance(client._provider, OpenAIProvider)
 
@@ -329,7 +322,9 @@ async def test_stream_two_tool_calls_emits_6_events(provider):
         '{"done":true}\n'
     )
     respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
-    events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("weather and time?")]))]
+    events = [
+        e async for e in provider.stream(ChatRequest(messages=[Message.user("weather and time?")]))
+    ]
 
     starts = [e for e in events if e.event_type == "tool_call_start"]
     args = [e for e in events if e.event_type == "tool_call_args"]
@@ -358,8 +353,6 @@ async def test_stream_two_tool_calls_emits_6_events(provider):
 @respx.mock
 @pytest.mark.asyncio
 async def test_chat_error_response(provider):
-    respx.post(CHAT_URL).mock(
-        return_value=httpx.Response(500, text="internal error")
-    )
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(500, text="internal error"))
     with pytest.raises(Exception, match="Ollama error 500"):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))

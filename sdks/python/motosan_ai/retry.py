@@ -6,12 +6,14 @@ Aligned with Rust SDK behavior:
 - Exponential backoff: 100ms, 200ms, 400ms... capped at 2s
 - Respects Retry-After header
 """
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
-from typing import TypeVar, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import TypeVar
 
 from motosan_ai.error import NetworkError, ProviderError, RateLimitError
 
@@ -75,10 +77,13 @@ async def with_retry(
             if retry_after is not None:
                 wait = min(retry_after, max_backoff)
             else:
-                wait = min(initial_backoff * (2 ** attempt), max_backoff)
+                wait = min(initial_backoff * (2**attempt), max_backoff)
             logger.warning(
                 "Retryable error (attempt %d/%d), retrying in %.1fs: %s",
-                attempt + 1, max_retries, wait, type(e).__name__,
+                attempt + 1,
+                max_retries,
+                wait,
+                type(e).__name__,
             )
             await asyncio.sleep(wait)
     raise last_error  # type: ignore[misc]

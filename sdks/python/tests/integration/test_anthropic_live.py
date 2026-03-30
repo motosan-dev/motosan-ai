@@ -7,6 +7,7 @@ Skips automatically if not set.
 Run manually:
     ANTHROPIC_API_KEY=... uv run pytest sdks/python/tests/integration/test_anthropic_live.py -v
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ async def _cooldown():
 # 1. chat — basic
 # ---------------------------------------------------------------------------
 
+
 async def test_chat_basic(client):
     resp = await client.chat([Message.user("Reply with exactly one word: PONG")])
     assert "PONG" in resp.content
@@ -51,6 +53,7 @@ async def test_chat_basic(client):
 # ---------------------------------------------------------------------------
 # 2. stream — basic
 # ---------------------------------------------------------------------------
+
 
 async def test_stream_basic(client):
     chunks: list[str] = []
@@ -67,6 +70,7 @@ async def test_stream_basic(client):
 # 3. system prompt
 # ---------------------------------------------------------------------------
 
+
 async def test_system_prompt(client):
     resp = await client.chat(
         [Message.user("What is your name? Reply in one sentence.")],
@@ -80,6 +84,7 @@ async def test_system_prompt(client):
 # 4. temperature
 # ---------------------------------------------------------------------------
 
+
 async def test_temperature(client):
     resp = await client.chat(
         [Message.user("Reply with exactly one word: TEMP_OK")],
@@ -92,6 +97,7 @@ async def test_temperature(client):
 # ---------------------------------------------------------------------------
 # 5. tool use — single turn
 # ---------------------------------------------------------------------------
+
 
 async def test_tool_use_single_turn(client):
     tools = [
@@ -122,6 +128,7 @@ async def test_tool_use_single_turn(client):
 # 6. tool use — multi-turn
 # ---------------------------------------------------------------------------
 
+
 async def test_tool_use_multi_turn(client):
     tools = [
         Tool(
@@ -143,7 +150,9 @@ async def test_tool_use_multi_turn(client):
 
     # Turn 2: provide tool result, get natural language answer
     messages.append(Message.assistant_with_tool_calls(resp1.content, resp1.tool_calls))
-    messages.append(Message.tool_result(tc.id, json.dumps({"temperature": 28, "condition": "Sunny"})))
+    messages.append(
+        Message.tool_result(tc.id, json.dumps({"temperature": 28, "condition": "Sunny"}))
+    )
 
     await _cooldown()
     resp2 = await client.chat(messages, tools=tools)
@@ -156,6 +165,7 @@ async def test_tool_use_multi_turn(client):
 # ---------------------------------------------------------------------------
 # 7. stream + tool use
 # ---------------------------------------------------------------------------
+
 
 async def test_stream_tool_use(client):
     tools = [

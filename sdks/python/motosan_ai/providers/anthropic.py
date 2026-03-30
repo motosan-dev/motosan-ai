@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
-from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    Role,
+    StopReason,
+    StreamEvent,
+    ToolCall,
+    Usage,
+)
 
 _DEFAULT_BASE_URL = "https://api.anthropic.com"
 _ANTHROPIC_VERSION = "2023-06-01"
@@ -49,7 +59,9 @@ class AnthropicProvider:
 
     @staticmethod
     def _serialize_messages(
-        messages: list[Message], *, oauth: bool = False,
+        messages: list[Message],
+        *,
+        oauth: bool = False,
     ) -> tuple[list[dict[str, Any]], str | None]:
         outgoing: list[dict[str, Any]] = []
         system_parts: list[str] = []
@@ -62,7 +74,9 @@ class AnthropicProvider:
 
             if message.role == Role.user:
                 if oauth:
-                    outgoing.append({"role": "user", "content": [{"type": "text", "text": message.content}]})
+                    outgoing.append(
+                        {"role": "user", "content": [{"type": "text", "text": message.content}]}
+                    )
                 else:
                     outgoing.append({"role": "user", "content": message.content})
                 continue
@@ -119,7 +133,8 @@ class AnthropicProvider:
 
     def _build_body(self, request: ChatRequest, *, stream: bool = False) -> dict[str, Any]:
         messages, extracted_system = self._serialize_messages(
-            request.messages, oauth=self._is_oauth,
+            request.messages,
+            oauth=self._is_oauth,
         )
         system = self._build_system(request.system or extracted_system)
 
@@ -181,7 +196,9 @@ class AnthropicProvider:
                         parsed_input = json.loads(current_tc_args) if current_tc_args else {}
                     except json.JSONDecodeError:
                         parsed_input = {}
-                    tool_calls.append(ToolCall(id=current_tc_id, name=current_tc_name, input=parsed_input))
+                    tool_calls.append(
+                        ToolCall(id=current_tc_id, name=current_tc_name, input=parsed_input)
+                    )
                     current_tc_id = ""
                     current_tc_name = ""
                     current_tc_args = ""
@@ -242,7 +259,9 @@ class AnthropicProvider:
         body = self._build_body(request, stream=True)
         try:
             resp = await self._http.send(
-                self._http.build_request("POST", self._endpoint(), headers=self._headers(), json=body),
+                self._http.build_request(
+                    "POST", self._endpoint(), headers=self._headers(), json=body
+                ),
                 stream=True,
             )
         except httpx.HTTPError as exc:

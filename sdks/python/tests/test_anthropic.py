@@ -22,19 +22,28 @@ def oauth_provider():
 # chat (non-streaming, standard API key)
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_anthropic_chat(provider):
     respx.post("https://mock.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json={
-            "model": "claude-sonnet-4-6",
-            "stop_reason": "tool_use",
-            "usage": {"input_tokens": 10, "output_tokens": 5},
-            "content": [
-                {"type": "text", "text": "checking"},
-                {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Taipei"}},
-            ],
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 10, "output_tokens": 5},
+                "content": [
+                    {"type": "text", "text": "checking"},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "get_weather",
+                        "input": {"city": "Taipei"},
+                    },
+                ],
+            },
+        )
     )
 
     req = ChatRequest(messages=[Message.user("weather?")])
@@ -52,6 +61,7 @@ async def test_anthropic_chat(provider):
 # ---------------------------------------------------------------------------
 # stream (SSE parsing)
 # ---------------------------------------------------------------------------
+
 
 def _sse_lines(*events: dict) -> str:
     return "\n".join(f"data: {json.dumps(e)}" for e in events) + "\n"
@@ -81,11 +91,27 @@ async def test_anthropic_stream(provider):
 async def test_anthropic_stream_tool_use(provider):
     sse = _sse_lines(
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Let me check"}},
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": "Let me check"},
+        },
         {"type": "content_block_stop", "index": 0},
-        {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather"}},
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"city":'}},
-        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '"Taipei"}'}},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"city":'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '"Taipei"}'},
+        },
         {"type": "content_block_stop", "index": 1},
         {"type": "message_stop"},
     )
@@ -93,7 +119,13 @@ async def test_anthropic_stream_tool_use(provider):
         return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
     )
 
-    tools = [Tool(name="get_weather", description="Get weather", input_schema={"type": "object", "properties": {"city": {"type": "string"}}})]
+    tools = [
+        Tool(
+            name="get_weather",
+            description="Get weather",
+            input_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        )
+    ]
     req = ChatRequest(messages=[Message.user("weather in Taipei?")], tools=tools)
     events = [e async for e in provider.stream(req)]
 
@@ -122,16 +154,20 @@ async def test_anthropic_stream_tool_use(provider):
 # Auth headers
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_anthropic_standard_key_uses_x_api_key(provider):
     route = respx.post("https://mock.anthropic.com/v1/messages").mock(
-        return_value=httpx.Response(200, json={
-            "model": "claude-sonnet-4-6",
-            "stop_reason": "end_turn",
-            "usage": {"input_tokens": 1, "output_tokens": 1},
-            "content": [{"type": "text", "text": "hi"}],
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "hi"}],
+            },
+        )
     )
 
     await provider.chat(ChatRequest(messages=[Message.user("hi")]))
@@ -160,6 +196,7 @@ async def test_anthropic_oauth_uses_bearer(oauth_provider):
 # Error mapping
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_anthropic_401_raises_auth_error(provider):
@@ -167,6 +204,7 @@ async def test_anthropic_401_raises_auth_error(provider):
         return_value=httpx.Response(401, json={"error": {"message": "invalid key"}})
     )
     from motosan_ai.error import AuthError
+
     with pytest.raises(AuthError):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))
 
@@ -178,5 +216,6 @@ async def test_anthropic_429_raises_rate_limit(provider):
         return_value=httpx.Response(429, json={"error": {"message": "too many requests"}})
     )
     from motosan_ai.error import RateLimitError
+
     with pytest.raises(RateLimitError):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))

@@ -2,12 +2,22 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from motosan_ai.error import NetworkError, ProviderError
-from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    Role,
+    StopReason,
+    StreamEvent,
+    ToolCall,
+    Usage,
+)
 
 
 class OllamaProvider:
@@ -27,7 +37,9 @@ class OllamaProvider:
         self._http = httpx.AsyncClient(timeout=120.0)
 
     @staticmethod
-    def _serialize_messages(messages: list[Message], system: str | None = None) -> list[dict[str, Any]]:
+    def _serialize_messages(
+        messages: list[Message], system: str | None = None
+    ) -> list[dict[str, Any]]:
         outgoing: list[dict[str, Any]] = []
         if system:
             outgoing.append({"role": "system", "content": system})
@@ -139,7 +151,9 @@ class OllamaProvider:
             async with self._http.stream("POST", f"{self.base_url}/api/chat", json=body) as resp:
                 if resp.status_code >= 400:
                     text = await resp.aread()
-                    raise ProviderError(f"Ollama error {resp.status_code}: {text.decode('utf-8', errors='ignore')}")
+                    raise ProviderError(
+                        f"Ollama error {resp.status_code}: {text.decode('utf-8', errors='ignore')}"
+                    )
 
                 async for line in resp.aiter_lines():
                     if not line:

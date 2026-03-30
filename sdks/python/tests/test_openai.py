@@ -21,28 +21,35 @@ def _sse_lines(*events: dict) -> str:
 # chat
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_openai_chat(provider):
     respx.post("https://mock.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "model": "gpt-4o",
-            "choices": [
-                {
-                    "message": {
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "function": {"name": "get_weather", "arguments": '{"city":"Taipei"}'},
-                            }
-                        ],
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Taipei"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        )
     )
 
     resp = await provider.chat(ChatRequest(messages=[Message.user("weather?")]))
@@ -54,6 +61,7 @@ async def test_openai_chat(provider):
 # ---------------------------------------------------------------------------
 # stream
 # ---------------------------------------------------------------------------
+
 
 @respx.mock
 @pytest.mark.asyncio
@@ -76,16 +84,70 @@ async def test_openai_stream(provider):
 @pytest.mark.asyncio
 async def test_openai_stream_tool_use(provider):
     sse = _sse_lines(
-        {"choices": [{"delta": {"content": None, "tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "get_weather", "arguments": ""}}]}, "finish_reason": None}]},
-        {"choices": [{"delta": {"content": None, "tool_calls": [{"index": 0, "id": None, "function": {"name": None, "arguments": '{"city":'}}]}, "finish_reason": None}]},
-        {"choices": [{"delta": {"content": None, "tool_calls": [{"index": 0, "id": None, "function": {"name": None, "arguments": '"Taipei"}'}}]}, "finish_reason": None}]},
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "function": {"name": "get_weather", "arguments": ""},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": None,
+                                "function": {"name": None, "arguments": '{"city":'},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": None,
+                                "function": {"name": None, "arguments": '"Taipei"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": None,
+                }
+            ]
+        },
         {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
     )
     respx.post("https://mock.openai.com/v1/chat/completions").mock(
         return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
     )
 
-    tools = [Tool(name="get_weather", description="Get weather", input_schema={"type": "object", "properties": {"city": {"type": "string"}}})]
+    tools = [
+        Tool(
+            name="get_weather",
+            description="Get weather",
+            input_schema={"type": "object", "properties": {"city": {"type": "string"}}},
+        )
+    ]
     req = ChatRequest(messages=[Message.user("weather in Taipei?")], tools=tools)
     events = [e async for e in provider.stream(req)]
 
@@ -108,15 +170,19 @@ async def test_openai_stream_tool_use(provider):
 # Auth header
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_openai_uses_bearer_auth(provider):
     route = respx.post("https://mock.openai.com/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "model": "gpt-4o",
-            "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
-            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "gpt-4o",
+                "choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            },
+        )
     )
 
     await provider.chat(ChatRequest(messages=[Message.user("hi")]))
@@ -127,6 +193,7 @@ async def test_openai_uses_bearer_auth(provider):
 # Errors
 # ---------------------------------------------------------------------------
 
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_openai_401_raises_auth_error(provider):
@@ -134,5 +201,6 @@ async def test_openai_401_raises_auth_error(provider):
         return_value=httpx.Response(401, json={"error": {"message": "invalid key"}})
     )
     from motosan_ai.error import AuthError
+
     with pytest.raises(AuthError):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))

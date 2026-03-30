@@ -14,11 +14,32 @@ categories = ["api-bindings", "asynchronous"]
 
 [features]
 default = []
-anthropic = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
-openai = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
-minimax = ["dep:reqwest", "dep:eventsource-stream", "dep:tokio-stream", "dep:tokio"]
+anthropic = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
+openai = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
+minimax = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
 ollama = ["openai"]
-ollama_native = ["ollama", "dep:reqwest", "dep:tokio", "dep:tokio-stream", "dep:bytes"]
+ollama_native = [
+  "ollama",
+  "dep:reqwest",
+  "dep:tokio",
+  "dep:tokio-stream",
+  "dep:bytes",
+]
 agent-tool = ["dep:motosan-agent-tool"]
 full = ["anthropic", "openai", "minimax", "ollama", "ollama_native"]
 
@@ -32,7 +53,11 @@ thiserror = "2"
 
 motosan-agent-tool = { version = "0.2", optional = true }
 bytes = { version = "1", optional = true }
-reqwest = { version = "0.12", optional = true, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", optional = true, features = [
+  "json",
+  "stream",
+  "rustls-tls",
+] }
 eventsource-stream = { version = "0.2", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 tokio = { version = "1", optional = true, features = ["time"] }

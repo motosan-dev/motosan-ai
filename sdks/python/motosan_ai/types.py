@@ -35,23 +35,23 @@ class Message:
     tool_calls: list[ToolCall] = field(default_factory=list)
 
     @classmethod
-    def user(cls, content: str) -> "Message":
+    def user(cls, content: str) -> Message:
         return cls(role=Role.user, content=content)
 
     @classmethod
-    def assistant(cls, content: str) -> "Message":
+    def assistant(cls, content: str) -> Message:
         return cls(role=Role.assistant, content=content)
 
     @classmethod
-    def assistant_with_tool_calls(cls, content: str, tool_calls: list[ToolCall]) -> "Message":
+    def assistant_with_tool_calls(cls, content: str, tool_calls: list[ToolCall]) -> Message:
         return cls(role=Role.assistant, content=content, tool_calls=tool_calls)
 
     @classmethod
-    def system(cls, content: str) -> "Message":
+    def system(cls, content: str) -> Message:
         return cls(role=Role.system, content=content)
 
     @classmethod
-    def tool_result(cls, tool_call_id: str, content: str) -> "Message":
+    def tool_result(cls, tool_call_id: str, content: str) -> Message:
         return cls(role=Role.tool, content=content, tool_call_id=tool_call_id)
 
 

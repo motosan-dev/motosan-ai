@@ -1,5 +1,3 @@
-import os
-
 import pytest
 
 from motosan_ai import ChatResponse, Client, Message, Provider, StopReason, Tool, Usage

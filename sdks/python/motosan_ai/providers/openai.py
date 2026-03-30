@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
-from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    Role,
+    StopReason,
+    StreamEvent,
+    ToolCall,
+    Usage,
+)
 
 _DEFAULT_BASE_URL = "https://api.openai.com"
 
@@ -28,7 +38,9 @@ class OpenAIProvider:
         }
 
     @staticmethod
-    def _serialize_messages(messages: list[Message], system: str | None = None) -> list[dict[str, Any]]:
+    def _serialize_messages(
+        messages: list[Message], system: str | None = None
+    ) -> list[dict[str, Any]]:
         outgoing: list[dict[str, Any]] = []
         if system:
             outgoing.append({"role": "system", "content": system})
@@ -125,7 +137,9 @@ class OpenAIProvider:
                 parsed_input = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 parsed_input = {}
-            tool_calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), input=parsed_input))
+            tool_calls.append(
+                ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), input=parsed_input)
+            )
 
         finish_reason = choice.get("finish_reason")
         stop_reason = {
@@ -147,7 +161,9 @@ class OpenAIProvider:
         body = self._build_body(request, stream=True)
         try:
             resp = await self._http.send(
-                self._http.build_request("POST", self._endpoint(), headers=self._headers(), json=body),
+                self._http.build_request(
+                    "POST", self._endpoint(), headers=self._headers(), json=body
+                ),
                 stream=True,
             )
         except httpx.HTTPError as exc:

@@ -15,3 +15,4 @@ sdks/python/**/.pytest_cache/
 # TypeScript SDK
 sdks/typescript/node_modules/
 sdks/typescript/dist/
+.worktrees/

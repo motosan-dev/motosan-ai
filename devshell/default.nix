@@ -26,7 +26,14 @@ pkgs.mkShell {
     uv
     ruff
 
+    # Formatters (used by treefmt)
+    treefmt
+    taplo
+    nixpkgs-fmt
+
     # Dev scripts
+    scripts.fmt
+    scripts.lint
     scripts.check-rust
     scripts.check-python
     scripts.check-all

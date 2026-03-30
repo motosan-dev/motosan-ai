@@ -1,6 +1,33 @@
 { writeShellScriptBin, ... }:
 
 {
+  # Format everything: Rust + Python + TOML + Nix
+  fmt = writeShellScriptBin "fmt" ''
+    set -euo pipefail
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    echo "=== treefmt ==="
+    treefmt -C "$REPO_ROOT" "$@"
+  '';
+
+  # Lint without fixing (for CI parity)
+  lint = writeShellScriptBin "lint" ''
+    set -euo pipefail
+    REPO_ROOT="$(git rev-parse --show-toplevel)"
+    echo "=== Lint ==="
+
+    echo "[1/3] cargo clippy"
+    cargo clippy --manifest-path "$REPO_ROOT/sdks/rust/Cargo.toml" \
+      --all-features --all-targets -- -D warnings
+
+    echo "[2/3] ruff check"
+    ruff check "$REPO_ROOT/sdks/python/motosan_ai/"
+
+    echo "[3/3] treefmt --fail-on-change"
+    treefmt -C "$REPO_ROOT" --fail-on-change
+
+    echo "✅ Lint passed."
+  '';
+
   # Mirrors ci-rust.yml: fmt → clippy → test (all features)
   check-rust = writeShellScriptBin "check-rust" ''
     set -euo pipefail
@@ -11,7 +38,8 @@
     cargo fmt --manifest-path "$RUST_DIR/Cargo.toml" --all -- --check
 
     echo "[2/3] cargo clippy --all-features"
-    cargo clippy --manifest-path "$RUST_DIR/Cargo.toml" --all-features --all-targets -- -D warnings
+    cargo clippy --manifest-path "$RUST_DIR/Cargo.toml" \
+      --all-features --all-targets -- -D warnings
 
     echo "[3/3] cargo test --all-features"
     cargo test --manifest-path "$RUST_DIR/Cargo.toml" --all-features
@@ -25,10 +53,13 @@
     PYTHON_DIR="''${REPO_ROOT:-$(git rev-parse --show-toplevel)}/sdks/python"
     echo "=== Python checks ==="
 
-    echo "[1/2] ruff check"
+    echo "[1/3] ruff check"
     ruff check "$PYTHON_DIR/motosan_ai/"
 
-    echo "[2/2] pytest (unit)"
+    echo "[2/3] ruff format --check"
+    ruff format --check "$PYTHON_DIR/motosan_ai/" "$PYTHON_DIR/tests/"
+
+    echo "[3/3] pytest (unit)"
     uv run pytest "$PYTHON_DIR/tests/" -q --ignore="$PYTHON_DIR/tests/integration/"
 
     echo "✅ Python checks passed."

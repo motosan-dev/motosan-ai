@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import AsyncIterator, Iterable
 from enum import StrEnum
-from typing import Any, AsyncIterator, Iterable
+from typing import Any
 
 from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
@@ -83,9 +84,13 @@ class Client:
             if provider_value == Provider.anthropic:
                 self._provider = AnthropicProvider(api_key=self.api_key, model=model)
             elif provider_value == Provider.openai:
-                self._provider = OpenAIProvider(api_key=self.api_key, model=model, base_url=base_url)
+                self._provider = OpenAIProvider(
+                    api_key=self.api_key, model=model, base_url=base_url
+                )
             else:
-                self._provider = MinimaxProvider(api_key=self.api_key, model=model, base_url=base_url)
+                self._provider = MinimaxProvider(
+                    api_key=self.api_key, model=model, base_url=base_url
+                )
 
     @classmethod
     def anthropic(
@@ -93,8 +98,10 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
-    ) -> "Client":
-        return cls(provider=Provider.anthropic, api_key=api_key, model=model, max_retries=max_retries)
+    ) -> Client:
+        return cls(
+            provider=Provider.anthropic, api_key=api_key, model=model, max_retries=max_retries
+        )
 
     @classmethod
     def openai(
@@ -102,7 +109,7 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
-    ) -> "Client":
+    ) -> Client:
         return cls(provider=Provider.openai, api_key=api_key, model=model, max_retries=max_retries)
 
     @classmethod
@@ -112,8 +119,14 @@ class Client:
         model: str | None = None,
         base_url: str | None = None,
         max_retries: int = 3,
-    ) -> "Client":
-        return cls(provider=Provider.minimax, api_key=api_key, model=model, base_url=base_url, max_retries=max_retries)
+    ) -> Client:
+        return cls(
+            provider=Provider.minimax,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            max_retries=max_retries,
+        )
 
     @classmethod
     def ollama(
@@ -126,7 +139,7 @@ class Client:
         keep_alive: str | None = None,
         num_ctx: int | None = None,
         max_retries: int = 3,
-    ) -> "Client":
+    ) -> Client:
         return cls(
             provider=Provider.ollama,
             model=model,
@@ -188,6 +201,7 @@ class Client:
         )
         if self._max_retries > 0:
             from motosan_ai.retry import with_retry
+
             return await with_retry(
                 lambda: self._provider.chat(request),
                 max_retries=self._max_retries,
@@ -230,17 +244,31 @@ class Client:
                         yield event
                 return  # stream completed successfully
             except (RateLimitError, NetworkError, ProviderError) as e:
-                from motosan_ai.retry import _is_retryable, _parse_retry_after, DEFAULT_INITIAL_BACKOFF, DEFAULT_MAX_BACKOFF
+                from motosan_ai.retry import (
+                    DEFAULT_INITIAL_BACKOFF,
+                    DEFAULT_MAX_BACKOFF,
+                    _is_retryable,
+                    _parse_retry_after,
+                )
+
                 if not _is_retryable(e):
                     raise
                 last_error = e
                 if attempt >= self._max_retries:
                     break
                 retry_after = _parse_retry_after(str(e))
-                wait = min(retry_after if retry_after is not None else DEFAULT_INITIAL_BACKOFF * (2 ** attempt), DEFAULT_MAX_BACKOFF)
+                wait = min(
+                    retry_after
+                    if retry_after is not None
+                    else DEFAULT_INITIAL_BACKOFF * (2**attempt),
+                    DEFAULT_MAX_BACKOFF,
+                )
                 logger.warning(
                     "Retryable stream error (attempt %d/%d), retrying in %.1fs: %s",
-                    attempt + 1, self._max_retries, wait, type(e).__name__,
+                    attempt + 1,
+                    self._max_retries,
+                    wait,
+                    type(e).__name__,
                 )
                 await asyncio.sleep(wait)
         raise last_error  # type: ignore[misc]

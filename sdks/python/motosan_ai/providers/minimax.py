@@ -1,12 +1,28 @@
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 
-from motosan_ai.error import AuthError, InvalidRequestError, NetworkError, ProviderError, RateLimitError
-from motosan_ai.types import ChatRequest, ChatResponse, Message, Role, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.error import (
+    AuthError,
+    InvalidRequestError,
+    NetworkError,
+    ProviderError,
+    RateLimitError,
+)
+from motosan_ai.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    Role,
+    StopReason,
+    StreamEvent,
+    ToolCall,
+    Usage,
+)
 
 
 class MinimaxProvider:
@@ -20,7 +36,9 @@ class MinimaxProvider:
         return f"{self.base_url}/v1/text/chatcompletion_v2"
 
     @staticmethod
-    def _serialize_messages(messages: list[Message], system: str | None = None) -> list[dict[str, Any]]:
+    def _serialize_messages(
+        messages: list[Message], system: str | None = None
+    ) -> list[dict[str, Any]]:
         outgoing: list[dict[str, Any]] = []
         if system:
             outgoing.append({"role": "system", "content": system})
@@ -105,7 +123,11 @@ class MinimaxProvider:
 
         payload = response.json() if response.content else {}
         if response.status_code >= 400:
-            message = (payload.get("error") or {}).get("message") or response.text or "minimax request failed"
+            message = (
+                (payload.get("error") or {}).get("message")
+                or response.text
+                or "minimax request failed"
+            )
             self._raise_for_status(response.status_code, message)
 
         choice = (payload.get("choices") or [{}])[0]
@@ -118,7 +140,9 @@ class MinimaxProvider:
                 parsed_input = json.loads(fn.get("arguments") or "{}")
             except json.JSONDecodeError:
                 parsed_input = {}
-            tool_calls.append(ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), input=parsed_input))
+            tool_calls.append(
+                ToolCall(id=tc.get("id", ""), name=fn.get("name", ""), input=parsed_input)
+            )
 
         finish_reason = choice.get("finish_reason")
         stop_reason = {

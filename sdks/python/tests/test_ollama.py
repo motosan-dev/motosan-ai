@@ -22,16 +22,19 @@ def _sse_lines(*events: dict) -> str:
 @pytest.mark.asyncio
 async def test_ollama_chat(provider):
     respx.post("http://localhost:11434/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "model": "llama3.2",
-            "choices": [
-                {
-                    "message": {"content": "Hello from Ollama!", "tool_calls": None},
-                    "finish_reason": "stop",
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 10},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "llama3.2",
+                "choices": [
+                    {
+                        "message": {"content": "Hello from Ollama!", "tool_calls": None},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10},
+            },
+        )
     )
 
     resp = await provider.chat(ChatRequest(messages=[Message.user("hello")]))
@@ -61,24 +64,30 @@ async def test_ollama_stream(provider):
 @pytest.mark.asyncio
 async def test_ollama_tool_use(provider):
     respx.post("http://localhost:11434/v1/chat/completions").mock(
-        return_value=httpx.Response(200, json={
-            "model": "llama3.2",
-            "choices": [
-                {
-                    "message": {
-                        "content": "",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "function": {"name": "get_weather", "arguments": '{"city":"Taipei"}'},
-                            }
-                        ],
-                    },
-                    "finish_reason": "tool_calls",
-                }
-            ],
-            "usage": {"prompt_tokens": 5, "completion_tokens": 10},
-        })
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "llama3.2",
+                "choices": [
+                    {
+                        "message": {
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "get_weather",
+                                        "arguments": '{"city":"Taipei"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10},
+            },
+        )
     )
 
     tools = [
