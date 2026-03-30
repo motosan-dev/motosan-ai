@@ -1,6 +1,9 @@
 /target/
 /Cargo.lock
 
+# Nix / direnv
+.direnv/
+
 
 # Python SDK
 sdks/python/.venv/
