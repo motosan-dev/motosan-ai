@@ -220,10 +220,7 @@ impl Client {
         Ok(raw)
     }
 
-    async fn dispatch_stream_inner(
-        &self,
-        request: ChatRequest,
-    ) -> Result<BoxStream, MotosanError> {
+    async fn dispatch_stream_inner(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
         match self.provider {
             Provider::Anthropic => {
                 #[cfg(feature = "anthropic")]
@@ -479,9 +476,7 @@ impl ClientBuilder {
             ollama_keep_alive: self.ollama_keep_alive,
             ollama_num_ctx: self.ollama_num_ctx,
             retry_policy: self.retry_policy.unwrap_or_default(),
-            stream_read_timeout: self
-                .stream_read_timeout_secs
-                .map(Duration::from_secs),
+            stream_read_timeout: self.stream_read_timeout_secs.map(Duration::from_secs),
         })
     }
 }

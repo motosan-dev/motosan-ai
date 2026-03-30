@@ -1,5 +1,5 @@
 {
-  description = "motosan-ai multi-provider LLM SDK";
+  description = "motosan-ai — multi-provider LLM SDK (Rust + Python)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -10,7 +10,7 @@
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, fenix }:
+  outputs = { self, nixpkgs, flake-utils, fenix, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {

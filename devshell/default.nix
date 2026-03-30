@@ -6,6 +6,9 @@
 , ...
 }:
 
+let
+  scripts = pkgs.callPackage ./scripts.nix { };
+in
 pkgs.mkShell {
   name = "motosan-dev";
 
@@ -21,11 +24,13 @@ pkgs.mkShell {
     # Python
     python312
     uv
+    ruff
 
-    # formatters
-    nixpkgs-fmt
-    taplo
-    treefmt
+    # Dev scripts
+    scripts.check-rust
+    scripts.check-python
+    scripts.check-all
+    scripts.test-live
   ];
 
   shellHook = ''
