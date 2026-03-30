@@ -1,52 +1,38 @@
-# CLAUDE.md — motosan-ai
+# CLAUDE.md
 
-## Dev Environment
-
-Uses Nix flake + direnv. `cd` into the project to auto-activate.
+## Commands
 
 ```bash
-# Manual entry (if direnv not hooked)
-nix develop
+fmt           # Format all (Rust + Python + TOML + Nix)
+check-all     # Full CI gate: lint + test both SDKs
+check-rust    # fmt → clippy → test --all-features
+check-python  # ruff → format check → pytest
+test-live     # Anthropic integration tests (auto-resolves API key)
 ```
 
-## Quick Commands
+Requires `nix develop` (direnv auto-activates on `cd`).
 
-```bash
-fmt           # Format everything (Rust + Python + TOML + Nix)
-lint          # Clippy + ruff + treefmt --fail-on-change
-check-rust    # fmt → clippy → test (mirrors CI)
-check-python  # ruff → format check → pytest (mirrors CI)
-check-all     # Python + Rust full gate
-test-live     # Anthropic integration tests (needs API key)
-```
+## Rules That Prevent Mistakes
 
-## Before Committing
+Provider logic goes in `providers/` only — never in `client.rs`/`client.py`.
 
-Pre-commit hook runs `fmt` automatically. If it fails, review and re-stage.
+Tool call field is `input`, not `args` or `params`. Everywhere, both SDKs.
 
-For manual checks: `check-all`
+`ChatResponse.tool_calls` is always a list/Vec — never optional, never nullable.
 
-## Formatting Standards
+Anthropic and OpenAI serialize tool calls differently. Read `@specs/types.md` and the provider files before touching serialization. Mixing them up is the #1 source of bugs.
 
-- **Rust**: `rustfmt` (edition 2021, max_width 100) + `clippy` (msrv 1.82)
-- **Python**: `ruff` (py311, line-length 100, E/W/F/I/UP/B/SIM/RUF rules)
-- **TOML**: `taplo`
-- **Nix**: `nixpkgs-fmt`
-- **Unified**: `treefmt` runs all formatters
+Anthropic system prompt goes in top-level `"system"` field. OpenAI/MiniMax system prompt goes in messages array as `role: system`. Getting this wrong = silent failures.
 
-## Project Layout
+Anthropic `tool_call_id` only appears in `content_block_start`, never in deltas. The stream adapter must track `current_tool_id` in state.
 
-```
-sdks/rust/     # Rust SDK — feature-flagged providers
-sdks/python/   # Python SDK — optional deps per provider
-devshell/      # Nix devShell config + scripts
-specs/         # Canonical type definitions
-```
+## What Not To Do
 
-## Key Rules
+- No sync wrappers in Python — callers use `asyncio.run()`
+- No FFI or shared code between SDKs — each language is idiomatic
+- No provider logic outside `providers/`
+- No breaking the `LlmClient` Protocol (motosan-chat depends on it)
 
-- Provider-specific logic stays in `providers/` only
-- Field name `input` (not `args`) for tool call payloads
-- `ChatResponse.tool_calls` is always a list — never optional
-- Do not add sync wrappers to Python
-- Do not share code between SDKs via FFI
+## Release Checklist
+
+See `@llms.txt` § Release for the full process. Files to update: `Cargo.toml`/`pyproject.toml`, `CHANGELOG.md`, `AGENTS.md`, `llms.txt`, `skills/motosan-ai/SKILL.md`.
