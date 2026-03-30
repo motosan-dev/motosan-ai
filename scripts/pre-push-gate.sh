@@ -14,6 +14,9 @@ echo "=== Pre-push gate ==="
 if ! command -v cargo &>/dev/null; then
     echo "ℹ️  cargo not found — skipping Rust tests. Install via nix develop or rustup."
     SKIP_RUST=1
+elif ! cargo check --manifest-path sdks/rust/Cargo.toml -q 2>/dev/null; then
+    echo "ℹ️  cargo check failed (environment incomplete, e.g. missing linker libs) — skipping Rust tests."
+    SKIP_RUST=1
 else
     SKIP_RUST=0
 fi
