@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-motosan-ai = { version = "0.5.2", features = ["anthropic"] }
+motosan-ai = { version = "0.5.3", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 ```
 

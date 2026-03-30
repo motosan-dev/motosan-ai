@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.5.3] - 2026-03-30
+
+### Fixed
+- Fix `cargo fmt` formatting in `client.rs` that blocked CI publish for v0.5.2.
+
 ## [0.5.2] - 2026-03-30
 
 ### Added
