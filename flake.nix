@@ -1,33 +1,35 @@
 {
-  description = "motosan-ai dev environment";
+  description = "motosan-ai multi-provider LLM SDK";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { nixpkgs, flake-utils, ... }:
+  outputs = { self, nixpkgs, flake-utils, fenix }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ fenix.overlays.default ];
+        };
+
+        rustToolchain = with fenix.packages.${system}; combine [
+          stable.rustc
+          stable.cargo
+          stable.clippy
+          stable.rust-src
+          stable.rust-std
+          default.rustfmt
+        ];
       in
       {
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            # Rust
-            rustup
-
-            # Python
-            python312
-            uv
-
-            # Native deps (reqwest / ring)
-            libiconv
-            pkg-config
-            openssl
-          ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [
-            pkgs.apple-sdk
-          ];
+        devShells.default = pkgs.callPackage ./devshell {
+          inherit rustToolchain;
         };
       });
 }
