@@ -14,11 +14,14 @@ echo "=== Pre-push gate ==="
 if ! command -v cargo &>/dev/null; then
     echo "ℹ️  cargo not found — skipping Rust tests. Install via nix develop or rustup."
     SKIP_RUST=1
-elif ! cargo check --manifest-path sdks/rust/Cargo.toml -q 2>/dev/null; then
-    echo "ℹ️  cargo check failed (environment incomplete, e.g. missing linker libs) — skipping Rust tests."
-    SKIP_RUST=1
 else
     SKIP_RUST=0
+    # On macOS with rustup (outside nix), libiconv lives in the Xcode SDK.
+    # Set LIBRARY_PATH so the linker can find it without needing nix.
+    if [ "$(uname)" = "Darwin" ] && command -v xcrun &>/dev/null; then
+        SDK_LIB="$(xcrun --show-sdk-path 2>/dev/null)/usr/lib"
+        export LIBRARY_PATH="${SDK_LIB}${LIBRARY_PATH:+:$LIBRARY_PATH}"
+    fi
 fi
 
 if ! command -v uv &>/dev/null; then
