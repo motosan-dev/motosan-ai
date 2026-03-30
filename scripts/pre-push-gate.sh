@@ -16,12 +16,6 @@ if ! command -v cargo &>/dev/null; then
     SKIP_RUST=1
 else
     SKIP_RUST=0
-    # On macOS with rustup (outside nix), libiconv lives in the Xcode SDK.
-    # Set LIBRARY_PATH so the linker can find it without needing nix.
-    if [ "$(uname)" = "Darwin" ] && command -v xcrun &>/dev/null; then
-        SDK_LIB="$(xcrun --show-sdk-path 2>/dev/null)/usr/lib"
-        export LIBRARY_PATH="${SDK_LIB}${LIBRARY_PATH:+:$LIBRARY_PATH}"
-    fi
 fi
 
 if ! command -v uv &>/dev/null; then
