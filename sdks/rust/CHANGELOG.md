@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.5.4] - 2026-03-31
+
+### Changed
+- Upgrade `motosan-agent-tool` dependency from 0.2 to 0.3.
+
 ## [0.5.3] - 2026-03-30
 
 ### Fixed
