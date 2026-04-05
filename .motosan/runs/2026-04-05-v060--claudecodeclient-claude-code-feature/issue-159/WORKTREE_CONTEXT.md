@@ -1,0 +1,13 @@
+# Worktree Context
+- **Issue**: #159
+- **Title**: docs: document three LlmClient backends (api-key / oauth / claude-code)
+- **Repo**: motosan-dev/motosan-ai
+- **Branch**: feat/issue-159
+- **Worktree**: /tmp/motosan-dev-motosan-ai-issue-159
+- **Project Path**: /Users/wadeniubi/Projects/wade/motosan-ai
+- **Test Command**:
+- **Format Command**:
+- **Lint Command**:
+- **Skip CI**: false
+- **Has CLAUDE.md**: true
+- **Has AGENTS.md**: true
