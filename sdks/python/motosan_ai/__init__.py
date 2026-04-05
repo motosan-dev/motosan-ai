@@ -9,6 +9,7 @@ from motosan_ai.error import (
     RateLimitError,
     StreamError,
 )
+from motosan_ai.providers.claude_code import ClaudeCodeClient
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -25,6 +26,7 @@ __all__ = [
     "AuthError",
     "ChatRequest",
     "ChatResponse",
+    "ClaudeCodeClient",
     "Client",
     "ConfigError",
     "InvalidRequestError",
