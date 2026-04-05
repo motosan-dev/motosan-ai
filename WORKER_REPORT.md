@@ -1,28 +1,29 @@
-# Worker Report: Issue #157
+# Worker Report: Issue #158
 
 ## Summary
-Implemented `ClaudeCodeClient::chat()` — the blocking subprocess path that invokes the `claude` CLI via `tokio::process::Command`.
+Implemented `ClaudeCodeClient::stream()` method with NDJSON parsing for `--output-format stream-json`.
 
 ## Changes
 
 ### `sdks/rust/Cargo.toml`
-- Added `process` and `io-util` features to the tokio dependency (needed for subprocess spawning and stdin writing).
+- Added `async-stream = { version = "0.3", optional = true }` dependency
+- Added `"dep:async-stream"` to `claude-code` feature list
 
-### `sdks/rust/src/claude_code/spawn.rs`
-- `SpawnConfig` struct: holds binary path, agent mode flag, model, and system prompt.
-- `invoke_cli()` async function: spawns `claude --print`, passes prompt via stdin, handles 300s timeout, parses agent-mode JSON output for result/usage.
-
-### `sdks/rust/src/claude_code/prompt.rs` (NEW)
-- `messages_to_prompt()`: flattens multi-turn `Message` slice into `(Option<system_prompt>, user_prompt)` for the CLI.
-- 4 unit tests covering single message, multi-turn, system extraction, and empty input.
+### `sdks/rust/src/claude_code/stream_json.rs` (new)
+- `ClaudeStreamEvent` — tagged enum deserializing `text` and `result` NDJSON events
+- `ClaudeStreamUsage` — usage fields from result events
+- `NdjsonAction` — parsed action enum (Text or Result)
+- `parse_ndjson_line()` — parses a single NDJSON line into `NdjsonAction`
+- 6 unit tests: text event, result with/without usage, unknown events, malformed JSON, empty text
 
 ### `sdks/rust/src/claude_code/mod.rs`
-- Added `pub mod prompt;` declaration.
-- Implemented `chat()` method on `ClaudeCodeClient`: extracts system prompt, flattens messages, builds `SpawnConfig`, calls `invoke_cli`, returns `ChatResponse`.
-- Added `#[ignore]` integration test for manual CLI verification.
+- Added `stream()` method to `ClaudeCodeClient`
+- Spawns `claude --print --output-format stream-json` with optional flags
+- Reads stdout line-by-line via `BufReader`, parses each line with `parse_ndjson_line`
+- Yields `StreamEvent::text`, `StreamEvent::usage`, and `StreamEvent::done` events
+- Returns `Result<BoxStream, MotosanError>`
 
 ## Verification
 - `cargo fmt` — clean
-- `cargo check --features claude-code` — compiles (no new warnings)
-- `cargo clippy --features claude-code` — no new warnings (pre-existing `client.rs` warnings unchanged)
-- `cargo test --features claude-code` — 25 passed, 0 failed, 1 ignored
+- `cargo check --features claude-code` — compiles (only pre-existing warning)
+- `cargo test --features claude-code` — 31 passed, 0 failed, 1 ignored (integration)

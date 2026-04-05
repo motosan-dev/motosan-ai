@@ -6,6 +6,7 @@ use std::env;
 use std::path::PathBuf;
 
 use crate::error::MotosanError;
+use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
 /// Client that shells out to the `claude` CLI binary.
@@ -74,6 +75,94 @@ impl ClaudeCodeClient {
             usage,
             stop_reason: StopReason::EndTurn,
         })
+    }
+
+    /// Stream a chat request via `claude --print --output-format stream-json`.
+    ///
+    /// Returns a `BoxStream` that yields `StreamEvent` items parsed from
+    /// newline-delimited JSON events emitted by the CLI.
+    pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::process::Command;
+
+        let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
+        let system_prompt = request.system.or(msg_system);
+        let model = request.model.or_else(|| self.model.clone());
+
+        let mut cmd = Command::new(&self.binary_path);
+        cmd.arg("--print").arg("--output-format").arg("stream-json");
+
+        if self.agent_mode {
+            cmd.arg("--dangerously-skip-permissions");
+        }
+
+        if let Some(ref m) = model {
+            cmd.arg("--model").arg(m);
+        }
+
+        if let Some(ref sp) = system_prompt {
+            if !sp.is_empty() {
+                cmd.arg("--append-system-prompt").arg(sp);
+            }
+        }
+
+        cmd.arg("-");
+        cmd.kill_on_drop(true);
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| MotosanError::ProviderError(format!("failed to spawn claude CLI: {e}")))?;
+
+        // Write prompt to stdin then close it
+        {
+            let mut stdin = child.stdin.take().ok_or_else(|| {
+                MotosanError::ProviderError("failed to open claude CLI stdin".to_string())
+            })?;
+            stdin.write_all(user_prompt.as_bytes()).await.map_err(|e| {
+                MotosanError::ProviderError(format!("failed to write to claude stdin: {e}"))
+            })?;
+            // stdin dropped here, sending EOF
+        }
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            MotosanError::ProviderError("failed to open claude CLI stdout".to_string())
+        })?;
+
+        let reader = BufReader::new(stdout);
+
+        let stream = async_stream::stream! {
+            let mut lines = reader.lines();
+
+            while let Ok(Some(line)) = lines.next_line().await {
+                let line = line.trim().to_string();
+                if line.is_empty() {
+                    continue;
+                }
+
+                if let Some(action) = stream_json::parse_ndjson_line(&line) {
+                    match action {
+                        stream_json::NdjsonAction::Text(event) => {
+                            yield event;
+                        }
+                        stream_json::NdjsonAction::Result { usage, done } => {
+                            if let Some(usage_event) = usage {
+                                yield usage_event;
+                            }
+                            yield done;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Wait for child to exit
+            let _ = child.wait().await;
+        };
+
+        Ok(Box::pin(stream) as BoxStream)
     }
 }
 
