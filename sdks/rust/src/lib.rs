@@ -10,6 +10,11 @@ pub mod types;
 #[cfg(feature = "agent-tool")]
 pub mod tool_compat;
 
+#[cfg(feature = "claude-code")]
+pub mod claude_code;
+#[cfg(feature = "claude-code")]
+pub use claude_code::ClaudeCodeClient;
+
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;
 pub use models::{
