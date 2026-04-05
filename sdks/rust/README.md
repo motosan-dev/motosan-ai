@@ -1,6 +1,6 @@
 # motosan-ai (Rust SDK)
 
-Feature-flagged Rust SDK for Anthropic, OpenAI, and MiniMax.
+Feature-flagged Rust SDK for Anthropic, OpenAI, MiniMax, Ollama, and the Claude Code CLI.
 
 ## Quickstart
 
@@ -289,7 +289,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "...", features = ["claude-code"] }
+motosan-ai = { version = "0.6.0", features = ["claude-code"] }
 ```
 
 ```rust
