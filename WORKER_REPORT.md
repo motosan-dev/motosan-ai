@@ -1,19 +1,28 @@
-# Worker Report: Issue #156
+# Worker Report: Issue #157
 
-## What was done
-Added `claude-code` feature gate and `ClaudeCodeClient` skeleton struct to the Rust SDK.
+## Summary
+Implemented `ClaudeCodeClient::chat()` — the blocking subprocess path that invokes the `claude` CLI via `tokio::process::Command`.
 
-## Files changed
-- `sdks/rust/Cargo.toml` — added `claude-code = ["dep:tokio", "dep:tokio-stream"]` feature
-- `sdks/rust/src/lib.rs` — added conditional compilation for `claude_code` module and `ClaudeCodeClient` re-export
-- `sdks/rust/src/claude_code/mod.rs` — `ClaudeCodeClient` struct with `new()`, `with_path()`, `agent_mode()`, `model()` builder methods
-- `sdks/rust/src/claude_code/spawn.rs` — empty placeholder for subprocess helpers
-- `sdks/rust/src/claude_code/stream_json.rs` — empty placeholder for NDJSON event types
+## Changes
 
-## Test results
-- `cargo check --features claude-code` — passes (only pre-existing warning in client.rs)
-- `cargo check` (no features) — passes, claude_code module not compiled
-- `cargo clippy --features claude-code` — no warnings from claude_code module (pre-existing warnings in client.rs from dead_code and needless_return are unrelated)
+### `sdks/rust/Cargo.toml`
+- Added `process` and `io-util` features to the tokio dependency (needed for subprocess spawning and stdin writing).
 
-## Concerns
-- Pre-existing clippy warnings in `client.rs` cause `clippy -- -D warnings` to fail regardless of this change. Not addressed as it's out of scope.
+### `sdks/rust/src/claude_code/spawn.rs`
+- `SpawnConfig` struct: holds binary path, agent mode flag, model, and system prompt.
+- `invoke_cli()` async function: spawns `claude --print`, passes prompt via stdin, handles 300s timeout, parses agent-mode JSON output for result/usage.
+
+### `sdks/rust/src/claude_code/prompt.rs` (NEW)
+- `messages_to_prompt()`: flattens multi-turn `Message` slice into `(Option<system_prompt>, user_prompt)` for the CLI.
+- 4 unit tests covering single message, multi-turn, system extraction, and empty input.
+
+### `sdks/rust/src/claude_code/mod.rs`
+- Added `pub mod prompt;` declaration.
+- Implemented `chat()` method on `ClaudeCodeClient`: extracts system prompt, flattens messages, builds `SpawnConfig`, calls `invoke_cli`, returns `ChatResponse`.
+- Added `#[ignore]` integration test for manual CLI verification.
+
+## Verification
+- `cargo fmt` — clean
+- `cargo check --features claude-code` — compiles (no new warnings)
+- `cargo clippy --features claude-code` — no new warnings (pre-existing `client.rs` warnings unchanged)
+- `cargo test --features claude-code` — 25 passed, 0 failed, 1 ignored
