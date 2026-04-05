@@ -2,6 +2,20 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.6.0] - 2026-04-05
+
+### Added
+- **`claude-code` feature**: `ClaudeCodeClient` — shells out to the `claude` CLI binary as a fourth LLM backend.
+  - `ClaudeCodeClient::new()` resolves binary from `CLAUDE_CODE_PATH` env or `"claude"` in `PATH`.
+  - `ClaudeCodeClient::chat(request)` — blocking subprocess via `--print`, supports `agent_mode` with JSON output parsing.
+  - `ClaudeCodeClient::stream(request)` — NDJSON streaming via `--print --output-format stream-json`, yields `StreamEvent` items.
+  - `.model(model)` builder: forwards `--model <value>` when non-empty and not `"default"` (case-insensitive); skips otherwise.
+  - `.agent_mode(bool)` builder: enables `--dangerously-skip-permissions`.
+  - Resolves binary path from `CLAUDE_CODE_PATH` env var with fallback to `"claude"`.
+
+### Changed
+- `DEFAULT_MAX_TOKENS` raised from `4096` to `8192` for the Anthropic provider.
+
 ## [0.5.4] - 2026-03-31
 
 ### Changed
