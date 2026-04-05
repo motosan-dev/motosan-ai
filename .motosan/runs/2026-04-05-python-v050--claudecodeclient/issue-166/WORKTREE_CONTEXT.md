@@ -1,0 +1,13 @@
+# Worktree Context
+- **Issue**: #166
+- **Title**: feat(python): ClaudeCodeClient — claude CLI subprocess backend
+- **Repo**: motosan-dev/motosan-ai
+- **Branch**: feat/issue-166
+- **Worktree**: /tmp/motosan-dev-motosan-ai-issue-166
+- **Project Path**: /Users/wadeniubi/Projects/wade/motosan-ai
+- **Test Command**: cd sdks/python && uv run pytest
+- **Format Command**: cd sdks/python && uv run ruff format .
+- **Lint Command**: cd sdks/python && uv run ruff check . --fix
+- **Skip CI**: false
+- **Has CLAUDE.md**: true
+- **Has AGENTS.md**: true
