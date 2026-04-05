@@ -2,6 +2,18 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.5.0] - 2026-04-05
+
+### Added
+- **`ClaudeCodeClient`** — fourth LLM backend that shells out to the `claude` CLI binary (parity with Rust SDK `claude-code` feature).
+  - `ClaudeCodeClient()` resolves binary from `CLAUDE_CODE_PATH` env or `"claude"` in `PATH`.
+  - `ClaudeCodeClient.with_path(path)` — explicit binary path.
+  - `.model(model)` — forwards `--model <value>` when non-empty and not `"default"` (case-insensitive, trimmed).
+  - `.agent_mode(bool)` — enables `--dangerously-skip-permissions` + JSON output parsing.
+  - `async chat(request) -> ChatResponse` — subprocess via `--print`, 300 s timeout.
+  - `async stream(request) -> AsyncIterator[StreamEvent]` — NDJSON streaming via `--print --output-format stream-json --verbose`, per-line 300 s timeout, subprocess always cleaned up via `try/finally`.
+  - `ClaudeCodeClient` exported from `motosan_ai` top-level.
+
 ## [0.4.2] - 2026-03-18
 
 ### Added

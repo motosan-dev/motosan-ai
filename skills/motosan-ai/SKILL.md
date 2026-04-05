@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) — LLM ch
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.4.2 / Rust 0.6.0
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.6.0
 
 Providers: Anthropic, OpenAI, MiniMax, Ollama
 
