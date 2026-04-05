@@ -17,6 +17,14 @@ pub struct SpawnConfig {
 
 const TIMEOUT_SECS: u64 = 300;
 
+/// Returns `true` if `model` should be forwarded to the CLI via `--model`.
+///
+/// Skips empty strings, whitespace-only strings, and the sentinel value `"default"`.
+pub(crate) fn should_forward_model(model: &str) -> bool {
+    let trimmed = model.trim();
+    !trimmed.is_empty() && trimmed != "default"
+}
+
 /// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
 pub async fn invoke_cli(
     config: &SpawnConfig,
@@ -31,7 +39,9 @@ pub async fn invoke_cli(
     }
 
     if let Some(ref model) = config.model {
-        cmd.arg("--model").arg(model);
+        if should_forward_model(model) {
+            cmd.arg("--model").arg(model);
+        }
     }
 
     if let Some(ref sp) = config.system_prompt {
@@ -129,4 +139,32 @@ fn parse_agent_json(raw: &str) -> Result<(String, Usage), MotosanError> {
     };
 
     Ok((text, usage))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn should_forward_model_forwards_named_models() {
+        assert!(should_forward_model("sonnet"));
+        assert!(should_forward_model("opus"));
+        assert!(should_forward_model("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn should_forward_model_skips_default() {
+        assert!(!should_forward_model("default"));
+    }
+
+    #[test]
+    fn should_forward_model_skips_empty() {
+        assert!(!should_forward_model(""));
+    }
+
+    #[test]
+    fn should_forward_model_skips_whitespace() {
+        assert!(!should_forward_model("   "));
+        assert!(!should_forward_model("\t"));
+    }
 }
