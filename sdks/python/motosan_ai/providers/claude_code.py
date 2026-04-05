@@ -266,5 +266,10 @@ class ClaudeCodeClient:
         finally:
             # Ensure the child process is always cleaned up, even if the caller
             # breaks out of the async-for loop early or an exception is raised.
-            proc.kill()
+            # Guard against ProcessLookupError when the process has already exited
+            # (the normal completion path).
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
             await proc.wait()
