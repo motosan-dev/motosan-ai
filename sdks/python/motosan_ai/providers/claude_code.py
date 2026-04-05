@@ -214,7 +214,11 @@ class ClaudeCodeClient:
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
-        """Stream via ``claude --print --output-format stream-json``, yielding NDJSON events."""
+        """Stream via ``claude --print --output-format stream-json``, yielding NDJSON events.
+
+        Raises :class:`~motosan_ai.error.ProviderError` if no output is received
+        within ``_TIMEOUT_SECS`` seconds.
+        """
         msg_system, user_prompt = _messages_to_prompt(request.messages)
         system_prompt = request.system or msg_system
 
@@ -239,14 +243,28 @@ class ClaudeCodeClient:
         await proc.stdin.wait_closed()
 
         assert proc.stdout is not None
-        async for raw_line in proc.stdout:
-            line = raw_line.decode().strip()
-            if not line:
-                continue
-            event = _parse_ndjson_line(line)
-            if event is not None:
-                yield event
-                if event.done:
+        try:
+            while True:
+                try:
+                    raw_line = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=_TIMEOUT_SECS
+                    )
+                except TimeoutError as exc:
+                    raise ProviderError(
+                        f"claude CLI stream timed out after {_TIMEOUT_SECS} seconds"
+                    ) from exc
+                if not raw_line:
                     break
-
-        await proc.wait()
+                line = raw_line.decode().strip()
+                if not line:
+                    continue
+                event = _parse_ndjson_line(line)
+                if event is not None:
+                    yield event
+                    if event.done:
+                        break
+        finally:
+            # Ensure the child process is always cleaned up, even if the caller
+            # breaks out of the async-for loop early or an exception is raised.
+            proc.kill()
+            await proc.wait()

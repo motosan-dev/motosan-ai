@@ -284,3 +284,11 @@ class TestBuildArgs:
         client = ClaudeCodeClient()
         args = client._build_args(model=None, system_prompt="  ")
         assert "--append-system-prompt" not in args
+
+    def test_agent_mode_with_stream_format_no_double_output_format(self):
+        client = ClaudeCodeClient().agent_mode(True)
+        args = client._build_args(model=None, system_prompt=None, output_format="stream-json")
+        assert args.count("--output-format") == 1
+        idx = args.index("--output-format")
+        assert args[idx + 1] == "stream-json"
+        assert "--dangerously-skip-permissions" in args
