@@ -73,7 +73,13 @@ def _parse_agent_json(raw: str) -> tuple[str, Usage]:
 
 
 def _parse_ndjson_line(line: str) -> StreamEvent | None:
-    """Parse a single NDJSON line into a ``StreamEvent`` or ``None``."""
+    """Parse a single NDJSON line into a ``StreamEvent`` or ``None``.
+
+    The ``claude --print --output-format stream-json --verbose`` CLI emits
+    events with ``type`` of ``"assistant"`` (containing message content) and
+    ``"result"`` (final summary with usage).  Text is nested inside
+    ``message.content[]`` blocks with ``type == "text"``.
+    """
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -81,8 +87,16 @@ def _parse_ndjson_line(line: str) -> StreamEvent | None:
 
     event_type = event.get("type")
 
-    if event_type == "text":
-        text = event.get("text", "")
+    if event_type == "assistant":
+        message = event.get("message", {})
+        content_blocks = message.get("content", [])
+        parts: list[str] = []
+        for block in content_blocks:
+            if isinstance(block, dict) and block.get("type") == "text":
+                t = block.get("text", "")
+                if t:
+                    parts.append(t)
+        text = "".join(parts)
         if not text:
             return None
         return StreamEvent(content=text, done=False)
@@ -134,6 +148,8 @@ class ClaudeCodeClient:
 
         if output_format is not None:
             args.extend(["--output-format", output_format])
+            if output_format == "stream-json":
+                args.append("--verbose")
 
         effective_model = model or self._model
         if effective_model:

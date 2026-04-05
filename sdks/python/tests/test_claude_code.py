@@ -114,22 +114,75 @@ class TestParseAgentJson:
 
 
 class TestParseNdjsonLine:
-    def test_text_event(self):
-        event = _parse_ndjson_line('{"type":"text","text":"Hello"}')
+    def test_assistant_text_event(self):
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": "Hello"}],
+                },
+            }
+        )
+        event = _parse_ndjson_line(line)
         assert event is not None
         assert event.content == "Hello"
         assert not event.done
 
+    def test_assistant_multiple_text_blocks(self):
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [
+                        {"type": "text", "text": "Hello "},
+                        {"type": "text", "text": "world"},
+                    ],
+                },
+            }
+        )
+        event = _parse_ndjson_line(line)
+        assert event is not None
+        assert event.content == "Hello world"
+        assert not event.done
+
+    def test_assistant_thinking_block_ignored(self):
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "thinking", "thinking": "hmm"}],
+                },
+            }
+        )
+        assert _parse_ndjson_line(line) is None
+
+    def test_assistant_empty_content(self):
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {"content": []},
+            }
+        )
+        assert _parse_ndjson_line(line) is None
+
+    def test_assistant_empty_text_ignored(self):
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "message": {
+                    "content": [{"type": "text", "text": ""}],
+                },
+            }
+        )
+        assert _parse_ndjson_line(line) is None
+
     def test_result_event(self):
-        event = _parse_ndjson_line('{"type":"result","result":"done"}')
+        event = _parse_ndjson_line('{"type":"result","subtype":"success","result":"done"}')
         assert event is not None
         assert event.done
 
-    def test_empty_text_ignored(self):
-        assert _parse_ndjson_line('{"type":"text","text":""}') is None
-
     def test_unknown_type_ignored(self):
-        assert _parse_ndjson_line('{"type":"progress","percent":50}') is None
+        assert _parse_ndjson_line('{"type":"system","subtype":"init"}') is None
 
     def test_malformed_json(self):
         assert _parse_ndjson_line("not json") is None
@@ -219,6 +272,7 @@ class TestBuildArgs:
         args = client._build_args(model=None, system_prompt=None, output_format="stream-json")
         idx = args.index("--output-format")
         assert args[idx + 1] == "stream-json"
+        assert "--verbose" in args
 
     def test_system_prompt(self):
         client = ClaudeCodeClient()

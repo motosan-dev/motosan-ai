@@ -10,6 +10,7 @@ Run manually:
 
 from __future__ import annotations
 
+import os
 import shutil
 
 import pytest
@@ -17,7 +18,7 @@ import pytest
 from motosan_ai import ClaudeCodeClient, Message
 from motosan_ai.types import ChatRequest
 
-_HAS_CLAUDE = shutil.which("claude") is not None
+_HAS_CLAUDE = shutil.which(os.environ.get("CLAUDE_CODE_PATH", "claude")) is not None
 
 pytestmark = [
     pytest.mark.skipif(not _HAS_CLAUDE, reason="claude CLI not found in PATH"),
