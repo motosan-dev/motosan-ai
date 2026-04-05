@@ -22,7 +22,7 @@ const TIMEOUT_SECS: u64 = 300;
 /// Skips empty strings, whitespace-only strings, and the sentinel value `"default"`.
 pub(crate) fn should_forward_model(model: &str) -> bool {
     let trimmed = model.trim();
-    !trimmed.is_empty() && trimmed != "default"
+    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("default")
 }
 
 /// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
@@ -166,5 +166,11 @@ mod tests {
     fn should_forward_model_skips_whitespace() {
         assert!(!should_forward_model("   "));
         assert!(!should_forward_model("\t"));
+    }
+
+    #[test]
+    fn should_forward_model_skips_whitespace_padded_default() {
+        assert!(!should_forward_model("  default  "));
+        assert!(!should_forward_model("  Default  "));
     }
 }
