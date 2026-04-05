@@ -1,4 +1,4 @@
-const DEFAULT_MAX_TOKENS: u32 = 4096;
+const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 use crate::error::MotosanError;
 use crate::models::DEFAULT_ANTHROPIC_MODEL;

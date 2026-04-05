@@ -167,7 +167,7 @@ async fn chat_without_max_tokens_uses_default() {
     let mock = server
         .mock("POST", "/v1/messages")
         .match_header("x-api-key", "test-key")
-        .match_body(Matcher::Regex(r#""max_tokens"\s*:\s*4096"#.to_string()))
+        .match_body(Matcher::Regex(r#""max_tokens"\s*:\s*8192"#.to_string()))
         .with_status(200)
         .with_body(
             json!({
