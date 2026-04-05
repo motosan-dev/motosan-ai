@@ -36,6 +36,9 @@ response = await client.chat([Message.user("Hello")])
 [dependencies]
 motosan-ai = { version = "0.5.4", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
+
+# To use ClaudeCodeClient (shells out to the claude CLI):
+motosan-ai = { version = "0.5.4", features = ["claude-code"] }
 ```
 
 ```bash
@@ -52,6 +55,52 @@ pip install "motosan-ai[full]"   # all providers
 | OpenAI | `gpt-5.3-codex` | `openai` | `[openai]` |
 | MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
+
+## Backends (Rust)
+
+The Rust SDK offers three interchangeable backends that all produce the same `ChatResponse` type:
+
+```rust
+use motosan_ai::{Client, Provider, Message};
+
+// 1. API key — standard provider client
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key("sk-ant-api03-...")
+    .build()?;
+
+// 2. OAuth token — same Client, auto-detected by key prefix
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key("sk-ant-oat01-...")   // OAuth format
+    .build()?;
+
+// 3. Claude Code CLI — no API key needed (uses your local claude session)
+#[cfg(feature = "claude-code")]
+use motosan_ai::ClaudeCodeClient;
+
+#[cfg(feature = "claude-code")]
+let claude = ClaudeCodeClient::new();
+```
+
+All three support `chat()` and `stream()`:
+
+```rust
+// Client (backends 1 & 2)
+let response = client.chat(vec![Message::user("Hello")]).await?;
+
+// ClaudeCodeClient (backend 3)
+let request = motosan_ai::types::ChatRequest {
+    messages: vec![Message::user("Hello")],
+    ..Default::default()
+};
+let response = claude.chat(request).await?;
+```
+
+**ClaudeCodeClient limitations:**
+- Requires the `claude` CLI installed and authenticated (`claude` in `PATH`, or set `CLAUDE_CODE_PATH`)
+- No tool calling — `tool_calls` is always empty
+- Feature-gated: add `features = ["claude-code"]` to your `Cargo.toml`
 
 ## Features
 
