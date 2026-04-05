@@ -17,6 +17,21 @@ pub struct SpawnConfig {
 
 const TIMEOUT_SECS: u64 = 300;
 
+/// Returns the trimmed model string to forward as `--model <value>`, or `None` if
+/// the value should be skipped.
+///
+/// Skips empty strings, whitespace-only strings, and the sentinel value `"default"`
+/// (case-insensitive). Returning the trimmed value directly prevents callers from
+/// accidentally forwarding padded whitespace to the CLI.
+pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
 /// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
 pub async fn invoke_cli(
     config: &SpawnConfig,
@@ -31,7 +46,9 @@ pub async fn invoke_cli(
     }
 
     if let Some(ref model) = config.model {
-        cmd.arg("--model").arg(model);
+        if let Some(m) = model_to_forward(model) {
+            cmd.arg("--model").arg(m);
+        }
     }
 
     if let Some(ref sp) = config.system_prompt {
@@ -129,4 +146,32 @@ fn parse_agent_json(raw: &str) -> Result<(String, Usage), MotosanError> {
     };
 
     Ok((text, usage))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_to_forward_returns_trimmed_named_models() {
+        assert_eq!(model_to_forward("sonnet"), Some("sonnet"));
+        assert_eq!(model_to_forward("opus"), Some("opus"));
+        assert_eq!(model_to_forward("claude-sonnet-4-6"), Some("claude-sonnet-4-6"));
+        assert_eq!(model_to_forward("  sonnet  "), Some("sonnet"));
+    }
+
+    #[test]
+    fn model_to_forward_skips_default() {
+        assert_eq!(model_to_forward("default"), None);
+        assert_eq!(model_to_forward("Default"), None);
+        assert_eq!(model_to_forward("DEFAULT"), None);
+        assert_eq!(model_to_forward("  default  "), None);
+    }
+
+    #[test]
+    fn model_to_forward_skips_empty_and_whitespace() {
+        assert_eq!(model_to_forward(""), None);
+        assert_eq!(model_to_forward("   "), None);
+        assert_eq!(model_to_forward("\t"), None);
+    }
 }
