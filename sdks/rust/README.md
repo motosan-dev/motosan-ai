@@ -284,6 +284,24 @@ let request = ChatRequest::builder()
 
 Error handling policy reference: `docs/error-handling-policy.md`.
 
+## Claude Code Backend
+
+The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
+
+```toml
+motosan-ai = { version = "...", features = ["claude-code"] }
+```
+
+```rust
+use motosan_ai::ClaudeCodeClient;
+
+let client = ClaudeCodeClient::new()         // uses $CLAUDE_CODE_PATH or "claude" in PATH
+    .model("sonnet")                          // forwards --model sonnet to the CLI
+    .agent_mode(false);                       // set true to enable --dangerously-skip-permissions
+```
+
+Model selection rules: `--model` is forwarded when the model string is non-empty and not `"default"` (case-insensitive). Pass `"default"` or omit `.model()` to let the CLI use its own default.
+
 ## Publishing
 
 Automated via `publish-rust.yml` on `rust-v*` tag push → crates.io.
