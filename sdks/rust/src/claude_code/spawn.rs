@@ -17,12 +17,19 @@ pub struct SpawnConfig {
 
 const TIMEOUT_SECS: u64 = 300;
 
-/// Returns `true` if `model` should be forwarded to the CLI via `--model`.
+/// Returns the trimmed model string to forward as `--model <value>`, or `None` if
+/// the value should be skipped.
 ///
-/// Skips empty strings, whitespace-only strings, and the sentinel value `"default"`.
-pub(crate) fn should_forward_model(model: &str) -> bool {
+/// Skips empty strings, whitespace-only strings, and the sentinel value `"default"`
+/// (case-insensitive). Returning the trimmed value directly prevents callers from
+/// accidentally forwarding padded whitespace to the CLI.
+pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
     let trimmed = model.trim();
-    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("default")
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        None
+    } else {
+        Some(trimmed)
+    }
 }
 
 /// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
@@ -39,8 +46,8 @@ pub async fn invoke_cli(
     }
 
     if let Some(ref model) = config.model {
-        if should_forward_model(model) {
-            cmd.arg("--model").arg(model);
+        if let Some(m) = model_to_forward(model) {
+            cmd.arg("--model").arg(m);
         }
     }
 
@@ -146,31 +153,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn should_forward_model_forwards_named_models() {
-        assert!(should_forward_model("sonnet"));
-        assert!(should_forward_model("opus"));
-        assert!(should_forward_model("claude-sonnet-4-6"));
+    fn model_to_forward_returns_trimmed_named_models() {
+        assert_eq!(model_to_forward("sonnet"), Some("sonnet"));
+        assert_eq!(model_to_forward("opus"), Some("opus"));
+        assert_eq!(model_to_forward("claude-sonnet-4-6"), Some("claude-sonnet-4-6"));
+        assert_eq!(model_to_forward("  sonnet  "), Some("sonnet"));
     }
 
     #[test]
-    fn should_forward_model_skips_default() {
-        assert!(!should_forward_model("default"));
+    fn model_to_forward_skips_default() {
+        assert_eq!(model_to_forward("default"), None);
+        assert_eq!(model_to_forward("Default"), None);
+        assert_eq!(model_to_forward("DEFAULT"), None);
+        assert_eq!(model_to_forward("  default  "), None);
     }
 
     #[test]
-    fn should_forward_model_skips_empty() {
-        assert!(!should_forward_model(""));
-    }
-
-    #[test]
-    fn should_forward_model_skips_whitespace() {
-        assert!(!should_forward_model("   "));
-        assert!(!should_forward_model("\t"));
-    }
-
-    #[test]
-    fn should_forward_model_skips_whitespace_padded_default() {
-        assert!(!should_forward_model("  default  "));
-        assert!(!should_forward_model("  Default  "));
+    fn model_to_forward_skips_empty_and_whitespace() {
+        assert_eq!(model_to_forward(""), None);
+        assert_eq!(model_to_forward("   "), None);
+        assert_eq!(model_to_forward("\t"), None);
     }
 }

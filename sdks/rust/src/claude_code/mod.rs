@@ -97,7 +97,7 @@ impl ClaudeCodeClient {
         }
 
         if let Some(ref m) = model {
-            if spawn::should_forward_model(m) {
+            if let Some(m) = spawn::model_to_forward(m) {
                 cmd.arg("--model").arg(m);
             }
         }
