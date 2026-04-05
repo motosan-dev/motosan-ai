@@ -35,7 +35,7 @@ response = await client.chat([Message.user("Hello")])
 # Rust (Cargo.toml)
 [dependencies]
 motosan-ai = { version = "0.5.4", features = ["anthropic"] }
-# features: anthropic | openai | minimax | ollama | ollama_native | full
+# features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code
 ```
 
 ```bash
@@ -53,6 +53,40 @@ pip install "motosan-ai[full]"   # all providers
 | MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
 
+## Backends (Rust)
+
+`motosan-ai` supports three ways to talk to Claude, all returning the same `ChatResponse` / `StreamEvent` types:
+
+```rust
+use motosan_ai::{Client, Message, Provider};
+
+// 1. API key — direct HTTP to Anthropic
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key("sk-ant-api03-...")
+    .build()?;
+let response = client.chat(vec![Message::user("Hello")]).await?;
+
+// 2. OAuth token — same Client, auto-detected from token prefix
+let client = Client::builder()
+    .provider(Provider::Anthropic)
+    .api_key("sk-ant-oat01-...")   // OAuth format
+    .build()?;
+let response = client.chat(vec![Message::user("Hello")]).await?;
+```
+
+```rust
+// 3. Claude Code CLI — no API key needed (uses your local claude session)
+// Requires: cargo add motosan-ai --features claude-code
+use motosan_ai::ClaudeCodeClient;
+
+let client = ClaudeCodeClient::new();
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;   // NDJSON streaming
+```
+
+> **ClaudeCodeClient limitations:** No tool calling support — `tool_calls` is always empty. Requires the `claude` CLI installed and authenticated. Enable with `--features claude-code`.
+
 ## Features
 
 - **Chat & Streaming** — `chat()`, `stream()`, `chat_with()`, `stream_with()`, `stream_collect()`
@@ -63,6 +97,7 @@ pip install "motosan-ai[full]"   # all providers
 - **Stream Read Timeout** — configurable per-chunk timeout to prevent SSE hanging
 - **Extended Thinking** — first-class support for Anthropic thinking mode
 - **MCP** — server-side MCP support in `ChatRequest`
+- **Claude Code Backend** — shell out to `claude` CLI via `ClaudeCodeClient` (`--features claude-code`)
 
 ## Quick Example
 
