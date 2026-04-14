@@ -2,6 +2,30 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.9.0] - 2026-04-14
+
+### Added
+- **`StreamEvent::stop_reason: Option<StopReason>`** — terminal stream events now carry the provider-reported stop reason. `None` on intermediate events; `Some(reason)` on the final `done` event when the provider supplies one.
+- **`StreamEvent::done_with_stop_reason(reason)`** constructor for adapters that need to attach a stop reason to the terminal event.
+- **All three HTTP providers propagate stop_reason through streams**:
+  - **Anthropic**: `AnthropicStreamAdapter` captures `message_delta.delta.stop_reason` in adapter state, emits it on `message_stop`. Covers `end_turn` / `max_tokens` / `tool_use` / `stop_sequence` / unknown→`Other`.
+  - **OpenAI**: `OpenAIStreamAdapter` stashes `choices[0].finish_reason`, emits exactly one terminal done event from the `[DONE]` sentinel (or end-of-stream EOF flush). Covers `stop` / `length` / `tool_calls`.
+  - **MiniMax**: same logic as OpenAI, mapping inlined to keep `--features minimax` independent of `--features openai`.
+- **`collect_stream` honors explicit stop reasons**: the existing `tool_calls.is_empty() ? EndTurn : ToolUse` heuristic is now a fallback only — used only when no provider reason was reported.
+
+### Fixed
+- **Double `done` event in OpenAI/MiniMax streams** (pre-existing bug, discovered by new live tests). Adapters used to emit two `done` events per stream — one on the `finish_reason` chunk (with stop_reason) and another on `[DONE]` (without). Callers using `events.last()` would receive the `stop_reason`-less copy. Streams now emit exactly one terminal `done` event with `stop_reason` attached. The `done` event count is asserted by new unit tests.
+- **EOF flush fallback**: if a non-conformant OpenAI-compatible proxy ends the SSE stream without a `[DONE]` sentinel, the adapter now emits a final `done` event from the upstream `Poll::Ready(None)` branch, carrying any stashed `stop_reason`. Previously such streams would terminate without any `done` event at all.
+
+### Changed
+- **`StreamEvent` struct gained one public field** (`stop_reason`). Callers using struct literal construction (`StreamEvent { content: ..., done: ..., ... }`) need to add `stop_reason: None`. Callers using the constructor methods (`StreamEvent::text`, `done`, `usage`, `tool_call_*`) are unaffected.
+
+### Tests
+- 250 unit + integration tests passing (was 229 in v0.8.0).
+- New mockito-based unit coverage for every stop reason variant across all three providers.
+- New EOF-flush unit tests for OpenAI and MiniMax (fixture omits `[DONE]`).
+- New live integration tests against real APIs (`anthropic_live.rs`, `openai_live.rs`, `minimax_live.rs`) — each forces `max_tokens=8` to trigger truncation and asserts the explicit `MaxTokens` reason flows through both the terminal stream event and the `ChatResponse` returned by `collect_stream`. All three providers verified end-to-end against production endpoints.
+
 ## [0.8.0] - 2026-04-14
 
 ### Breaking

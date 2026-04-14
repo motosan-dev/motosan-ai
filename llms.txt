@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.8.0
+- Python 0.5.0 · Rust 0.9.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.8.0", features = ["anthropic"] }
+motosan-ai = { version = "0.9.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeClient → `claude --print --output-format stream-json`
@@ -374,13 +374,24 @@ tool_call.input — parsed arguments (Python: dict, Rust: serde_json::Value)
 ### StreamEvent Fields
 
 ```
-event.event_type           — "text" | "tool_call_start" | "tool_call_args" | "tool_call_end"
+event.event_type           — "text" | "tool_call_start" | "tool_call_args" | "tool_call_end" | "usage"
 event.content              — text delta (String)
 event.done                 — True on last event (bool)
 event.tool_call_id         — tool call ID (Optional)
 event.tool_call_name       — tool name, on tool_call_start (Optional)
 event.tool_call_args_delta — incremental JSON args, on tool_call_args (Optional)
+event.usage                — token tally on usage events (Optional)
+event.stop_reason          — StopReason on the terminal `done` event (Optional)
+                             • Anthropic: from message_delta.delta.stop_reason
+                             • OpenAI / MiniMax: from choices[0].finish_reason
+                             • None on intermediate events
+                             • None on done events for providers that don't report a reason
 ```
+
+Each provider stream emits **exactly one** `done` event; if the provider reports
+a stop reason, it lands on that event. `collect_stream` honors the explicit
+`stop_reason` and only falls back to its tool-calls heuristic when none was
+reported.
 
 ### Event Sequence for Tool Calls
 

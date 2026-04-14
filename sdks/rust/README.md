@@ -34,6 +34,10 @@ let client = Client::builder()
 let mut stream = client.stream(vec![Message::user("stream hello")]).await?;
 while let Some(event) = stream.next().await {
     if event.done {
+        // Terminal event carries the provider-reported stop reason when available.
+        if let Some(reason) = event.stop_reason {
+            eprintln!("\n[stop_reason: {reason:?}]");
+        }
         break;
     }
     print!("{}", event.content);
@@ -41,6 +45,8 @@ while let Some(event) = stream.next().await {
 # Ok(())
 # }
 ```
+
+Each provider stream emits **exactly one** terminal `done` event, and `event.stop_reason` carries the provider's reported reason when present (`Anthropic` `message_delta.stop_reason`, `OpenAI` / `MiniMax` `finish_reason`).
 
 ## Vision / Multimodal
 
@@ -225,6 +231,7 @@ Buffer a streaming response into a single `ChatResponse`:
 // Convenience — stream + collect in one call
 let resp = client.stream_collect(vec![Message::user("hello")]).await?;
 println!("{}", resp.content);
+println!("{:?}", resp.stop_reason);   // honors explicit provider reason
 
 // Full control variant
 let request = ChatRequest::builder()
@@ -232,6 +239,8 @@ let request = ChatRequest::builder()
     .build();
 let resp = client.stream_collect_with(request).await?;
 ```
+
+`collect_stream` honors any `stop_reason` reported on the terminal stream event, falling back to a tool-calls-based heuristic only when no reason was reported (e.g. legacy adapters).
 
 ## Anthropic Auth Matrix
 
@@ -301,7 +310,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.8.0", features = ["claude-code"] }
+motosan-ai = { version = "0.9.0", features = ["claude-code"] }
 ```
 
 ```rust
@@ -319,7 +328,7 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.8.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.9.0", features = ["codex-cli"] }
 ```
 
 ```rust
