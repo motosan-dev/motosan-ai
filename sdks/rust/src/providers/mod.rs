@@ -261,3 +261,9 @@ pub mod minimax;
 
 #[cfg(feature = "ollama_native")]
 pub mod ollama;
+
+#[cfg(feature = "claude-code")]
+pub mod claude_code;
+
+#[cfg(feature = "codex-cli")]
+pub mod codex_cli;

@@ -11,14 +11,14 @@ pub mod types;
 pub mod tool_compat;
 
 #[cfg(feature = "claude-code")]
-pub mod claude_code;
+pub use providers::claude_code;
 #[cfg(feature = "claude-code")]
-pub use claude_code::ClaudeCodeClient;
+pub use providers::claude_code::ClaudeCodeClient;
 
 #[cfg(feature = "codex-cli")]
-pub mod codex_cli;
+pub use providers::codex_cli;
 #[cfg(feature = "codex-cli")]
-pub use codex_cli::CodexCliClient;
+pub use providers::codex_cli::CodexCliClient;
 
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;

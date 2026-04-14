@@ -453,7 +453,7 @@ impl Default for CodexCliClient {
     }
 }
 
-/// Polymorphic dispatch via [`crate::providers::ProviderImpl`].
+/// Polymorphic dispatch via [`super::ProviderImpl`].
 ///
 /// The `chat` and `stream` methods on this impl forward directly to the
 /// inherent methods of the same name (via fully-qualified syntax to avoid
@@ -461,7 +461,7 @@ impl Default for CodexCliClient {
 /// `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` consumer alongside the HTTP
 /// providers without changing call sites.
 #[async_trait::async_trait]
-impl crate::providers::ProviderImpl for CodexCliClient {
+impl super::ProviderImpl for CodexCliClient {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         CodexCliClient::chat(self, req).await
     }
