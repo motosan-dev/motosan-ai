@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -41,6 +41,7 @@ ollama_native = [
   "dep:bytes",
 ]
 claude-code = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
+codex-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 agent-tool = ["dep:motosan-agent-tool"]
 full = ["anthropic", "openai", "minimax", "ollama", "ollama_native"]
 

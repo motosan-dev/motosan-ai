@@ -1,0 +1,512 @@
+//! Subprocess lifecycle and flag wiring for the Codex CLI provider.
+//!
+//! This module owns the translation from [`CodexCliClient`](super::CodexCliClient)
+//! state to argv, plus the blocking [`invoke_cli`] path used by
+//! [`CodexCliClient::chat`](super::CodexCliClient::chat). The streaming path
+//! shares [`apply_common_args`] / [`common_args`] to stay in sync.
+
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::time::Duration;
+
+use tokio::io::AsyncWriteExt;
+use tokio::process::Command;
+
+use crate::error::MotosanError;
+use crate::types::Usage;
+
+use super::stream_json::{self, NdjsonAction};
+
+/// Sandbox policy for Codex CLI, forwarded as `--sandbox <mode>`.
+///
+/// Codex restricts what shell commands the model is allowed to run based on
+/// this setting. Pick the least-privileged option that still lets the task
+/// make progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SandboxMode {
+    /// Read-only file access, no writes or network. Safe default for
+    /// pure-analysis tasks.
+    ReadOnly,
+    /// Read everywhere, write only within the workspace root. Matches the
+    /// behavior Codex uses under `--full-auto`.
+    WorkspaceWrite,
+    /// No sandbox. Only use when the caller is already externally
+    /// sandboxed (disposable container, ephemeral VM).
+    DangerFullAccess,
+}
+
+impl SandboxMode {
+    /// The exact string Codex CLI expects for `--sandbox`.
+    pub(crate) fn as_flag(&self) -> &'static str {
+        match self {
+            SandboxMode::ReadOnly => "read-only",
+            SandboxMode::WorkspaceWrite => "workspace-write",
+            SandboxMode::DangerFullAccess => "danger-full-access",
+        }
+    }
+}
+
+/// Configuration snapshot used to spawn a single `codex` CLI invocation.
+///
+/// Built by [`CodexCliClient::build_spawn_config`](super::CodexCliClient)
+/// from the client state plus any per-request overrides. Each field mirrors
+/// a public field on [`CodexCliClient`](super::CodexCliClient); see that
+/// type's docs for the semantics.
+pub struct SpawnConfig {
+    /// Filesystem path to the `codex` binary.
+    pub binary_path: PathBuf,
+    /// Whether to pass `--full-auto`.
+    pub agent_mode: bool,
+    /// Model name for `--model`. `None` / `"default"` / blank are skipped.
+    pub model: Option<String>,
+    /// Working directory for `--cd`.
+    pub cd: Option<PathBuf>,
+    /// Sandbox policy for `--sandbox`.
+    pub sandbox: Option<SandboxMode>,
+    /// Profile name for `--profile`.
+    pub profile: Option<String>,
+    /// Whether to pass `--ephemeral`.
+    pub ephemeral: bool,
+    /// Forwarded as repeated `-c key=value` arguments, in the order supplied.
+    pub config_overrides: Vec<(String, String)>,
+}
+
+/// Hard timeout for a single `codex exec` invocation.
+///
+/// Codex turns involving many tool calls can take minutes; 10 minutes is a
+/// conservative upper bound that still prevents runaway processes.
+const TIMEOUT_SECS: u64 = 600;
+
+/// Build the argv fragment shared between the blocking
+/// [`invoke_cli`] path and [`CodexCliClient::stream`](super::CodexCliClient::stream).
+///
+/// Returns a `Vec<OsString>` rather than mutating a `Command` so the
+/// config-to-argv mapping is pure and unit-testable. Callers append the
+/// result via `cmd.args(common_args(config))`.
+///
+/// The argument order is stable and documented by the `common_args_*`
+/// unit tests — changing it may break callers that grep the spawned
+/// command line for debugging.
+pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
+    let mut args: Vec<OsString> = Vec::new();
+
+    if config.agent_mode {
+        args.push("--full-auto".into());
+    }
+
+    if let Some(mode) = config.sandbox {
+        args.push("--sandbox".into());
+        args.push(mode.as_flag().into());
+    }
+
+    if let Some(ref model) = config.model {
+        if let Some(m) = model_to_forward(model) {
+            args.push("--model".into());
+            args.push(m.into());
+        }
+    }
+
+    if let Some(ref profile) = config.profile {
+        if !profile.trim().is_empty() {
+            args.push("--profile".into());
+            args.push(profile.into());
+        }
+    }
+
+    if let Some(ref dir) = config.cd {
+        args.push("--cd".into());
+        args.push(dir.into());
+    }
+
+    if config.ephemeral {
+        args.push("--ephemeral".into());
+    }
+
+    for (key, value) in &config.config_overrides {
+        args.push("-c".into());
+        args.push(format!("{key}={value}").into());
+    }
+
+    args
+}
+
+/// Convenience wrapper that pushes [`common_args`] onto an existing
+/// [`Command`].
+pub(crate) fn apply_common_args(cmd: &mut Command, config: &SpawnConfig) {
+    cmd.args(common_args(config));
+}
+
+/// Normalize a user-supplied model string for `--model <value>`.
+///
+/// Returns the trimmed value or `None` if the caller effectively meant
+/// "don't override": empty strings, whitespace-only strings, and the
+/// case-insensitive sentinel `"default"`.
+pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
+    let trimmed = model.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("default") {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Assemble a ready-to-spawn [`Command`] for a blocking `codex exec` call.
+///
+/// Sets `--json --skip-git-repo-check`, applies the shared flags via
+/// [`apply_common_args`], forwards `-` so the prompt is read from stdin,
+/// and pipes all three std streams. `kill_on_drop` ensures the child is
+/// reaped if the future is cancelled mid-flight.
+fn build_command(config: &SpawnConfig) -> Command {
+    let mut cmd = Command::new(&config.binary_path);
+    cmd.arg("exec").arg("--json").arg("--skip-git-repo-check");
+    apply_common_args(&mut cmd, config);
+    cmd.arg("-"); // stdin
+
+    cmd.kill_on_drop(true);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd
+}
+
+/// Spawn `codex exec`, feed it `prompt` on stdin, and collect the turn.
+///
+/// Returns `(content, thinking, usage)` where:
+/// - `content` is the **last** `agent_message` item (Codex's final answer),
+/// - `thinking` is all prior `agent_message` items joined with blank lines
+///   (preamble + tool narration), or `None` if only one message was emitted,
+/// - `usage` is the token tally from `turn.completed`.
+///
+/// # Errors
+///
+/// Returns [`MotosanError::ProviderError`] if the subprocess fails to
+/// spawn, times out after [`TIMEOUT_SECS`], exits non-zero, emits an
+/// `error` / `turn.failed` event, or the output cannot be parsed.
+pub async fn invoke_cli(
+    config: &SpawnConfig,
+    prompt: &str,
+) -> Result<(String, Option<String>, Usage), MotosanError> {
+    let mut cmd = build_command(config);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| MotosanError::ProviderError(format!("failed to spawn codex CLI: {e}")))?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
+            MotosanError::ProviderError(format!("failed to write to codex stdin: {e}"))
+        })?;
+    }
+
+    let result = tokio::time::timeout(Duration::from_secs(TIMEOUT_SECS), child.wait_with_output())
+        .await
+        .map_err(|_| {
+            MotosanError::ProviderError(format!("codex CLI timed out after {TIMEOUT_SECS} seconds"))
+        })?
+        .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?;
+
+    if !result.status.success() {
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        return Err(MotosanError::ProviderError(format!(
+            "codex CLI exited with {}: {}",
+            result.status,
+            stderr.trim()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    parse_collected_stream(&stdout)
+}
+
+/// Parse accumulated JSONL output into `(content, thinking, usage)`.
+///
+/// `content` is the last `agent_message` item. Any earlier `agent_message`
+/// items become `thinking` (joined with blank lines). Codex often emits a
+/// preamble message before running tools and a separate final answer; this
+/// split matches how other providers expose reasoning vs final answer.
+fn parse_collected_stream(raw: &str) -> Result<(String, Option<String>, Usage), MotosanError> {
+    let mut agent_messages: Vec<String> = Vec::new();
+    let mut usage = Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    };
+
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match stream_json::parse_ndjson_line(line) {
+            Some(NdjsonAction::Text(event)) => agent_messages.push(event.content),
+            Some(NdjsonAction::Done {
+                usage: Some(event), ..
+            }) => {
+                if let Some(collected) = event.usage {
+                    usage = collected;
+                }
+            }
+            Some(NdjsonAction::Done { usage: None, .. }) => {}
+            Some(NdjsonAction::Error(msg)) => {
+                return Err(MotosanError::ProviderError(format!("codex CLI: {msg}")));
+            }
+            None => {}
+        }
+    }
+
+    let content = agent_messages.pop().unwrap_or_default();
+    let thinking = if agent_messages.is_empty() {
+        None
+    } else {
+        Some(agent_messages.join("\n\n"))
+    };
+
+    Ok((content, thinking, usage))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_config() -> SpawnConfig {
+        SpawnConfig {
+            binary_path: PathBuf::from("codex"),
+            agent_mode: false,
+            model: None,
+            cd: None,
+            sandbox: None,
+            profile: None,
+            ephemeral: false,
+            config_overrides: Vec::new(),
+        }
+    }
+
+    fn args_as_strings(args: &[OsString]) -> Vec<String> {
+        args.iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn common_args_empty_config_produces_nothing() {
+        assert!(common_args(&empty_config()).is_empty());
+    }
+
+    #[test]
+    fn common_args_agent_mode_emits_full_auto() {
+        let cfg = SpawnConfig {
+            agent_mode: true,
+            ..empty_config()
+        };
+        assert_eq!(args_as_strings(&common_args(&cfg)), vec!["--full-auto"]);
+    }
+
+    #[test]
+    fn common_args_sandbox_modes_map_to_cli_values() {
+        for (mode, expected) in [
+            (SandboxMode::ReadOnly, "read-only"),
+            (SandboxMode::WorkspaceWrite, "workspace-write"),
+            (SandboxMode::DangerFullAccess, "danger-full-access"),
+        ] {
+            let cfg = SpawnConfig {
+                sandbox: Some(mode),
+                ..empty_config()
+            };
+            assert_eq!(
+                args_as_strings(&common_args(&cfg)),
+                vec!["--sandbox", expected],
+                "sandbox {mode:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn common_args_forwards_model_when_non_default() {
+        let cfg = SpawnConfig {
+            model: Some("gpt-5.1-codex".to_string()),
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--model", "gpt-5.1-codex"]
+        );
+    }
+
+    #[test]
+    fn common_args_skips_default_and_empty_model() {
+        for value in ["default", "DEFAULT", "", "   "] {
+            let cfg = SpawnConfig {
+                model: Some(value.to_string()),
+                ..empty_config()
+            };
+            assert!(
+                common_args(&cfg).is_empty(),
+                "model={value:?} should produce no args"
+            );
+        }
+    }
+
+    #[test]
+    fn common_args_forwards_profile_when_non_empty() {
+        let cfg = SpawnConfig {
+            profile: Some("work".to_string()),
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--profile", "work"]
+        );
+    }
+
+    #[test]
+    fn common_args_skips_blank_profile() {
+        let cfg = SpawnConfig {
+            profile: Some("   ".to_string()),
+            ..empty_config()
+        };
+        assert!(common_args(&cfg).is_empty());
+    }
+
+    #[test]
+    fn common_args_forwards_cd() {
+        let cfg = SpawnConfig {
+            cd: Some(PathBuf::from("/tmp/project")),
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--cd", "/tmp/project"]
+        );
+    }
+
+    #[test]
+    fn common_args_emits_ephemeral_flag() {
+        let cfg = SpawnConfig {
+            ephemeral: true,
+            ..empty_config()
+        };
+        assert_eq!(args_as_strings(&common_args(&cfg)), vec!["--ephemeral"]);
+    }
+
+    #[test]
+    fn common_args_forwards_config_overrides_in_order() {
+        let cfg = SpawnConfig {
+            config_overrides: vec![
+                ("model_reasoning_effort".to_string(), "\"low\"".to_string()),
+                ("features.foo".to_string(), "true".to_string()),
+            ],
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec![
+                "-c",
+                "model_reasoning_effort=\"low\"",
+                "-c",
+                "features.foo=true",
+            ]
+        );
+    }
+
+    #[test]
+    fn common_args_combined_order_is_stable() {
+        let cfg = SpawnConfig {
+            agent_mode: true,
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            model: Some("sonnet".to_string()),
+            profile: Some("work".to_string()),
+            cd: Some(PathBuf::from("/x")),
+            ephemeral: true,
+            config_overrides: vec![("k".to_string(), "v".to_string())],
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec![
+                "--full-auto",
+                "--sandbox",
+                "workspace-write",
+                "--model",
+                "sonnet",
+                "--profile",
+                "work",
+                "--cd",
+                "/x",
+                "--ephemeral",
+                "-c",
+                "k=v",
+            ]
+        );
+    }
+
+    #[test]
+    fn model_to_forward_returns_trimmed() {
+        assert_eq!(model_to_forward("gpt-5.1-codex"), Some("gpt-5.1-codex"));
+        assert_eq!(model_to_forward("  gpt-5.1  "), Some("gpt-5.1"));
+    }
+
+    #[test]
+    fn model_to_forward_skips_default_and_empty() {
+        assert_eq!(model_to_forward("default"), None);
+        assert_eq!(model_to_forward("DEFAULT"), None);
+        assert_eq!(model_to_forward(""), None);
+        assert_eq!(model_to_forward("   "), None);
+    }
+
+    #[test]
+    fn last_agent_message_is_content_rest_is_thinking() {
+        let raw = concat!(
+            r#"{"type":"thread.started","thread_id":"t1"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"Let me think..."}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Checking the docs."}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"pong"}}"#,
+            "\n",
+            r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5,"cached_input_tokens":3}}"#,
+            "\n",
+        );
+        let (content, thinking, usage) = parse_collected_stream(raw).expect("should parse");
+        assert_eq!(content, "pong");
+        assert_eq!(
+            thinking.as_deref(),
+            Some("Let me think...\n\nChecking the docs.")
+        );
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+        assert_eq!(usage.cache_read_input_tokens, Some(3));
+    }
+
+    #[test]
+    fn single_agent_message_has_no_thinking() {
+        let raw = concat!(
+            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"pong"}}"#,
+            "\n",
+            r#"{"type":"turn.completed"}"#,
+            "\n",
+        );
+        let (content, thinking, _) = parse_collected_stream(raw).expect("should parse");
+        assert_eq!(content, "pong");
+        assert_eq!(thinking, None);
+    }
+
+    #[test]
+    fn parse_collected_stream_surfaces_error() {
+        let raw = r#"{"type":"error","message":"nope"}"#;
+        let err = parse_collected_stream(raw).unwrap_err();
+        let MotosanError::ProviderError(msg) = err else {
+            panic!("expected ProviderError");
+        };
+        assert!(msg.contains("nope"));
+    }
+
+    #[test]
+    fn parse_collected_stream_ignores_blank_lines() {
+        let raw = "\n\n   \n";
+        let (content, thinking, _) = parse_collected_stream(raw).expect("should parse");
+        assert_eq!(content, "");
+        assert_eq!(thinking, None);
+    }
+}

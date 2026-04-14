@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.6.0 (crates.io) · Python v0.5.0 (PyPI)
+Rust v0.7.0 (crates.io) · Python v0.5.0 (PyPI)
 
 ## Where To Find Things
 
@@ -12,6 +12,7 @@ Rust v0.6.0 (crates.io) · Python v0.5.0 (PyPI)
 | Rust SDK entry point | `sdks/rust/src/lib.rs` → `client.rs` |
 | Python SDK entry point | `sdks/python/motosan_ai/client.py` |
 | Provider implementations | `sdks/rust/src/providers/`, `sdks/python/motosan_ai/providers/` |
+| CLI backends (Rust only) | `sdks/rust/src/claude_code/` (feature `claude-code`), `sdks/rust/src/codex_cli/` (feature `codex-cli`) |
 | Rust format/lint config | `sdks/rust/rustfmt.toml`, `sdks/rust/.clippy.toml` |
 | Python format/lint config | `sdks/python/ruff.toml` |
 | Unified formatter config | `treefmt.toml` |

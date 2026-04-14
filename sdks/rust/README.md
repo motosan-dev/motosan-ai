@@ -289,7 +289,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.6.0", features = ["claude-code"] }
+motosan-ai = { version = "0.7.0", features = ["claude-code"] }
 ```
 
 ```rust
@@ -301,6 +301,36 @@ let client = ClaudeCodeClient::new()         // uses $CLAUDE_CODE_PATH or "claud
 ```
 
 Model selection rules: `--model` is forwarded when the model string is non-empty and not `"default"` (case-insensitive). Pass `"default"` or omit `.model()` to let the CLI use its own default.
+
+## Codex CLI Backend
+
+The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
+
+```toml
+motosan-ai = { version = "0.7.0", features = ["codex-cli"] }
+```
+
+```rust
+use motosan_ai::{CodexCliClient, codex_cli::SandboxMode};
+
+let client = CodexCliClient::new()           // uses $CODEX_PATH or "codex" in PATH
+    .model("gpt-5.1-codex")                  // forwards --model
+    .sandbox(SandboxMode::WorkspaceWrite)    // --sandbox workspace-write
+    .profile("work")                         // --profile work (from ~/.codex/config.toml)
+    .ephemeral(true)                         // --ephemeral (no session rollout files)
+    .config_override("model_reasoning_effort", "\"low\"")  // repeated -c key=value
+    .cd("/tmp/project");                     // --cd <dir>
+
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;
+```
+
+Notes:
+- Codex emits **complete** `agent_message` items, not token deltas — `stream()` yields one text event per finalized message.
+- `chat()` treats the **last** `agent_message` as `ChatResponse.content` and folds prior messages (preamble / tool narration) into `ChatResponse.thinking`.
+- `tool_calls` is always empty — Codex runs tools internally via its sandboxed shell, those invocations are not surfaced.
+- Authentication: Codex CLI uses `CODEX_API_KEY` or `~/.codex/auth.json`, not `OPENAI_API_KEY`.
+- `agent_mode(true)` passes `--full-auto` (workspace-write sandbox + approvals off); can coexist with an explicit `sandbox()`.
 
 ## Publishing
 

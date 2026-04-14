@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.6.0
+- Python 0.5.0 · Rust 0.7.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,8 +18,11 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.6.0", features = ["anthropic"] }
+motosan-ai = { version = "0.7.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
+# CLI backends (Rust only, shell out to a local binary):
+#   claude-code  → ClaudeCodeClient → `claude --print --output-format stream-json`
+#   codex-cli    → CodexCliClient   → `codex exec --json -`
 ```
 
 ## Environment Variables
@@ -472,6 +475,51 @@ Client::builder()
     .ollama_keep_alive("5m")
     .ollama_num_ctx(4096)
 ```
+
+### CLI Backends (Rust only)
+
+Two opt-in backends shell out to a local CLI binary instead of calling an HTTP API. Both return the same `ChatResponse` / `StreamEvent` types as HTTP providers and live outside `providers/` because they have subprocess lifetime, JSONL parsing, and exit-code semantics.
+
+**ClaudeCodeClient** (`--features claude-code`):
+
+```rust
+use motosan_ai::ClaudeCodeClient;
+
+let client = ClaudeCodeClient::new()       // $CLAUDE_CODE_PATH or "claude" in PATH
+    .model("sonnet")
+    .agent_mode(false);                    // true → --dangerously-skip-permissions
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;
+```
+
+- Runs `claude --print --output-format stream-json`, uses your existing `claude` login.
+- `tool_calls` always empty — tools run inside the CLI and aren't surfaced.
+- `--model` skipped when value is empty, whitespace, or `"default"` (case-insensitive).
+
+**CodexCliClient** (`--features codex-cli`):
+
+```rust
+use motosan_ai::{CodexCliClient, codex_cli::SandboxMode};
+
+let client = CodexCliClient::new()                 // $CODEX_PATH or "codex" in PATH
+    .model("gpt-5.1-codex")                        // --model
+    .sandbox(SandboxMode::WorkspaceWrite)          // --sandbox workspace-write
+    .profile("work")                               // --profile from ~/.codex/config.toml
+    .ephemeral(true)                               // --ephemeral (no session rollout)
+    .config_override("model_reasoning_effort", "\"low\"")  // repeated -c key=value
+    .cd("/tmp/project");                           // --cd <dir>
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;
+```
+
+- Runs `codex exec --json --skip-git-repo-check -` with the prompt on stdin.
+- Uses Codex authentication: `CODEX_API_KEY` env var or `~/.codex/auth.json`. Not `OPENAI_API_KEY`.
+- Codex emits **complete** `agent_message` items, not token deltas — `stream()` yields one text event per finalized message.
+- `chat()` treats the **last** `agent_message` as `content` and folds earlier ones (preamble / tool narration) into `thinking`.
+- `SandboxMode` variants: `ReadOnly` / `WorkspaceWrite` / `DangerFullAccess`. Can coexist with `agent_mode(true)` (which passes `--full-auto`).
+- `config_override` values are parsed as TOML by the CLI — string values need escaped quotes (`"\"low\""`).
+- `tool_calls` always empty — shell, file edits, and MCP calls all happen inside the CLI sandbox.
+- Only `codex exec` is supported. `codex exec resume` and `codex review` subcommands are out of scope.
 
 ---
 

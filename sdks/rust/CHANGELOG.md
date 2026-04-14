@@ -2,6 +2,23 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.7.0] - 2026-04-14
+
+### Added
+- **`codex-cli` feature**: `CodexCliClient` — shells out to OpenAI's `codex exec --json` as a fifth LLM backend, alongside the four HTTP providers and `ClaudeCodeClient`.
+  - `CodexCliClient::new()` resolves the binary from `CODEX_PATH` env or `"codex"` in `PATH`.
+  - `CodexCliClient::chat(request)` — spawns `codex exec --json --skip-git-repo-check -`, writes the prompt to stdin, parses the JSONL event stream, and returns a `ChatResponse`. Treats the last `agent_message` as `content` and folds prior agent messages (preamble / tool narration) into `thinking`.
+  - `CodexCliClient::stream(request)` — same spawn, yields `StreamEvent`s as Codex emits them. Codex produces complete `agent_message` items (not token deltas), so each text event is one finalized message.
+  - Builder flags: `.model(m)` (`--model`), `.sandbox(SandboxMode)` (`--sandbox`), `.profile(name)` (`--profile`), `.ephemeral(bool)` (`--ephemeral`), `.cd(dir)` (`--cd`), `.agent_mode(bool)` (`--full-auto`), `.config_override(key, value)` (repeatable `-c key=value`).
+  - `SandboxMode` enum: `ReadOnly` / `WorkspaceWrite` / `DangerFullAccess`.
+  - 600-second hard timeout on subprocess invocation, `kill_on_drop` for cancel-safety.
+- **Comprehensive rustdoc** for the `codex_cli` module: module-level overview, per-field docs on `CodexCliClient`, error contracts on `chat` / `stream`, full event-schema documentation on `stream_json.rs`.
+
+### Limitations
+- `CodexCliClient` does not surface `tool_calls` — Codex runs shell, file edits, and MCP tools inside its own sandbox; those invocations are not reported as crate-level tool calls.
+- Only `codex exec` is supported. `codex exec resume` (session continuation) and `codex review` are out of scope.
+- Codex CLI has no native `--system` flag; system prompts are prepended to the user prompt as a labeled `[system instructions]` block.
+
 ## [0.6.0] - 2026-04-05
 
 ### Added

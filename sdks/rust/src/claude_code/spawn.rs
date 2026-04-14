@@ -156,7 +156,10 @@ mod tests {
     fn model_to_forward_returns_trimmed_named_models() {
         assert_eq!(model_to_forward("sonnet"), Some("sonnet"));
         assert_eq!(model_to_forward("opus"), Some("opus"));
-        assert_eq!(model_to_forward("claude-sonnet-4-6"), Some("claude-sonnet-4-6"));
+        assert_eq!(
+            model_to_forward("claude-sonnet-4-6"),
+            Some("claude-sonnet-4-6")
+        );
         assert_eq!(model_to_forward("  sonnet  "), Some("sonnet"));
     }
 
