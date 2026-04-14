@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.1] — 2026-04-14
+
+### Fixed
+
+- **OpenAI / MiniMax streams now guarantee exactly one terminal `done` event** even when the upstream provider closes the connection without `[DONE]` and without any `finish_reason` chunk. Previously such streams terminated silently, hanging callers that wait for `done==true`. Adapters now track `done_emitted` and flush a final `done()` from the EOF branch when needed.
+
+### Added
+
+- **Regression tests** for the EOF flush guarantee (OpenAI + MiniMax) and for the historical double-`done` bug fixed in v0.9.0.
+- **Codex CLI live integration test** (`integration_chat_with_v0_9_2_flags`) that real-spawns `codex exec` with `--add-dir` + `--enable fast_mode` + `--disable image_generation` + `--sandbox read-only` + `--ephemeral`. Catches flag-name regressions on Codex CLI upgrades.
+- **`codex_cli` rustdoc example** is now compile-checked (`no_run` instead of `ignore`). Corrected to use the real `ChatRequest::builder()` API.
+
+### Tests
+
+- 264 tests passing (was 259 in v0.10.0). +4 unit + 1 newly compile-checked doc-test. One additional ignored live test for Codex flag plumbing.
+
 ## [0.10.0] — 2026-04-14
 
 ### Breaking

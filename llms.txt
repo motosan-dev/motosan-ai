@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.10.0
+- Python 0.5.0 · Rust 0.10.1
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.10.0", features = ["anthropic"] }
+motosan-ai = { version = "0.10.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
@@ -206,7 +206,15 @@ while let Some(event) = stream.next().await {
     if !event.content.is_empty() {
         print!("{}", event.content);
     }
-    if event.done { break; }
+    if event.done {
+        // Terminal event carries the stop reason when the provider reports one.
+        // Streams emit exactly ONE done event (since v0.10.1), even on
+        // non-conformant proxies that skip [DONE] and finish_reason.
+        if let Some(reason) = event.stop_reason {
+            eprintln!("\n[stop_reason: {reason:?}]");
+        }
+        break;
+    }
 }
 ```
 
@@ -388,10 +396,12 @@ event.stop_reason          — StopReason on the terminal `done` event (Optional
                              • None on done events for providers that don't report a reason
 ```
 
-Each provider stream emits **exactly one** `done` event; if the provider reports
-a stop reason, it lands on that event. `collect_stream` honors the explicit
-`stop_reason` and only falls back to its tool-calls heuristic when none was
-reported.
+Each provider stream emits **exactly one** `done` event — guaranteed since
+v0.10.1 even when the upstream provider closes the connection without `[DONE]`
+and without a `finish_reason` chunk (some non-conformant proxies do this). If
+the provider reports a stop reason, it lands on that event. `collect_stream`
+honors the explicit `stop_reason` and only falls back to its tool-calls
+heuristic when none was reported.
 
 ### Event Sequence for Tool Calls
 

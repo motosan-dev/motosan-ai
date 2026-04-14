@@ -2,6 +2,21 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.10.1] - 2026-04-14
+
+### Fixed
+- **`OpenAIStreamAdapter` and `MinimaxStreamAdapter` now guarantee exactly one terminal `done` event**, even when the upstream provider closes the SSE connection without sending a `[DONE]` sentinel **and** without any `finish_reason` chunk. Previously such streams would terminate without ever yielding a `done==true` event, hanging callers that loop until `done` is true. Both adapters now track a `done_emitted: bool` and emit a final `done()` from the `Poll::Ready(None)` branch when needed. The `[DONE]` path also marks the flag so the EOF fallback can't double-emit.
+
+### Added
+- **EOF flush regression tests** for OpenAI and MiniMax (4 unit tests total): each provider gets one test covering the worst-case "no `finish_reason`, no `[DONE]`" SSE shape, plus one test that asserts `events.iter().filter(|e| e.done).count() == 1` for the fully-conformant shape (regression guard for the historical double-done bug fixed in v0.9.0).
+- **`integration_chat_with_v0_9_2_flags` live test** for `CodexCliProvider` that real-spawns `codex exec` with `--add-dir`, `--enable fast_mode`, `--disable image_generation`, `--sandbox read-only`, and `--ephemeral` together. Catches flag-name regressions if a future Codex CLI release renames or removes any of them. The first iteration of this test failed against real codex 0.120.0 — codex validates feature names against a strict allowlist (`codex features list`) — which surfaced and corrected an incorrect assumption in the v0.9.2 docs.
+
+### Changed
+- **`codex_cli` module rustdoc example** changed from `ignore` to `no_run`, so the example is now compile-checked by `cargo test --doc`. The previous version used a non-existent `ChatRequestBuilder::new().user(...).build()` API; corrected to the real `ChatRequest::builder().message(Message::user(...)).build()` form.
+
+### Tests
+- 264 tests passing (was 259 in v0.10.0): +4 unit (EOF flush + double-done invariant) + 1 doc-test (now compile-checked instead of skipped). One additional ignored live test (`integration_chat_with_v0_9_2_flags`) brings the codex live test count to 4.
+
 ## [0.10.0] - 2026-04-14
 
 ### Breaking

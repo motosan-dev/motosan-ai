@@ -528,6 +528,7 @@ impl ProviderImpl for MinimaxProvider {
             expose_reasoning,
             seen_tool_ids: Vec::new(),
             pending_stop_reason: None,
+            done_emitted: false,
         };
 
         Ok(Box::pin(adapter))
@@ -552,6 +553,9 @@ struct MinimaxStreamAdapter {
     /// Stashed from the last chunk's `finish_reason`, drained on `[DONE]`.
     /// Mirrors `OpenAIStreamAdapter::pending_stop_reason`.
     pending_stop_reason: Option<StopReason>,
+    /// Whether the terminal `done` event has already been emitted, so the
+    /// EOF fallback can skip a duplicate. Mirrors `OpenAIStreamAdapter`.
+    done_emitted: bool,
 }
 
 impl Stream for MinimaxStreamAdapter {
@@ -573,6 +577,7 @@ impl Stream for MinimaxStreamAdapter {
                             Some(reason) => StreamEvent::done_with_stop_reason(reason),
                             None => StreamEvent::done(),
                         };
+                        self.done_emitted = true;
                         return Poll::Ready(Some(done));
                     }
 
@@ -660,10 +665,16 @@ impl Stream for MinimaxStreamAdapter {
                 }
                 Poll::Ready(Some(Err(_))) => continue,
                 Poll::Ready(None) => {
-                    // End of upstream stream — flush a final done event with
-                    // the stashed stop_reason if `[DONE]` was never sent.
-                    if let Some(reason) = self.pending_stop_reason.take() {
-                        return Poll::Ready(Some(StreamEvent::done_with_stop_reason(reason)));
+                    // End of upstream stream — guarantee one terminal done
+                    // event even when the provider closes the connection
+                    // without `[DONE]` and without any `finish_reason`.
+                    if !self.done_emitted {
+                        self.done_emitted = true;
+                        let done = match self.pending_stop_reason.take() {
+                            Some(reason) => StreamEvent::done_with_stop_reason(reason),
+                            None => StreamEvent::done(),
+                        };
+                        return Poll::Ready(Some(done));
                     }
                     return Poll::Ready(None);
                 }

@@ -600,3 +600,88 @@ async fn openai_stream_eof_flush_when_done_sentinel_missing() {
 
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel() {
+    // Worst-case non-conformant proxy: stream closes after a text chunk
+    // with no `finish_reason` and no `[DONE]`. Adapter must still emit
+    // exactly one terminal `done` event so callers don't hang.
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" // no finish_reason, no [DONE]
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let done_count = events.iter().filter(|e| e.done).count();
+    assert_eq!(
+        done_count, 1,
+        "expected exactly one terminal done event, got {done_count}"
+    );
+    let done = events.iter().find(|e| e.done).unwrap();
+    assert_eq!(done.stop_reason, None, "no stop_reason was reported");
+    assert_eq!(events[0].content, "hello");
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_stream_done_count_is_exactly_one_when_done_sentinel_present() {
+    // Regression test for the historical double-done bug: even with a
+    // finish_reason chunk AND the [DONE] sentinel, the stream should emit
+    // exactly one terminal done event (not two).
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let done_count = events.iter().filter(|e| e.done).count();
+    assert_eq!(
+        done_count, 1,
+        "expected exactly one done event, got {done_count}"
+    );
+    let done = events.iter().find(|e| e.done).unwrap();
+    assert_eq!(done.stop_reason, Some(StopReason::Stop));
+
+    mock.assert_async().await;
+}

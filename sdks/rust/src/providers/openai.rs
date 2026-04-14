@@ -638,6 +638,7 @@ impl ProviderImpl for OpenAIProvider {
             pending: std::collections::VecDeque::new(),
             seen_tool_ids: Vec::new(),
             pending_stop_reason: None,
+            done_emitted: false,
         };
 
         Ok(Box::pin(adapter))
@@ -663,6 +664,10 @@ struct OpenAIStreamAdapter {
     /// terminal `done` event when the `[DONE]` sentinel arrives — this
     /// avoids emitting two `done` events per stream.
     pending_stop_reason: Option<StopReason>,
+    /// Whether we have already emitted a terminal `done` event. Prevents
+    /// the EOF fallback from emitting a second one when the upstream
+    /// stream closes cleanly after the `[DONE]` sentinel.
+    done_emitted: bool,
 }
 
 impl OpenAIStreamAdapter {
@@ -675,6 +680,7 @@ impl OpenAIStreamAdapter {
                 None => StreamEvent::done(),
             };
             self.pending.push_back(done);
+            self.done_emitted = true;
             return true;
         }
 
@@ -790,12 +796,18 @@ impl Stream for OpenAIStreamAdapter {
                 }
                 Poll::Ready(Some(Err(_))) => continue,
                 Poll::Ready(None) => {
-                    // End of upstream stream. If the provider never sent
-                    // `[DONE]` (some non-conformant proxies skip it), emit
-                    // one final terminal done event with any stashed
-                    // stop_reason so downstream code always sees a done.
-                    if let Some(reason) = self.pending_stop_reason.take() {
-                        return Poll::Ready(Some(StreamEvent::done_with_stop_reason(reason)));
+                    // End of upstream stream. Guarantee the consumer always
+                    // sees exactly one terminal `done` event, even when the
+                    // provider closes the connection without sending
+                    // `[DONE]` and without any `finish_reason` chunk (some
+                    // non-conformant proxies do this).
+                    if !self.done_emitted {
+                        self.done_emitted = true;
+                        let done = match self.pending_stop_reason.take() {
+                            Some(reason) => StreamEvent::done_with_stop_reason(reason),
+                            None => StreamEvent::done(),
+                        };
+                        return Poll::Ready(Some(done));
                     }
                     return Poll::Ready(None);
                 }

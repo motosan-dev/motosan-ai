@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.10.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.10.1 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.10.0", features = ["anthropic"] }
+motosan-ai = { version = "0.10.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli
 ```
 
@@ -136,7 +136,14 @@ let client = Client::builder()
 
 let mut stream = client.stream(vec![Message::user("Hello")]).await?;
 while let Some(event) = stream.next().await {
-    if event.done { break; }
+    if event.done {
+        // Terminal event carries the provider-reported stop reason when available.
+        // Streams emit exactly one `done` event, even on non-conformant proxies.
+        if let Some(reason) = event.stop_reason {
+            eprintln!("\n[done: {reason:?}]");
+        }
+        break;
+    }
     print!("{}", event.content);
 }
 ```

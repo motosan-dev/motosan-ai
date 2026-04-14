@@ -27,20 +27,22 @@
 //!
 //! # Example
 //!
-//! ```ignore
-//! use motosan_ai::{CodexCliProvider, ChatRequestBuilder, Message, Role};
+//! ```no_run
+//! # async fn demo() -> Result<(), motosan_ai::MotosanError> {
 //! use motosan_ai::codex_cli::SandboxMode;
+//! use motosan_ai::{ChatRequest, CodexCliProvider, Message};
 //!
 //! let client = CodexCliProvider::new()
 //!     .sandbox(SandboxMode::WorkspaceWrite)
 //!     .ephemeral(true);
 //!
-//! let request = ChatRequestBuilder::new()
-//!     .user("Reply with 'pong'.")
+//! let request = ChatRequest::builder()
+//!     .message(Message::user("Reply with 'pong'."))
 //!     .build();
 //!
 //! let response = client.chat(request).await?;
 //! println!("{}", response.content);
+//! # Ok(()) }
 //! ```
 //!
 //! [codex]: https://developers.openai.com/codex/cli
@@ -527,6 +529,40 @@ mod tests {
             .chat(pong_request())
             .await
             .expect("chat with new flags should succeed");
+        assert!(
+            resp.content.to_lowercase().contains("pong"),
+            "expected 'pong' in content, got: {}",
+            resp.content
+        );
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -- --ignored`
+    async fn integration_chat_with_v0_9_2_flags() {
+        // End-to-end check that the v0.9.2 builders (`add_dir`,
+        // `enable_feature`, `disable_feature`) survive a real `codex exec`
+        // invocation — protects against flag-name regressions in future
+        // codex CLI releases. We deliberately avoid `--oss` (would require
+        // a local Ollama install) and `--dangerously-bypass-...` (escape
+        // hatch).
+        //
+        // Codex validates feature names against a known list (run
+        // `codex features list` to see them). `fast_mode` is stable and
+        // already on by default; `image_generation` is "under development"
+        // and off by default — so re-asserting these states is a no-op
+        // semantically while still exercising the flag plumbing.
+        let temp = std::env::temp_dir();
+        let client = CodexCliProvider::new()
+            .add_dir(&temp)
+            .enable_feature("fast_mode")
+            .disable_feature("image_generation")
+            .sandbox(SandboxMode::ReadOnly)
+            .ephemeral(true);
+
+        let resp = client
+            .chat(pong_request())
+            .await
+            .expect("codex should accept add_dir/enable_feature/disable_feature flags");
         assert!(
             resp.content.to_lowercase().contains("pong"),
             "expected 'pong' in content, got: {}",
