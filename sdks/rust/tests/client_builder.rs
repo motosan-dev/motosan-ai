@@ -132,3 +132,84 @@ async fn chat_and_stream_exist_and_dispatch() {
     #[cfg(feature = "openai")]
     assert!(stream_result.is_err());
 }
+
+#[cfg(feature = "codex-cli")]
+#[tokio::test]
+async fn client_builder_allows_codex_cli_without_api_key() {
+    use motosan_ai::codex_cli::SandboxMode;
+    use motosan_ai::CodexCliProvider;
+
+    // No `.api_key()` call. CLI backends authenticate via their own
+    // channels (local login state / CODEX_API_KEY env), so build() must
+    // succeed without one.
+    let client = Client::builder()
+        .provider(Provider::CodexCli)
+        .codex_cli(
+            CodexCliProvider::new()
+                .sandbox(SandboxMode::ReadOnly)
+                .ephemeral(true),
+        )
+        .build()
+        .expect("build client without api_key");
+
+    // Sanity: the provider reflects what we asked for.
+    assert!(matches!(client.provider(), Provider::CodexCli));
+}
+
+#[cfg(feature = "claude-code")]
+#[tokio::test]
+async fn client_builder_allows_claude_code_without_api_key() {
+    use motosan_ai::ClaudeCodeProvider;
+
+    let client = Client::builder()
+        .provider(Provider::ClaudeCode)
+        .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+        .build()
+        .expect("build client without api_key");
+
+    assert!(matches!(client.provider(), Provider::ClaudeCode));
+}
+
+#[test]
+fn client_builder_still_requires_api_key_for_http_providers() {
+    // Regression guard: relaxing api_key for CLI backends must not also
+    // relax it for HTTP providers.
+    let result = Client::builder().provider(Provider::Anthropic).build();
+    assert!(matches!(result, Err(MotosanError::Config(_))));
+}
+
+#[cfg(feature = "codex-cli")]
+#[tokio::test]
+#[ignore] // Requires `codex` CLI installed + auth.
+async fn integration_client_dispatches_to_codex_cli() {
+    // End-to-end: Client::builder().provider(Provider::CodexCli).build()
+    // should actually spawn `codex exec` when .chat() is called. This is
+    // the payoff for v0.11 — downstream consumers can hold a single
+    // `Client` and dispatch to any backend by name.
+    use motosan_ai::codex_cli::SandboxMode;
+    use motosan_ai::{ChatRequest, CodexCliProvider};
+
+    let client = Client::builder()
+        .provider(Provider::CodexCli)
+        .codex_cli(
+            CodexCliProvider::new()
+                .sandbox(SandboxMode::ReadOnly)
+                .ephemeral(true),
+        )
+        .build()
+        .expect("build client");
+
+    let request = ChatRequest::builder()
+        .message(Message::user("Reply with only the word 'pong'."))
+        .build();
+
+    let response = client
+        .chat_with(request)
+        .await
+        .expect("codex chat should succeed via Client dispatch");
+    assert!(
+        response.content.to_lowercase().contains("pong"),
+        "expected 'pong', got: {}",
+        response.content
+    );
+}

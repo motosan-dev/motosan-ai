@@ -2,6 +2,85 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.11.0] - 2026-04-14
+
+### Breaking
+- **`Provider` enum gained two new variants**: `Provider::ClaudeCode` and `Provider::CodexCli`. Downstream code that exhaustively matches on `Provider` without a `_ =>` catch-all will no longer compile.
+- **Removed deprecated `*Client` type aliases** in `lib.rs`. `ClaudeCodeClient` and `CodexCliClient` were kept as `#[deprecated]` type aliases in v0.10.0 for the rename transition; they are now gone. Use `ClaudeCodeProvider` / `CodexCliProvider` directly.
+
+### Added
+- **CLI backends are now dispatchable through `Client::builder()`**, closing the gap left by v0.10.0's rename/relocate. Downstream consumers no longer need a separate code path for CLI vs HTTP backends — a single `Client` can hold either.
+  ```rust
+  use motosan_ai::codex_cli::SandboxMode;
+  use motosan_ai::{Client, CodexCliProvider, Provider};
+
+  let client = Client::builder()
+      .provider(Provider::CodexCli)
+      .codex_cli(
+          CodexCliProvider::new()
+              .sandbox(SandboxMode::WorkspaceWrite)
+              .profile("work")
+              .ephemeral(true),
+      )
+      .build()?;
+
+  // Same unified API as HTTP providers:
+  let response = client.chat(vec![Message::user("Hello")]).await?;
+  ```
+- **New `ClientBuilder` setters**: `.claude_code(ClaudeCodeProvider)` and `.codex_cli(CodexCliProvider)`. Both accept a pre-built provider instance so the full provider-specific API (sandbox / profile / add_dir / enable_feature / ...) is reachable without duplicating ~16 setters on `ClientBuilder`. If the setter is not called when the matching `Provider::*` variant is selected, a default `*Provider::new()` is used and the top-level `.model()` is forwarded.
+- **`api_key` is now optional on `ClientBuilder::build()` when the selected provider is a CLI backend.** CLI backends authenticate via their own channels (local `claude` login state, `CODEX_API_KEY` env var, or `~/.codex/auth.json`). HTTP providers still require an `api_key` — a regression test guards this.
+- **3 new client_builder unit tests**: `client_builder_allows_codex_cli_without_api_key`, `client_builder_allows_claude_code_without_api_key`, `client_builder_still_requires_api_key_for_http_providers`.
+- **1 new live integration test** (`integration_client_dispatches_to_codex_cli`) that real-spawns `codex exec` through the `Client::builder().provider(Provider::CodexCli)` path end-to-end. Verifies the full dispatch chain, not just the struct coercion.
+
+### Migration
+
+**Exhaustive match on `Provider`** — add a catch-all or handle the new variants:
+```rust
+// Before
+match provider {
+    Provider::Anthropic => { ... }
+    Provider::OpenAI => { ... }
+    Provider::Minimax => { ... }
+    Provider::Ollama => { ... }
+}
+
+// After (option A — catch-all)
+match provider {
+    Provider::Anthropic => { ... }
+    Provider::OpenAI => { ... }
+    Provider::Minimax => { ... }
+    Provider::Ollama => { ... }
+    _ => { /* handle CLI backends or ignore */ }
+}
+
+// After (option B — explicit)
+match provider {
+    Provider::Anthropic => { ... }
+    Provider::OpenAI => { ... }
+    Provider::Minimax => { ... }
+    Provider::Ollama => { ... }
+    Provider::ClaudeCode => { ... }
+    Provider::CodexCli => { ... }
+}
+```
+
+**Removed type aliases** — rename uses:
+```rust
+// Before (v0.10.x — compiles with a deprecation warning)
+use motosan_ai::{ClaudeCodeClient, CodexCliClient};
+
+// After (v0.11.0 — required)
+use motosan_ai::{ClaudeCodeProvider, CodexCliProvider};
+```
+
+### Why
+- v0.10.0 moved CLI backends into `providers/` and renamed them for structural consistency, but left `Client::builder()` still HTTP-only. Downstream consumers like `motosan-chat`'s `MotosanAiClient` had to maintain two separate construction paths. v0.11.0 delivers on the promise of v0.10.0 by making **any** provider (HTTP or CLI) selectable through a single `Client::builder()` call.
+- Using a pre-built `CodexCliProvider` instance as the setter argument (rather than flattening all 13 codex flags into `ClientBuilder`) avoids adding 16+ new `codex_*` / `claude_code_*` setters while still giving callers the full configuration surface.
+- Deprecated type aliases had their one-version grace period in v0.10.0. Removing them now keeps the public surface clean before v1.0.
+
+### Tests
+- 267 tests passing (was 264 in v0.10.1). +3 new client_builder unit tests. Live test count (ignored) goes to 5 (adds `integration_client_dispatches_to_codex_cli`).
+
 ## [0.10.1] - 2026-04-14
 
 ### Fixed

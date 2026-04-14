@@ -46,6 +46,10 @@ pub enum Provider {
     OpenAI,
     Minimax,
     Ollama,
+    /// Shells out to the `claude` CLI. Requires the `claude-code` feature.
+    ClaudeCode,
+    /// Shells out to OpenAI's `codex exec --json`. Requires the `codex-cli` feature.
+    CodexCli,
 }
 
 #[async_trait]

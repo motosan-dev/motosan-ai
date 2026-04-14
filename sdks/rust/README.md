@@ -310,8 +310,24 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.10.1", features = ["claude-code"] }
+motosan-ai = { version = "0.11.0", features = ["claude-code"] }
 ```
+
+**Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers):
+
+```rust
+use motosan_ai::{ClaudeCodeProvider, Client, Provider};
+
+let client = Client::builder()
+    .provider(Provider::ClaudeCode)
+    .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+    .build()?;  // api_key not required for CLI backends
+
+let response = client.chat(vec![Message::user("hi")]).await?;
+let stream = client.stream(vec![Message::user("hi")]).await?;
+```
+
+**Option B — direct use of the provider**:
 
 ```rust
 use motosan_ai::ClaudeCodeProvider;
@@ -328,22 +344,42 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.10.1", features = ["codex-cli"] }
+motosan-ai = { version = "0.11.0", features = ["codex-cli"] }
 ```
+
+**Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
+
+```rust
+use motosan_ai::codex_cli::{LocalProvider, SandboxMode};
+use motosan_ai::{Client, CodexCliProvider, Provider};
+
+let client = Client::builder()
+    .provider(Provider::CodexCli)
+    .codex_cli(
+        CodexCliProvider::new()              // uses $CODEX_PATH or "codex" in PATH
+            .model("gpt-5.1-codex")          // --model
+            .sandbox(SandboxMode::WorkspaceWrite) // --sandbox workspace-write
+            .profile("work")                 // --profile from ~/.codex/config.toml
+            .cd("/tmp/project")              // --cd
+            .add_dir("/tmp/output")          // --add-dir (repeatable)
+            .ephemeral(true)                 // --ephemeral
+            .enable_feature("fast_mode")     // --enable (repeatable, validated against `codex features list`)
+            .disable_feature("image_generation") // --disable (repeatable)
+            .config_override("model_reasoning_effort", "\"low\""),
+    )
+    .build()?;                                // api_key optional for CLI backends
+
+let response = client.chat(vec![Message::user("hi")]).await?;
+```
+
+**Option B — direct use of the provider**:
 
 ```rust
 use motosan_ai::{CodexCliProvider, codex_cli::{LocalProvider, SandboxMode}};
 
-let client = CodexCliProvider::new()           // uses $CODEX_PATH or "codex" in PATH
-    .model("gpt-5.1-codex")                  // --model
-    .sandbox(SandboxMode::WorkspaceWrite)    // --sandbox workspace-write
-    .profile("work")                         // --profile work (from ~/.codex/config.toml)
-    .cd("/tmp/project")                      // --cd <dir>
-    .add_dir("/tmp/output")                  // --add-dir <dir> (repeatable)
-    .ephemeral(true)                         // --ephemeral
-    .enable_feature("fast")                  // --enable <FEATURE> (repeatable)
-    .disable_feature("verbose")              // --disable <FEATURE> (repeatable)
-    .config_override("model_reasoning_effort", "\"low\"");  // -c key=value (repeatable)
+let client = CodexCliProvider::new()
+    .sandbox(SandboxMode::WorkspaceWrite)
+    .ephemeral(true);
 
 // Run against a local OSS provider instead of the OpenAI cloud:
 let local = CodexCliProvider::new()

@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.10.1 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.11.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.10.1", features = ["anthropic"] }
+motosan-ai = { version = "0.11.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli
 ```
 
@@ -86,28 +86,36 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
 ```rust
-// 3. Claude Code CLI — no API key needed (uses your local claude session)
+// 3. Claude Code CLI via unified Client::builder() (since v0.11.0)
 // Requires: cargo add motosan-ai --features claude-code
+// No api_key needed — CLI backends authenticate via local login state.
 use motosan_ai::ClaudeCodeProvider;
 
-let client = ClaudeCodeProvider::new();
-let response = client.chat(request).await?;
-let stream = client.stream(request).await?;   // NDJSON streaming
+let client = Client::builder()
+    .provider(Provider::ClaudeCode)
+    .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+    .build()?;
+let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
 ```rust
-// 4. Codex CLI — shells out to OpenAI's `codex exec --json`
+// 4. Codex CLI via unified Client::builder() (since v0.11.0)
 // Requires: cargo add motosan-ai --features codex-cli
-use motosan_ai::{CodexCliProvider, codex_cli::SandboxMode};
+use motosan_ai::codex_cli::SandboxMode;
+use motosan_ai::{CodexCliProvider, Client, Provider};
 
-let client = CodexCliProvider::new()
-    .sandbox(SandboxMode::WorkspaceWrite)
-    .ephemeral(true);
-let response = client.chat(request).await?;
-let stream = client.stream(request).await?;
+let client = Client::builder()
+    .provider(Provider::CodexCli)
+    .codex_cli(
+        CodexCliProvider::new()
+            .sandbox(SandboxMode::WorkspaceWrite)
+            .ephemeral(true),
+    )
+    .build()?;
+let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
-> **CLI backend limitations (Claude Code / Codex CLI):** Tool calls run internally by the CLI and are **not** surfaced on `ChatResponse.tool_calls` (always empty). Both require the corresponding binary installed and authenticated. Enable with `--features claude-code` or `--features codex-cli`.
+> **CLI backend limitations (Claude Code / Codex CLI):** Tool calls run internally by the CLI and are **not** surfaced on `ChatResponse.tool_calls` (always empty). Both require the corresponding binary installed and authenticated. Enable with `--features claude-code` or `--features codex-cli`. You can also hold a raw `ClaudeCodeProvider` / `CodexCliProvider` directly if you don't need the `Client` abstraction.
 
 ## Features
 

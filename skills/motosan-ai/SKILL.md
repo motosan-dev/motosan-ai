@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) — LLM ch
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.10.1
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.11.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama
 
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.10.1", features = ["anthropic"] }
+motosan-ai = { version = "0.11.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (shell out to a local binary): claude-code | codex-cli
 ```
@@ -82,5 +82,6 @@ println!("{}", resp.content);
 - **ThinkStripper**: Applied automatically in all `stream()` / `stream_with()` calls — no manual setup needed
 - **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens
 - **Retry**: Enabled by default (3 retries, exponential backoff, jitter) for 429/5xx/timeout
-- **CLI backends** (Rust only): `ClaudeCodeProvider` (feature `claude-code`, shells out to `claude`) and `CodexCliProvider` (feature `codex-cli`, shells out to `codex exec --json`). Live in `providers/{claude_code,codex_cli}/` alongside HTTP providers (renamed + relocated in v0.10.0; old `*Client` names kept as deprecated aliases). Both report empty `tool_calls` — tools run inside the CLI. `CodexCliProvider.chat()` splits multi-message turns into `content` (last `agent_message`) + `thinking` (preamble). Both implement `ProviderImpl` so they can be held in `Box<dyn ProviderImpl>` alongside HTTP providers.
+- **CLI backends** (Rust only): `ClaudeCodeProvider` (feature `claude-code`, shells out to `claude`) and `CodexCliProvider` (feature `codex-cli`, shells out to `codex exec --json`). Live in `providers/{claude_code,codex_cli}/` alongside HTTP providers. Both implement `ProviderImpl`. Both report empty `tool_calls` — tools run inside the CLI. `CodexCliProvider.chat()` splits multi-message turns into `content` (last `agent_message`) + `thinking` (preamble).
+- **Unified `Client::builder()` dispatch** (Rust, since v0.11.0): `Provider::ClaudeCode` and `Provider::CodexCli` are first-class `Provider` variants. CLI backends are reachable through `Client::builder().provider(Provider::CodexCli).codex_cli(CodexCliProvider::new().sandbox(...)).build()?` — no `api_key` required for CLI paths. Downstream consumers can hold a single `Client` and dispatch to any backend through `chat()` / `stream()` without provider-specific branching. The v0.10.0 `ClaudeCodeClient` / `CodexCliClient` type aliases were removed in v0.11.0.
 - **OpenAI-compatible endpoints** (Rust): `OpenAIProvider` takes **full URLs** via `.with_chat_url(url)` / `.with_responses_url(url)` (or `.openai_chat_url(url)` on `ClientBuilder`). No `/v1` auto-injection, no `base_url` heuristics — what you pass is what gets POSTed. Works for Groq (`https://api.groq.com/openai/v1/chat/completions`), DeepSeek, Together, self-hosted proxies, etc. Defaults to `https://api.openai.com/v1/chat/completions`.

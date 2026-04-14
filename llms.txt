@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.10.1
+- Python 0.5.0 · Rust 0.11.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.10.1", features = ["anthropic"] }
+motosan-ai = { version = "0.11.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
@@ -510,48 +510,58 @@ Client::builder()
 
 ### CLI Backends (Rust only)
 
-Two opt-in backends shell out to a local CLI binary instead of calling an HTTP API. Both return the same `ChatResponse` / `StreamEvent` types as HTTP providers and live alongside them in `providers/{claude_code,codex_cli}/` (since v0.10.0). Both implement `ProviderImpl` so they are interchangeable with HTTP providers via `Box<dyn ProviderImpl>`.
+Two opt-in backends shell out to a local CLI binary instead of calling an HTTP API. Both return the same `ChatResponse` / `StreamEvent` types as HTTP providers and live alongside them in `providers/{claude_code,codex_cli}/`. Both implement `ProviderImpl`. Since v0.11.0 they are dispatchable through `Client::builder()` as first-class `Provider::ClaudeCode` / `Provider::CodexCli` variants, and `api_key` is optional on the builder for CLI paths.
 
-**ClaudeCodeProvider** (`--features claude-code`):
+**Unified `Client::builder()` dispatch** (v0.11.0+):
 
 ```rust
-use motosan_ai::ClaudeCodeProvider;
+use motosan_ai::codex_cli::SandboxMode;
+use motosan_ai::{Client, ClaudeCodeProvider, CodexCliProvider, Message, Provider};
 
-let client = ClaudeCodeProvider::new()       // $CLAUDE_CODE_PATH or "claude" in PATH
-    .model("sonnet")
-    .agent_mode(false);                    // true → --dangerously-skip-permissions
-let response = client.chat(request).await?;
-let stream = client.stream(request).await?;
+// Claude Code via Client::builder
+let client = Client::builder()
+    .provider(Provider::ClaudeCode)
+    .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+    .build()?;  // no api_key needed
+let response = client.chat(vec![Message::user("hi")]).await?;
+
+// Codex CLI via Client::builder — full config via pre-built CodexCliProvider
+let client = Client::builder()
+    .provider(Provider::CodexCli)
+    .codex_cli(
+        CodexCliProvider::new()
+            .model("gpt-5.1-codex")
+            .sandbox(SandboxMode::WorkspaceWrite)
+            .profile("work")
+            .ephemeral(true)
+            .add_dir("/tmp/output")
+            .enable_feature("fast_mode")
+            .config_override("model_reasoning_effort", "\"low\""),
+    )
+    .build()?;
+let response = client.chat(vec![Message::user("hi")]).await?;
 ```
 
-- Runs `claude --print --output-format stream-json`, uses your existing `claude` login.
-- `tool_calls` always empty — tools run inside the CLI and aren't surfaced.
-- `--model` skipped when value is empty, whitespace, or `"default"` (case-insensitive).
-
-**CodexCliProvider** (`--features codex-cli`):
+**Direct use** (still supported, bypasses `Client`):
 
 ```rust
 use motosan_ai::{CodexCliProvider, codex_cli::SandboxMode};
 
-let client = CodexCliProvider::new()                 // $CODEX_PATH or "codex" in PATH
-    .model("gpt-5.1-codex")                        // --model
-    .sandbox(SandboxMode::WorkspaceWrite)          // --sandbox workspace-write
-    .profile("work")                               // --profile from ~/.codex/config.toml
-    .ephemeral(true)                               // --ephemeral (no session rollout)
-    .config_override("model_reasoning_effort", "\"low\"")  // repeated -c key=value
-    .cd("/tmp/project");                           // --cd <dir>
-let response = client.chat(request).await?;
-let stream = client.stream(request).await?;
+let provider = CodexCliProvider::new().sandbox(SandboxMode::ReadOnly);
+let response = provider.chat(request).await?;
+let stream = provider.stream(request).await?;
 ```
 
-- Runs `codex exec --json --skip-git-repo-check -` with the prompt on stdin.
-- Uses Codex authentication: `CODEX_API_KEY` env var or `~/.codex/auth.json`. Not `OPENAI_API_KEY`.
-- Codex emits **complete** `agent_message` items, not token deltas — `stream()` yields one text event per finalized message.
-- `chat()` treats the **last** `agent_message` as `content` and folds earlier ones (preamble / tool narration) into `thinking`.
-- `SandboxMode` variants: `ReadOnly` / `WorkspaceWrite` / `DangerFullAccess`. Can coexist with `agent_mode(true)` (which passes `--full-auto`).
+Key notes:
+- Runs `claude --print --output-format stream-json` / `codex exec --json --skip-git-repo-check -` with the prompt on stdin.
+- Authentication: `claude` uses your existing login state; `codex` uses `CODEX_API_KEY` env var or `~/.codex/auth.json` (**not** `OPENAI_API_KEY`).
+- `tool_calls` always empty on both — tools run inside the CLI sandbox and aren't surfaced.
+- Codex emits **complete** `agent_message` items (not token deltas); `stream()` yields one text event per finalized message. `chat()` treats the last `agent_message` as `content` and folds earlier ones (preamble / tool narration) into `thinking`.
+- `SandboxMode` variants: `ReadOnly` / `WorkspaceWrite` / `DangerFullAccess`. Can coexist with `agent_mode(true)` (`--full-auto`).
 - `config_override` values are parsed as TOML by the CLI — string values need escaped quotes (`"\"low\""`).
-- `tool_calls` always empty — shell, file edits, and MCP calls all happen inside the CLI sandbox.
+- `codex features list` prints the valid feature names accepted by `.enable_feature()` / `.disable_feature()` — codex validates them against a strict allowlist.
 - Only `codex exec` is supported. `codex exec resume` and `codex review` subcommands are out of scope.
+- The v0.10.0 `ClaudeCodeClient` / `CodexCliClient` type aliases were removed in v0.11.0. Use `ClaudeCodeProvider` / `CodexCliProvider`.
 
 ---
 

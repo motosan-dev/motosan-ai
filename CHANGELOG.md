@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.0] — 2026-04-14
+
+### Breaking
+
+- **`Provider` enum** gained `Provider::ClaudeCode` and `Provider::CodexCli` variants. Exhaustive `match` on `Provider` without a `_ =>` catch-all will fail to compile.
+- **Removed deprecated `ClaudeCodeClient` / `CodexCliClient` type aliases** (the one-version grace period from v0.10.0 is over). Use `ClaudeCodeProvider` / `CodexCliProvider` directly.
+
+### Added
+
+- **`Client::builder()` now dispatches to CLI backends**, closing the v0.10.0 promise. A single `Client` can hold any backend (HTTP or CLI) and expose it through the unified `chat()` / `stream()` API. New setters: `.claude_code(ClaudeCodeProvider)` and `.codex_cli(CodexCliProvider)`, each accepting a pre-built provider instance.
+- **`api_key` is now optional on `build()`** when the selected provider is a CLI backend. CLI backends authenticate via their own channels.
+- **Live integration test** for the end-to-end dispatch path (`Client::builder().provider(Provider::CodexCli).build()` → `.chat()` → real `codex exec` spawn).
+
+### Migration
+
+```rust
+// Before (v0.10.x)
+use motosan_ai::CodexCliProvider;
+let provider = CodexCliProvider::new().sandbox(SandboxMode::WorkspaceWrite);
+provider.chat(request).await?;
+
+// After (v0.11.0) — same thing works, or unified via Client::builder:
+let client = Client::builder()
+    .provider(Provider::CodexCli)
+    .codex_cli(CodexCliProvider::new().sandbox(SandboxMode::WorkspaceWrite))
+    .build()?;
+client.chat(vec![Message::user("hi")]).await?;
+```
+
+### Tests
+
+- 267 tests passing (was 264 in v0.10.1). +3 unit + 1 new live integration test verified against real `codex` binary.
+
 ## [0.10.1] — 2026-04-14
 
 ### Fixed

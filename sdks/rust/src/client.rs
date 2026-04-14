@@ -23,6 +23,16 @@ pub struct Client {
     ollama_num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
     stream_read_timeout: Option<Duration>,
+    /// Pre-built Claude Code provider instance used when `provider ==
+    /// Provider::ClaudeCode`. Configured via [`ClientBuilder::claude_code`].
+    /// If `None`, a default [`ClaudeCodeProvider::new`] is used at dispatch
+    /// time.
+    #[cfg(feature = "claude-code")]
+    claude_code: Option<crate::providers::claude_code::ClaudeCodeProvider>,
+    /// Pre-built Codex CLI provider instance used when `provider ==
+    /// Provider::CodexCli`. Configured via [`ClientBuilder::codex_cli`].
+    #[cfg(feature = "codex-cli")]
+    codex_cli: Option<crate::providers::codex_cli::CodexCliProvider>,
 }
 
 impl Client {
@@ -205,6 +215,28 @@ impl Client {
                     return Err(Self::feature_not_enabled("ollama"));
                 }
             }
+            Provider::ClaudeCode => {
+                #[cfg(feature = "claude-code")]
+                {
+                    return self.build_claude_code_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "claude-code"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("claude-code"));
+                }
+            }
+            Provider::CodexCli => {
+                #[cfg(feature = "codex-cli")]
+                {
+                    return self.build_codex_cli_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "codex-cli"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("codex-cli"));
+                }
+            }
         }
     }
 
@@ -279,6 +311,28 @@ impl Client {
                     return Err(Self::feature_not_enabled("ollama"));
                 }
             }
+            Provider::ClaudeCode => {
+                #[cfg(feature = "claude-code")]
+                {
+                    return self.build_claude_code_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "claude-code"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("claude-code"));
+                }
+            }
+            Provider::CodexCli => {
+                #[cfg(feature = "codex-cli")]
+                {
+                    return self.build_codex_cli_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "codex-cli"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("codex-cli"));
+                }
+            }
         }
     }
 
@@ -287,7 +341,9 @@ impl Client {
         not(feature = "openai"),
         not(feature = "minimax"),
         not(feature = "ollama"),
-        not(feature = "ollama_native")
+        not(feature = "ollama_native"),
+        not(feature = "claude-code"),
+        not(feature = "codex-cli"),
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -371,6 +427,38 @@ impl Client {
             .with_num_ctx(self.ollama_num_ctx)
             .with_retry_policy(self.retry_policy.clone())
     }
+
+    #[cfg(feature = "claude-code")]
+    fn build_claude_code_provider(&self) -> crate::providers::claude_code::ClaudeCodeProvider {
+        // Prefer the pre-built instance the caller supplied via
+        // `ClientBuilder::claude_code()`; fall back to a default instance
+        // if none was provided. Client-level `.model()` is forwarded to
+        // the default provider.
+        match self.claude_code.clone() {
+            Some(provider) => provider,
+            None => {
+                let mut provider = crate::providers::claude_code::ClaudeCodeProvider::new();
+                if let Some(ref m) = self.model {
+                    provider = provider.model(m.clone());
+                }
+                provider
+            }
+        }
+    }
+
+    #[cfg(feature = "codex-cli")]
+    fn build_codex_cli_provider(&self) -> crate::providers::codex_cli::CodexCliProvider {
+        match self.codex_cli.clone() {
+            Some(provider) => provider,
+            None => {
+                let mut provider = crate::providers::codex_cli::CodexCliProvider::new();
+                if let Some(ref m) = self.model {
+                    provider = provider.model(m.clone());
+                }
+                provider
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -390,6 +478,10 @@ pub struct ClientBuilder {
     ollama_num_ctx: Option<u32>,
     retry_policy: Option<RetryPolicy>,
     stream_read_timeout_secs: Option<u64>,
+    #[cfg(feature = "claude-code")]
+    claude_code: Option<crate::providers::claude_code::ClaudeCodeProvider>,
+    #[cfg(feature = "codex-cli")]
+    codex_cli: Option<crate::providers::codex_cli::CodexCliProvider>,
 }
 
 impl ClientBuilder {
@@ -483,13 +575,47 @@ impl ClientBuilder {
         self
     }
 
+    /// Attach a pre-built [`ClaudeCodeProvider`] to use when `Provider::ClaudeCode`
+    /// is selected. If not called, the client uses
+    /// `ClaudeCodeProvider::new()` with the top-level `.model()` forwarded.
+    ///
+    /// [`ClaudeCodeProvider`]: crate::providers::claude_code::ClaudeCodeProvider
+    #[cfg(feature = "claude-code")]
+    pub fn claude_code(
+        mut self,
+        provider: crate::providers::claude_code::ClaudeCodeProvider,
+    ) -> Self {
+        self.claude_code = Some(provider);
+        self
+    }
+
+    /// Attach a pre-built [`CodexCliProvider`] to use when `Provider::CodexCli`
+    /// is selected. If not called, the client uses `CodexCliProvider::new()`
+    /// with the top-level `.model()` forwarded.
+    ///
+    /// [`CodexCliProvider`]: crate::providers::codex_cli::CodexCliProvider
+    #[cfg(feature = "codex-cli")]
+    pub fn codex_cli(mut self, provider: crate::providers::codex_cli::CodexCliProvider) -> Self {
+        self.codex_cli = Some(provider);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
             .ok_or_else(|| MotosanError::Config("provider is required".to_string()))?;
-        let api_key = self
-            .api_key
-            .ok_or_else(|| MotosanError::Config("api_key is required".to_string()))?;
+        // CLI backends (Claude Code / Codex CLI) authenticate via their own
+        // channels (local login state / `CODEX_API_KEY`), so `api_key` is
+        // optional when the selected provider is a CLI backend. HTTP
+        // providers still require it.
+        let api_key_required = !matches!(provider, Provider::ClaudeCode | Provider::CodexCli);
+        let api_key = match self.api_key {
+            Some(k) => k,
+            None if api_key_required => {
+                return Err(MotosanError::Config("api_key is required".to_string()));
+            }
+            None => String::new(),
+        };
 
         Ok(Client {
             provider,
@@ -509,6 +635,10 @@ impl ClientBuilder {
             ollama_num_ctx: self.ollama_num_ctx,
             retry_policy: self.retry_policy.unwrap_or_default(),
             stream_read_timeout: self.stream_read_timeout_secs.map(Duration::from_secs),
+            #[cfg(feature = "claude-code")]
+            claude_code: self.claude_code,
+            #[cfg(feature = "codex-cli")]
+            codex_cli: self.codex_cli,
         })
     }
 }
