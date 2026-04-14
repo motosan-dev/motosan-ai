@@ -13,6 +13,8 @@ pub struct Client {
     model: Option<String>,
     openai_auth_header: Option<String>,
     openai_responses_fallback: bool,
+    openai_chat_url: Option<String>,
+    openai_responses_url: Option<String>,
     minimax_expose_reasoning: bool,
     ollama_base_url: String,
     ollama_native: bool,
@@ -311,10 +313,19 @@ impl Client {
             Some(header) => OpenAIAuthStyle::Custom(header.to_string()),
         };
 
-        OpenAIProvider::new(self.api_key.clone(), self.model.clone(), None)
+        let mut provider = OpenAIProvider::new(self.api_key.clone(), self.model.clone())
             .with_auth_style(auth_style)
             .with_responses_fallback(self.openai_responses_fallback)
-            .with_retry_policy(self.retry_policy.clone())
+            .with_retry_policy(self.retry_policy.clone());
+
+        if let Some(ref url) = self.openai_chat_url {
+            provider = provider.with_chat_url(url.clone());
+        }
+        if let Some(ref url) = self.openai_responses_url {
+            provider = provider.with_responses_url(url.clone());
+        }
+
+        provider
     }
 
     #[cfg(feature = "minimax")]
@@ -337,13 +348,15 @@ impl Client {
             .clone()
             .unwrap_or_else(|| crate::models::DEFAULT_OLLAMA_MODEL.to_string());
 
-        OpenAIProvider::new(
-            "".to_string(),
-            Some(model),
-            Some(self.ollama_base_url.clone()),
-        )
-        .with_auth_style(OpenAIAuthStyle::Bearer)
-        .with_retry_policy(self.retry_policy.clone())
+        let chat_url = format!(
+            "{}/v1/chat/completions",
+            self.ollama_base_url.trim_end_matches('/')
+        );
+
+        OpenAIProvider::new("".to_string(), Some(model))
+            .with_chat_url(chat_url)
+            .with_auth_style(OpenAIAuthStyle::Bearer)
+            .with_retry_policy(self.retry_policy.clone())
     }
 
     #[cfg(feature = "ollama_native")]
@@ -367,6 +380,8 @@ pub struct ClientBuilder {
     model: Option<String>,
     openai_auth_header: Option<String>,
     openai_responses_fallback: Option<bool>,
+    openai_chat_url: Option<String>,
+    openai_responses_url: Option<String>,
     minimax_expose_reasoning: Option<bool>,
     ollama_base_url: Option<String>,
     ollama_native: Option<bool>,
@@ -415,6 +430,21 @@ impl ClientBuilder {
 
     pub fn openai_responses_fallback(mut self, enabled: bool) -> Self {
         self.openai_responses_fallback = Some(enabled);
+        self
+    }
+
+    /// Override the OpenAI chat completions URL. Pass the full URL the
+    /// provider should POST to (e.g. a Groq / DeepSeek / proxy endpoint).
+    pub fn openai_chat_url(mut self, url: impl Into<String>) -> Self {
+        self.openai_chat_url = Some(url.into());
+        self
+    }
+
+    /// Override the OpenAI Responses API URL. Only relevant when
+    /// [`openai_responses_fallback`](Self::openai_responses_fallback) is
+    /// enabled.
+    pub fn openai_responses_url(mut self, url: impl Into<String>) -> Self {
+        self.openai_responses_url = Some(url.into());
         self
     }
 
@@ -467,6 +497,8 @@ impl ClientBuilder {
             model: self.model,
             openai_auth_header: self.openai_auth_header,
             openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
+            openai_chat_url: self.openai_chat_url,
+            openai_responses_url: self.openai_responses_url,
             minimax_expose_reasoning: self.minimax_expose_reasoning.unwrap_or(false),
             ollama_base_url: self
                 .ollama_base_url

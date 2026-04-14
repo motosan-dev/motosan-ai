@@ -5,9 +5,9 @@ description: Help developers use the motosan-ai SDK (Python and Rust) — LLM ch
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.7.0
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.8.0
 
-Providers: Anthropic, OpenAI, MiniMax, Ollama
+Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama
 
 ## Install
 
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.7.0", features = ["anthropic"] }
+motosan-ai = { version = "0.8.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (shell out to a local binary): claude-code | codex-cli
 ```
@@ -82,3 +82,4 @@ println!("{}", resp.content);
 - **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens
 - **Retry**: Enabled by default (3 retries, exponential backoff, jitter) for 429/5xx/timeout
 - **CLI backends** (Rust only): `ClaudeCodeClient` (feature `claude-code`, shells out to `claude`) and `CodexCliClient` (feature `codex-cli`, shells out to `codex exec --json`). Live outside `providers/` because they have subprocess lifetime, JSONL parsing, and exit-code semantics. Both report empty `tool_calls` — tools run inside the CLI. `CodexCliClient.chat()` splits multi-message turns into `content` (last `agent_message`) + `thinking` (preamble).
+- **OpenAI-compatible endpoints** (Rust): `OpenAIProvider` takes **full URLs** via `.with_chat_url(url)` / `.with_responses_url(url)` (or `.openai_chat_url(url)` on `ClientBuilder`). No `/v1` auto-injection, no `base_url` heuristics — what you pass is what gets POSTed. Works for Groq (`https://api.groq.com/openai/v1/chat/completions`), DeepSeek, Together, self-hosted proxies, etc. Defaults to `https://api.openai.com/v1/chat/completions`.

@@ -40,7 +40,8 @@ async fn openai_tool_choice_auto() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .tools(vec![dummy_tool()])
@@ -64,7 +65,8 @@ async fn openai_tool_choice_required() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .tools(vec![dummy_tool()])
@@ -86,7 +88,8 @@ async fn openai_tool_choice_none() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .tools(vec![dummy_tool()])
@@ -111,7 +114,8 @@ async fn openai_tool_choice_forced_tool() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .tools(vec![dummy_tool()])

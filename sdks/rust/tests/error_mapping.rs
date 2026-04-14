@@ -69,9 +69,9 @@ async fn anthropic_maps_401_429_500() {
 #[tokio::test]
 async fn openai_maps_401_429_500() {
     let mut server = mockito::Server::new_async().await;
-    let provider =
-        motosan_ai::providers::openai::OpenAIProvider::new("test-key", None, Some(server.url()))
-            .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
+    let provider = motosan_ai::providers::openai::OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
         .mock("POST", "/v1/chat/completions")

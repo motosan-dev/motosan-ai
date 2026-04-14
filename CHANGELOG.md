@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.8.0] — 2026-04-14
+
+### Breaking
+
+- **`OpenAIProvider` URL handling redesigned** — `base_url` parameter removed; replaced by full-URL `chat_url` + `responses_url` fields set via `.with_chat_url(...)` / `.with_responses_url(...)` builder methods. `ClientBuilder` gains matching `.openai_chat_url(...)` / `.openai_responses_url(...)` setters. Pass the literal URL you want POSTed — no more silent `/v1/chat/completions` injection. See `sdks/rust/CHANGELOG.md` for migration examples.
+
+### Why
+
+- Old heuristics double-appended `/v1` for providers like Groq (`https://api.groq.com/openai/v1`) or blocked full-URL proxies entirely.
+- `endpoint()` and `responses_endpoint()` had inconsistent logic (one used string heuristics, the other didn't).
+- New behavior aligns with `openai-python` / `openai-node`: the caller owns the URL, the SDK just POSTs.
+
+### Docs
+
+- Root `README.md`, `sdks/rust/README.md`, `llms.txt`, and `skills/motosan-ai/SKILL.md` all document the new `.openai_chat_url(...)` / `.with_chat_url(...)` pattern and explicitly call out Groq / DeepSeek / Together / self-hosted proxy support.
+- 229 tests passing (unchanged from v0.7.0); 28 integration test call sites migrated to the new API.
+
 ## [0.7.0] — 2026-04-14
 
 ### Added

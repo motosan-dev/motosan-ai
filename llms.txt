@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.7.0
+- Python 0.5.0 · Rust 0.8.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.7.0", features = ["anthropic"] }
+motosan-ai = { version = "0.8.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeClient → `claude --print --output-format stream-json`
@@ -450,9 +450,20 @@ let tail = stripper.flush();  // call at stream end
 // Custom auth header
 client_builder.openai_auth_x_api_key()
 client_builder.openai_auth_custom_header("X-Auth-Token")
-// Fallback to /v1/responses when /v1/chat/completions returns 404
+
+// Point at an OpenAI-compatible endpoint. Pass the FULL URL — no /v1 injection,
+// no base_url heuristics. What you pass is what gets POSTed.
+client_builder.openai_chat_url("https://api.groq.com/openai/v1/chat/completions")
+client_builder.openai_chat_url("https://api.deepseek.com/v1/chat/completions")
+client_builder.openai_chat_url("https://my-proxy.example.com/any/path")
+
+// Fallback to the Responses API when chat completions returns 404
 client_builder.openai_responses_fallback(true)
+// Override the Responses URL (only needed for non-OpenAI hosts that expose it)
+client_builder.openai_responses_url("https://api.openai.com/v1/responses")
 ```
+
+Defaults: `https://api.openai.com/v1/chat/completions` + `https://api.openai.com/v1/responses`. Exported as `DEFAULT_OPENAI_CHAT_URL` / `DEFAULT_OPENAI_RESPONSES_URL` from `motosan_ai::providers::openai`.
 
 ### MiniMax
 

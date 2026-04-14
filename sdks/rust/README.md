@@ -146,15 +146,26 @@ Advanced OpenAI-compatible usage:
 ```rust
 use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 
-let provider = OpenAIProvider::new("api-key", None, Some("https://api.openai.com".to_string()))
+// Default — points at api.openai.com/v1.
+let provider = OpenAIProvider::new("api-key", None)
     .with_auth_style(OpenAIAuthStyle::Bearer)
     .with_responses_fallback(true);
+
+// Override the endpoint URL for OpenAI-compatible providers.
+// Pass the full URL you want POSTed — no base_url magic, no /v1 injection.
+let groq = OpenAIProvider::new("api-key", None)
+    .with_chat_url("https://api.groq.com/openai/v1/chat/completions");
+
+let proxy = OpenAIProvider::new("api-key", None)
+    .with_chat_url("https://my-proxy.example.com/any/path");
 ```
 
+- `with_chat_url(url)`: full URL POSTed for chat completions. Defaults to `DEFAULT_OPENAI_CHAT_URL`. A single trailing `/` is trimmed defensively; no other normalization.
+- `with_responses_url(url)`: full URL for the Responses API fallback. Defaults to `DEFAULT_OPENAI_RESPONSES_URL`. Only used when `with_responses_fallback(true)`.
 - `with_auth_style(...)`: supports `Bearer`, `XApiKey`, or custom header.
-- `with_responses_fallback(true)`: when `/v1/chat/completions` returns `404`, fallback to `/v1/responses`.
+- `with_responses_fallback(true)`: when chat completions returns `404`, fall back to the Responses endpoint (OpenAI-specific; most compatible providers don't expose it).
 
-The same behavior is available from `Client::builder()`:
+The same options are available from `Client::builder()`:
 
 ```rust
 use motosan_ai::{Client, Provider};
@@ -163,6 +174,7 @@ let client = Client::builder()
     .provider(Provider::OpenAI)
     .api_key("...")
     .openai_auth_x_api_key() // or .openai_auth_custom_header("X-Auth-Token")
+    .openai_chat_url("https://api.groq.com/openai/v1/chat/completions") // optional
     .openai_responses_fallback(true)
     .build()?;
 ```
@@ -289,7 +301,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.7.0", features = ["claude-code"] }
+motosan-ai = { version = "0.8.0", features = ["claude-code"] }
 ```
 
 ```rust
@@ -307,7 +319,7 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.7.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.8.0", features = ["codex-cli"] }
 ```
 
 ```rust

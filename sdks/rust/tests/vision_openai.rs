@@ -24,7 +24,8 @@ async fn openai_vision_request_serializes_content_blocks() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
 
     let msg = Message::user_with_image("What is in this image?", "iVBOR...", "image/png");
     let request = ChatRequest::builder().messages(vec![msg]).build();
@@ -53,7 +54,8 @@ async fn openai_vision_base64_uses_data_url_format() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
 
     let msg = Message::user_with_image("Describe this", "abc123==", "image/png");
     let request = ChatRequest::builder().messages(vec![msg]).build();
@@ -82,7 +84,8 @@ async fn openai_plain_text_still_works() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
 
     let msg = Message::user("hello");
     let request = ChatRequest::builder().messages(vec![msg]).build();
@@ -111,7 +114,8 @@ async fn openai_url_image_serializes_correctly() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
 
     let msg = Message::user_with_blocks(vec![
         ContentBlock::Text {

@@ -2,6 +2,54 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.8.0] - 2026-04-14
+
+### Breaking
+- **`OpenAIProvider` URL configuration redesigned.** The `base_url` parameter is replaced by two independent, full-URL fields — `chat_url` and `responses_url` — set via builder methods. No more `/v1/chat/completions` auto-injection or `strip_suffix("/chat/completions")` heuristics. What you pass is what gets POSTed.
+  - `OpenAIProvider::new(api_key, model, base_url)` → `OpenAIProvider::new(api_key, model)` (third parameter dropped).
+  - New builder methods: `.with_chat_url(url)` and `.with_responses_url(url)`. Both trim a single trailing slash defensively; no other normalization.
+  - Defaults: `DEFAULT_OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"`, `DEFAULT_OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"` (exported).
+  - `ClientBuilder` gains `.openai_chat_url(url)` and `.openai_responses_url(url)` setters (previously there was no way to point the OpenAI provider at a different host via `ClientBuilder` at all).
+  - Internal `fn endpoint()` and `fn responses_endpoint()` deleted — providers now read `&self.chat_url` / `&self.responses_url` directly.
+
+### Migration
+
+```rust
+// Before (v0.7.0)
+OpenAIProvider::new(api_key, None, Some("https://api.groq.com/openai".to_string()))
+// worked by accident because the code appended "/v1/chat/completions"
+
+// After (v0.8.0)
+OpenAIProvider::new(api_key, None)
+    .with_chat_url("https://api.groq.com/openai/v1/chat/completions")
+```
+
+```rust
+// Before
+OpenAIProvider::new(api_key, None, None)   // defaults to https://api.openai.com
+// After
+OpenAIProvider::new(api_key, None)          // defaults to full OpenAI chat URL
+```
+
+Ollama integration wires `ollama_base_url` into `.with_chat_url()` internally — no change for `Client::builder().provider(Provider::Ollama)` users.
+
+### Why
+
+- The old heuristics silently broke for `base_url` values that already contained `/v1` (e.g. `https://api.groq.com/openai/v1` produced `.../v1/v1/chat/completions`).
+- Passing a full endpoint URL (custom proxies, non-standard paths) was impossible without `strip_suffix` gymnastics.
+- `endpoint()` and `responses_endpoint()` had asymmetric logic — one had a 3-branch heuristic, the other didn't — making debugging painful.
+- Two independent URL fields match the `openai-python` / `openai-node` mental model: callers own the URL, the SDK just POSTs.
+
+### Changed
+- **Tests**: 28 `OpenAIProvider::new(key, model, Some(server.url()))` call sites across 7 integration test files migrated to the new `.with_chat_url(format!("{}/v1/chat/completions", server.url()))` form. The `openai_endpoint_normalizes_trailing_slash_base_url` test is renamed to `openai_with_chat_url_trims_trailing_slash` and now exercises `.with_chat_url()`'s defensive `trim_end_matches('/')`.
+- **Ollama integration** (`Client::builder().provider(Provider::Ollama)`): internal wiring now computes `{ollama_base_url}/v1/chat/completions` and passes it to `.with_chat_url()`. No caller-visible change.
+
+### Docs
+- `sdks/rust/README.md` § OpenAI Provider Options — full rewrite with Groq / self-hosted proxy examples, `with_chat_url` / `with_responses_url` semantics, `ClientBuilder` setter usage.
+- Root `README.md` — new blockquote under Providers table showing `.openai_chat_url(...)` for Groq / DeepSeek / Together / proxies.
+- `llms.txt` § OpenAI — expanded `openai_chat_url` / `openai_responses_url` examples, documented `DEFAULT_OPENAI_CHAT_URL` / `DEFAULT_OPENAI_RESPONSES_URL` constants.
+- `skills/motosan-ai/SKILL.md` — provider list amended; Key Design Decisions gains a bullet explaining the full-URL, no-`/v1`-injection policy.
+
 ## [0.7.0] - 2026-04-14
 
 ### Added

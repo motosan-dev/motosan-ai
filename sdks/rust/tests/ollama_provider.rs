@@ -8,7 +8,11 @@ use serde_json::json;
 use tokio_stream::StreamExt;
 
 fn build_ollama_provider(base_url: String) -> OpenAIProvider {
-    OpenAIProvider::new("", Some(DEFAULT_OLLAMA_MODEL.to_string()), Some(base_url))
+    OpenAIProvider::new("", Some(DEFAULT_OLLAMA_MODEL.to_string()))
+        .with_chat_url(format!(
+            "{}/v1/chat/completions",
+            base_url.trim_end_matches('/')
+        ))
         .with_auth_style(OpenAIAuthStyle::Bearer)
 }
 

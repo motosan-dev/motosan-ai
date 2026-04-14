@@ -27,7 +27,8 @@ async fn openai_chat_maps_response() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::system("rules"))
         .message(Message::user("hello"))
@@ -67,7 +68,8 @@ async fn openai_request_uses_default_model_and_allows_override() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -121,7 +123,8 @@ async fn openai_stream_emits_deltas_and_done() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -159,7 +162,8 @@ async fn openai_stream_ignores_malformed_chunks() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -180,7 +184,7 @@ async fn openai_stream_ignores_malformed_chunks() {
 }
 
 #[tokio::test]
-async fn openai_endpoint_normalizes_trailing_slash_base_url() {
+async fn openai_with_chat_url_trims_trailing_slash() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
         .mock("POST", "/v1/chat/completions")
@@ -197,7 +201,9 @@ async fn openai_endpoint_normalizes_trailing_slash_base_url() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(format!("{}/", server.url())));
+    // Trailing slash on the URL is trimmed defensively — should still hit /v1/chat/completions.
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions/", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -225,7 +231,8 @@ async fn openai_chat_falls_back_to_reasoning_content_when_content_empty() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -253,7 +260,8 @@ async fn openai_stream_falls_back_to_reasoning_content_and_skips_empty_chunks() 
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -281,7 +289,8 @@ async fn openai_stream_maps_structured_error_payload() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -309,7 +318,8 @@ async fn openai_auth_style_x_api_key_is_supported() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()))
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
         .with_auth_style(OpenAIAuthStyle::XApiKey);
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
@@ -346,8 +356,10 @@ async fn openai_chat_can_fallback_to_responses_api_on_404() {
         .create_async()
         .await;
 
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_responses_fallback(true);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_responses_url(format!("{}/v1/responses", server.url()))
+        .with_responses_fallback(true);
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
@@ -378,7 +390,8 @@ async fn openai_stream_emits_tool_call_events() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("weather in Taipei?"))
         .tools(vec![Tool {

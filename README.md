@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.7.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.8.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.7.0", features = ["anthropic"] }
+motosan-ai = { version = "0.8.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli
 ```
 
@@ -52,6 +52,16 @@ pip install "motosan-ai[full]"   # all providers
 | OpenAI | `gpt-5.3-codex` | `openai` | `[openai]` |
 | MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
+
+> **OpenAI-compatible providers** (Groq, DeepSeek, Together, self-hosted proxies, etc.) work via the `openai` feature with a custom chat URL — pass the full endpoint you want POSTed:
+>
+> ```rust
+> Client::builder()
+>     .provider(Provider::OpenAI)
+>     .api_key("...")
+>     .openai_chat_url("https://api.groq.com/openai/v1/chat/completions")
+>     .build()?;
+> ```
 
 ## Backends (Rust)
 

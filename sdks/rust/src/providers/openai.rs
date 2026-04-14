@@ -27,27 +27,41 @@ pub enum OpenAIAuthStyle {
     Custom(String),
 }
 
+/// Default chat completions endpoint for OpenAI.
+pub const DEFAULT_OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/completions";
+
+/// Default Responses API endpoint for OpenAI.
+pub const DEFAULT_OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+
 pub struct OpenAIProvider {
     http: Client,
     api_key: String,
     model: String,
-    base_url: String,
+    /// Full URL POSTed for chat completions. Defaults to [`DEFAULT_OPENAI_CHAT_URL`].
+    chat_url: String,
+    /// Full URL POSTed for the Responses API fallback. Defaults to
+    /// [`DEFAULT_OPENAI_RESPONSES_URL`]. Only used when
+    /// [`with_responses_fallback`](Self::with_responses_fallback) is enabled.
+    responses_url: String,
     auth_style: OpenAIAuthStyle,
     responses_fallback: bool,
     retry_policy: RetryPolicy,
 }
 
 impl OpenAIProvider {
-    pub fn new(
-        api_key: impl Into<String>,
-        model: Option<String>,
-        base_url: Option<String>,
-    ) -> Self {
+    /// Create a provider pointing at the OpenAI defaults.
+    ///
+    /// Override the URLs via [`with_chat_url`](Self::with_chat_url) and/or
+    /// [`with_responses_url`](Self::with_responses_url) to target
+    /// OpenAI-compatible endpoints (Groq, DeepSeek, Ollama, self-hosted
+    /// proxies, etc.).
+    pub fn new(api_key: impl Into<String>, model: Option<String>) -> Self {
         Self {
             http: Client::new(),
             api_key: api_key.into(),
             model: model.unwrap_or_else(|| DEFAULT_OPENAI_MODEL.to_string()),
-            base_url: base_url.unwrap_or_else(|| "https://api.openai.com".to_string()),
+            chat_url: DEFAULT_OPENAI_CHAT_URL.to_string(),
+            responses_url: DEFAULT_OPENAI_RESPONSES_URL.to_string(),
             auth_style: OpenAIAuthStyle::Bearer,
             responses_fallback: false,
             retry_policy: RetryPolicy::default(),
@@ -69,22 +83,25 @@ impl OpenAIProvider {
         self
     }
 
-    fn endpoint(&self) -> String {
-        format!(
-            "{}/v1/chat/completions",
-            self.base_url.trim_end_matches('/')
-        )
+    /// Override the chat completions URL.
+    ///
+    /// Pass the **full URL** that the provider should POST to, e.g.
+    /// `https://api.groq.com/openai/v1/chat/completions`. Trailing slashes
+    /// are trimmed defensively, but no other normalization is applied —
+    /// what you pass is what gets hit.
+    pub fn with_chat_url(mut self, url: impl Into<String>) -> Self {
+        self.chat_url = url.into().trim_end_matches('/').to_string();
+        self
     }
 
-    fn responses_endpoint(&self) -> String {
-        let normalized = self.base_url.trim_end_matches('/');
-        if let Some(prefix) = normalized.strip_suffix("/chat/completions") {
-            return format!("{prefix}/responses");
-        }
-        if normalized.ends_with("/v1") {
-            return format!("{normalized}/responses");
-        }
-        format!("{normalized}/v1/responses")
+    /// Override the Responses API URL.
+    ///
+    /// Only relevant when [`with_responses_fallback`](Self::with_responses_fallback)
+    /// is enabled. Most OpenAI-compatible providers do not expose this
+    /// endpoint, so setting this is rarely needed outside of real OpenAI.
+    pub fn with_responses_url(mut self, url: impl Into<String>) -> Self {
+        self.responses_url = url.into().trim_end_matches('/').to_string();
+        self
     }
 
     fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -228,7 +245,7 @@ impl OpenAIProvider {
         }
 
         let response = self
-            .apply_auth(self.http.post(self.responses_endpoint()).json(&body))
+            .apply_auth(self.http.post(&self.responses_url).json(&body))
             .send()
             .await
             .map_err(|error| MotosanError::Network(error.to_string()))?;
@@ -462,7 +479,7 @@ impl ProviderImpl for OpenAIProvider {
         let payload: Value;
         loop {
             let response = match self
-                .apply_auth(self.http.post(self.endpoint()).json(&body))
+                .apply_auth(self.http.post(&self.chat_url).json(&body))
                 .send()
                 .await
             {
@@ -579,7 +596,7 @@ impl ProviderImpl for OpenAIProvider {
         let mut attempt = 0;
         let response = loop {
             let response = match self
-                .apply_auth(self.http.post(self.endpoint()).json(&body))
+                .apply_auth(self.http.post(&self.chat_url).json(&body))
                 .send()
                 .await
             {

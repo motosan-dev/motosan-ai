@@ -89,7 +89,8 @@ async fn openai_serializes_tools_and_extracts_tool_calls() {
         .create_async()
         .await;
 
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
     let request = ChatRequest::builder()
         .message(Message::user("weather?"))
         .tools(vec![Tool {
@@ -256,7 +257,8 @@ async fn openai_multi_turn_tool_use_roundtrip() {
     use motosan_ai::providers::ProviderImpl;
 
     let mut server = mockito::Server::new_async().await;
-    let provider = OpenAIProvider::new("test-key", None, Some(server.url()));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
 
     let turn1_mock = server
         .mock("POST", "/v1/chat/completions")

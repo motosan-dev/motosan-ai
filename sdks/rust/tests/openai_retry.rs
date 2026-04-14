@@ -37,8 +37,9 @@ async fn openai_chat_retries_429_then_succeeds() {
         .base_delay_ms(0)
         .max_delay_ms(0)
         .jitter(false);
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
 
     let response = provider
         .chat(
@@ -82,8 +83,9 @@ async fn openai_chat_retries_500_twice_then_succeeds() {
         .base_delay_ms(0)
         .max_delay_ms(0)
         .jitter(false);
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
 
     let response = provider
         .chat(
@@ -113,8 +115,9 @@ async fn openai_chat_does_not_retry_on_400() {
         .base_delay_ms(0)
         .max_delay_ms(0)
         .jitter(false);
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
 
     let result = provider
         .chat(
@@ -160,8 +163,9 @@ async fn openai_chat_honors_retry_after_header() {
         .max_delay_ms(0)
         .jitter(false)
         .respect_retry_after(true);
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
 
     let started = Instant::now();
     let _ = provider
@@ -200,8 +204,9 @@ async fn openai_stream_retries_initial_call() {
         .base_delay_ms(0)
         .max_delay_ms(0)
         .jitter(false);
-    let provider =
-        OpenAIProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .build();
