@@ -310,7 +310,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.9.1", features = ["claude-code"] }
+motosan-ai = { version = "0.9.2", features = ["claude-code"] }
 ```
 
 ```rust
@@ -328,19 +328,31 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.9.1", features = ["codex-cli"] }
+motosan-ai = { version = "0.9.2", features = ["codex-cli"] }
 ```
 
 ```rust
-use motosan_ai::{CodexCliClient, codex_cli::SandboxMode};
+use motosan_ai::{CodexCliClient, codex_cli::{LocalProvider, SandboxMode}};
 
 let client = CodexCliClient::new()           // uses $CODEX_PATH or "codex" in PATH
-    .model("gpt-5.1-codex")                  // forwards --model
+    .model("gpt-5.1-codex")                  // --model
     .sandbox(SandboxMode::WorkspaceWrite)    // --sandbox workspace-write
     .profile("work")                         // --profile work (from ~/.codex/config.toml)
-    .ephemeral(true)                         // --ephemeral (no session rollout files)
-    .config_override("model_reasoning_effort", "\"low\"")  // repeated -c key=value
-    .cd("/tmp/project");                     // --cd <dir>
+    .cd("/tmp/project")                      // --cd <dir>
+    .add_dir("/tmp/output")                  // --add-dir <dir> (repeatable)
+    .ephemeral(true)                         // --ephemeral
+    .enable_feature("fast")                  // --enable <FEATURE> (repeatable)
+    .disable_feature("verbose")              // --disable <FEATURE> (repeatable)
+    .config_override("model_reasoning_effort", "\"low\"");  // -c key=value (repeatable)
+
+// Run against a local OSS provider instead of the OpenAI cloud:
+let local = CodexCliClient::new()
+    .oss(true)
+    .local_provider(LocalProvider::Ollama);  // or LocalProvider::LmStudio
+
+// Externally-sandboxed environments only — disables ALL approvals and the sandbox:
+let unsafe_client = CodexCliClient::new()
+    .dangerously_bypass_approvals_and_sandbox(true);
 
 let response = client.chat(request).await?;
 let stream = client.stream(request).await?;
@@ -352,6 +364,7 @@ Notes:
 - `tool_calls` is always empty — Codex runs tools internally via its sandboxed shell, those invocations are not surfaced.
 - Authentication: Codex CLI uses `CODEX_API_KEY` or `~/.codex/auth.json`, not `OPENAI_API_KEY`.
 - `agent_mode(true)` passes `--full-auto` (workspace-write sandbox + approvals off); can coexist with an explicit `sandbox()`.
+- `dangerously_bypass_approvals_and_sandbox(true)` should ONLY be used inside an externally sandboxed environment (disposable container, ephemeral VM).
 
 ## Publishing
 

@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) — LLM ch
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.9.1
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.9.2
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama
 
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.9.1", features = ["anthropic"] }
+motosan-ai = { version = "0.9.2", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (shell out to a local binary): claude-code | codex-cli
 ```

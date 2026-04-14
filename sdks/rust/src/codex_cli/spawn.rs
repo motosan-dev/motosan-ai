@@ -46,6 +46,27 @@ impl SandboxMode {
     }
 }
 
+/// Local OSS provider for `--local-provider <p>`.
+///
+/// Selects which on-device provider Codex should talk to when running with
+/// `--oss`. Only meaningful in combination with [`CodexCliClient::oss`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalProvider {
+    /// LM Studio (`lmstudio`).
+    LmStudio,
+    /// Ollama (`ollama`).
+    Ollama,
+}
+
+impl LocalProvider {
+    pub(crate) fn as_flag(&self) -> &'static str {
+        match self {
+            LocalProvider::LmStudio => "lmstudio",
+            LocalProvider::Ollama => "ollama",
+        }
+    }
+}
+
 /// Configuration snapshot used to spawn a single `codex` CLI invocation.
 ///
 /// Built by [`CodexCliClient::build_spawn_config`](super::CodexCliClient)
@@ -69,6 +90,19 @@ pub struct SpawnConfig {
     pub ephemeral: bool,
     /// Forwarded as repeated `-c key=value` arguments, in the order supplied.
     pub config_overrides: Vec<(String, String)>,
+    /// Repeated `--add-dir <DIR>` — additional writable workspace roots.
+    pub add_dirs: Vec<PathBuf>,
+    /// Repeated `--enable <FEATURE>` — convenience for `-c features.<name>=true`.
+    pub enabled_features: Vec<String>,
+    /// Repeated `--disable <FEATURE>` — convenience for `-c features.<name>=false`.
+    pub disabled_features: Vec<String>,
+    /// `--dangerously-bypass-approvals-and-sandbox`. Only set when the
+    /// caller is already externally sandboxed.
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+    /// `--oss` — use the OSS provider stack instead of OpenAI cloud.
+    pub oss: bool,
+    /// `--local-provider <p>` — selects the OSS provider used with `--oss`.
+    pub local_provider: Option<LocalProvider>,
 }
 
 /// Hard timeout for a single `codex exec` invocation.
@@ -94,9 +128,22 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
         args.push("--full-auto".into());
     }
 
+    if config.dangerously_bypass_approvals_and_sandbox {
+        args.push("--dangerously-bypass-approvals-and-sandbox".into());
+    }
+
     if let Some(mode) = config.sandbox {
         args.push("--sandbox".into());
         args.push(mode.as_flag().into());
+    }
+
+    if config.oss {
+        args.push("--oss".into());
+    }
+
+    if let Some(provider) = config.local_provider {
+        args.push("--local-provider".into());
+        args.push(provider.as_flag().into());
     }
 
     if let Some(ref model) = config.model {
@@ -118,8 +165,27 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
         args.push(dir.into());
     }
 
+    for dir in &config.add_dirs {
+        args.push("--add-dir".into());
+        args.push(dir.into());
+    }
+
     if config.ephemeral {
         args.push("--ephemeral".into());
+    }
+
+    for feature in &config.enabled_features {
+        if !feature.is_empty() {
+            args.push("--enable".into());
+            args.push(feature.into());
+        }
+    }
+
+    for feature in &config.disabled_features {
+        if !feature.is_empty() {
+            args.push("--disable".into());
+            args.push(feature.into());
+        }
     }
 
     for (key, value) in &config.config_overrides {
@@ -279,6 +345,12 @@ mod tests {
             profile: None,
             ephemeral: false,
             config_overrides: Vec::new(),
+            add_dirs: Vec::new(),
+            enabled_features: Vec::new(),
+            disabled_features: Vec::new(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            oss: false,
+            local_provider: None,
         }
     }
 
@@ -434,6 +506,128 @@ mod tests {
                 "--cd",
                 "/x",
                 "--ephemeral",
+                "-c",
+                "k=v",
+            ]
+        );
+    }
+
+    #[test]
+    fn common_args_emits_dangerously_bypass() {
+        let cfg = SpawnConfig {
+            dangerously_bypass_approvals_and_sandbox: true,
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--dangerously-bypass-approvals-and-sandbox"]
+        );
+    }
+
+    #[test]
+    fn common_args_emits_oss_and_local_provider() {
+        let cfg = SpawnConfig {
+            oss: true,
+            local_provider: Some(LocalProvider::Ollama),
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--oss", "--local-provider", "ollama"]
+        );
+    }
+
+    #[test]
+    fn local_provider_lmstudio_serializes_correctly() {
+        let cfg = SpawnConfig {
+            oss: true,
+            local_provider: Some(LocalProvider::LmStudio),
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--oss", "--local-provider", "lmstudio"]
+        );
+    }
+
+    #[test]
+    fn common_args_forwards_add_dirs_in_order() {
+        let cfg = SpawnConfig {
+            add_dirs: vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")],
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--add-dir", "/tmp/a", "--add-dir", "/tmp/b"]
+        );
+    }
+
+    #[test]
+    fn common_args_forwards_enabled_and_disabled_features() {
+        let cfg = SpawnConfig {
+            enabled_features: vec!["foo".to_string(), "bar".to_string()],
+            disabled_features: vec!["baz".to_string()],
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--enable", "foo", "--enable", "bar", "--disable", "baz",]
+        );
+    }
+
+    #[test]
+    fn common_args_skips_blank_feature_names() {
+        let cfg = SpawnConfig {
+            enabled_features: vec!["".to_string(), "ok".to_string()],
+            disabled_features: vec!["".to_string()],
+            ..empty_config()
+        };
+        assert_eq!(args_as_strings(&common_args(&cfg)), vec!["--enable", "ok"]);
+    }
+
+    #[test]
+    fn common_args_full_loadout_order_is_stable() {
+        // Every flag set; locks the documented order so future edits to
+        // `common_args` can't silently reorder the spawned command line.
+        let cfg = SpawnConfig {
+            binary_path: PathBuf::from("codex"),
+            agent_mode: true,
+            dangerously_bypass_approvals_and_sandbox: true,
+            sandbox: Some(SandboxMode::WorkspaceWrite),
+            oss: true,
+            local_provider: Some(LocalProvider::Ollama),
+            model: Some("gpt-5.1-codex".to_string()),
+            profile: Some("work".to_string()),
+            cd: Some(PathBuf::from("/x")),
+            add_dirs: vec![PathBuf::from("/tmp/extra")],
+            ephemeral: true,
+            enabled_features: vec!["fast".to_string()],
+            disabled_features: vec!["slow".to_string()],
+            config_overrides: vec![("k".to_string(), "v".to_string())],
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec![
+                "--full-auto",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--sandbox",
+                "workspace-write",
+                "--oss",
+                "--local-provider",
+                "ollama",
+                "--model",
+                "gpt-5.1-codex",
+                "--profile",
+                "work",
+                "--cd",
+                "/x",
+                "--add-dir",
+                "/tmp/extra",
+                "--ephemeral",
+                "--enable",
+                "fast",
+                "--disable",
+                "slow",
                 "-c",
                 "k=v",
             ]

@@ -56,7 +56,7 @@ use crate::error::MotosanError;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
-pub use spawn::SandboxMode;
+pub use spawn::{LocalProvider, SandboxMode};
 
 /// Client that shells out to the `codex` CLI binary (OpenAI Codex CLI).
 ///
@@ -110,6 +110,32 @@ pub struct CodexCliClient {
     /// The value portion is parsed as TOML by Codex itself; string values
     /// must include escaped quotes, e.g. `"\"low\""`.
     pub config_overrides: Vec<(String, String)>,
+
+    /// Additional writable workspace roots, forwarded as repeated
+    /// `--add-dir <DIR>`. Useful when Codex needs write access outside the
+    /// `cd()` directory.
+    pub add_dirs: Vec<PathBuf>,
+
+    /// Feature names to enable, forwarded as repeated `--enable <FEATURE>`.
+    /// Equivalent to `config_override("features.<name>", "true")` but
+    /// more ergonomic.
+    pub enabled_features: Vec<String>,
+
+    /// Feature names to disable, forwarded as repeated `--disable <FEATURE>`.
+    pub disabled_features: Vec<String>,
+
+    /// When `true`, passes `--dangerously-bypass-approvals-and-sandbox`.
+    /// **EXTREMELY DANGEROUS** — only use when the caller is already
+    /// externally sandboxed (disposable container, ephemeral VM).
+    pub dangerously_bypass_approvals_and_sandbox: bool,
+
+    /// When `true`, passes `--oss` so Codex talks to a local open-source
+    /// provider stack instead of the OpenAI cloud.
+    pub oss: bool,
+
+    /// Selects the local provider (`lmstudio` / `ollama`) when
+    /// [`oss`](Self::oss) is enabled. See [`LocalProvider`].
+    pub local_provider: Option<LocalProvider>,
 }
 
 impl CodexCliClient {
@@ -138,6 +164,12 @@ impl CodexCliClient {
             profile: None,
             ephemeral: false,
             config_overrides: Vec::new(),
+            add_dirs: Vec::new(),
+            enabled_features: Vec::new(),
+            disabled_features: Vec::new(),
+            dangerously_bypass_approvals_and_sandbox: false,
+            oss: false,
+            local_provider: None,
         }
     }
 
@@ -204,6 +236,56 @@ impl CodexCliClient {
         self
     }
 
+    /// Append an additional writable workspace root (`--add-dir`). Repeatable.
+    pub fn add_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.add_dirs.push(dir.into());
+        self
+    }
+
+    /// Enable a feature (`--enable <FEATURE>`). Repeatable.
+    ///
+    /// Equivalent to `.config_override("features.<name>", "true")` but more
+    /// ergonomic. Empty strings are ignored.
+    pub fn enable_feature(mut self, feature: impl Into<String>) -> Self {
+        self.enabled_features.push(feature.into());
+        self
+    }
+
+    /// Disable a feature (`--disable <FEATURE>`). Repeatable.
+    pub fn disable_feature(mut self, feature: impl Into<String>) -> Self {
+        self.disabled_features.push(feature.into());
+        self
+    }
+
+    /// Pass `--dangerously-bypass-approvals-and-sandbox`.
+    ///
+    /// **EXTREMELY DANGEROUS.** Only use when the caller is already
+    /// externally sandboxed (disposable container, ephemeral VM, or
+    /// otherwise isolated execution environment). The long method name is
+    /// intentional — there is no convenience alias.
+    pub fn dangerously_bypass_approvals_and_sandbox(mut self, enabled: bool) -> Self {
+        self.dangerously_bypass_approvals_and_sandbox = enabled;
+        self
+    }
+
+    /// Use the OSS provider stack instead of OpenAI cloud (`--oss`).
+    ///
+    /// Pair with [`local_provider`](Self::local_provider) to pick which
+    /// local backend (LM Studio / Ollama) Codex should talk to.
+    pub fn oss(mut self, enabled: bool) -> Self {
+        self.oss = enabled;
+        self
+    }
+
+    /// Select the local OSS provider (`--local-provider <p>`).
+    ///
+    /// Only meaningful when [`oss(true)`](Self::oss) is also set. See
+    /// [`LocalProvider`] for the supported variants.
+    pub fn local_provider(mut self, provider: LocalProvider) -> Self {
+        self.local_provider = Some(provider);
+        self
+    }
+
     /// Build the internal [`spawn::SpawnConfig`] from this client's state.
     ///
     /// A per-request `request_model` (from [`ChatRequest::model`]) takes
@@ -218,6 +300,12 @@ impl CodexCliClient {
             profile: self.profile.clone(),
             ephemeral: self.ephemeral,
             config_overrides: self.config_overrides.clone(),
+            add_dirs: self.add_dirs.clone(),
+            enabled_features: self.enabled_features.clone(),
+            disabled_features: self.disabled_features.clone(),
+            dangerously_bypass_approvals_and_sandbox: self.dangerously_bypass_approvals_and_sandbox,
+            oss: self.oss,
+            local_provider: self.local_provider,
         }
     }
 

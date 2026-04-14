@@ -2,6 +2,28 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.9.2] - 2026-04-14
+
+### Added
+- **Six new `CodexCliClient` builder methods** for `codex exec` flags that were previously only reachable via raw `config_override` strings:
+  - `.add_dir(path)` — repeated `--add-dir <DIR>`, additional writable workspace roots.
+  - `.enable_feature(name)` — repeated `--enable <FEATURE>`, equivalent to `config_override("features.<name>", "true")` but typed.
+  - `.disable_feature(name)` — repeated `--disable <FEATURE>`.
+  - `.dangerously_bypass_approvals_and_sandbox(bool)` — `--dangerously-bypass-approvals-and-sandbox`. Long name preserved intentionally; only safe inside an externally sandboxed environment.
+  - `.oss(bool)` — `--oss`, use the local open-source provider stack instead of OpenAI cloud.
+  - `.local_provider(LocalProvider)` — `--local-provider <p>`, picks `lmstudio` or `ollama` when `oss(true)` is set.
+- **`LocalProvider` enum** (`LmStudio` / `Ollama`) re-exported from `motosan_ai::codex_cli::LocalProvider`.
+- **Six matching public fields on `CodexCliClient`** so advanced callers can construct the struct directly.
+- **Eight new argv-snapshot unit tests** covering each new flag in isolation plus a full-loadout test that locks the stable argv order across all 14 flag categories.
+
+### Why
+- After v0.7.0 only the most common subset of `codex exec` flags was wrapped (model / sandbox / profile / cd / ephemeral / agent_mode / config_override). Anything else required dropping into `-c key=value` config_override strings, which is awkward for typed users and bypasses TOML escaping rules.
+- The 6 added flags are pure-config (string / bool / enum), so wiring them through `SpawnConfig` + `common_args` is mechanical.
+- Multimodal `--image <FILE>` and `--output-schema <FILE>` are deferred — they need temp-file lifecycle handling and aren't in the immediate critical path.
+
+### Coverage
+- Every `codex exec` flag relevant to programmatic use is now reachable via a typed builder. Skipped flags are limited to: `--color` (irrelevant in JSON mode), `--output-last-message` (we read JSONL from stdout), `--image` and `--output-schema` (deferred).
+
 ## [0.9.1] - 2026-04-14
 
 ### Added
