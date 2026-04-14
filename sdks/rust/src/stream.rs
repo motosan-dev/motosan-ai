@@ -38,9 +38,17 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut output_tokens: u32 = 0;
     let mut cache_creation_input_tokens: Option<u32> = None;
     let mut cache_read_input_tokens: Option<u32> = None;
+    let mut explicit_stop_reason: Option<StopReason> = None;
 
     while let Some(event) = stream.next().await {
         if event.done {
+            // The terminal event may carry a provider-reported stop reason
+            // (Anthropic message_delta.stop_reason, OpenAI finish_reason).
+            // Capture it before exiting the loop so the heuristic below
+            // becomes a fallback only.
+            if let Some(reason) = event.stop_reason {
+                explicit_stop_reason = Some(reason);
+            }
             break;
         }
         match event.event_type {
@@ -82,10 +90,10 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         }
     }
 
-    let stop_reason = if tool_calls.is_empty() {
-        StopReason::EndTurn
-    } else {
-        StopReason::ToolUse
+    let stop_reason = match explicit_stop_reason {
+        Some(reason) => reason,
+        None if tool_calls.is_empty() => StopReason::EndTurn,
+        None => StopReason::ToolUse,
     };
 
     ChatResponse {

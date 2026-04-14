@@ -322,3 +322,70 @@ async fn live_stream_tool_use() {
         parsed
     );
 }
+
+// ---------------------------------------------------------------------------
+// 6. stop_reason propagation through real SSE stream
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn live_stream_propagates_max_tokens_stop_reason() {
+    let Some(client) = client() else {
+        eprintln!("ANTHROPIC_API_KEY not set, skipping");
+        return;
+    };
+
+    // max_tokens=8 forces Anthropic to truncate → message_delta.delta.stop_reason = "max_tokens"
+    let request = ChatRequest::builder()
+        .message(Message::user(
+            "Write a long detailed essay about the history of the Roman Empire.",
+        ))
+        .max_tokens(8)
+        .build();
+
+    let mut stream = client.stream_with(request).await.expect("stream failed");
+
+    let mut events: Vec<motosan_ai::StreamEvent> = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let done = events
+        .iter()
+        .find(|e| e.done)
+        .expect("expected at least one done event from the stream");
+    assert_eq!(
+        done.stop_reason,
+        Some(StopReason::MaxTokens),
+        "expected MaxTokens propagated from message_delta.stop_reason, got: {:?}",
+        done.stop_reason
+    );
+
+    cooldown().await;
+}
+
+#[tokio::test]
+async fn live_collect_stream_records_max_tokens_on_chat_response() {
+    let Some(client) = client() else {
+        eprintln!("ANTHROPIC_API_KEY not set, skipping");
+        return;
+    };
+
+    let request = ChatRequest::builder()
+        .message(Message::user(
+            "Write a long detailed essay about the history of the Roman Empire.",
+        ))
+        .max_tokens(8)
+        .build();
+
+    let stream = client.stream_with(request).await.expect("stream failed");
+    let response = motosan_ai::collect_stream(stream).await;
+
+    assert_eq!(
+        response.stop_reason,
+        StopReason::MaxTokens,
+        "collect_stream should backfill MaxTokens from the terminal done event, got: {:?}",
+        response.stop_reason
+    );
+
+    cooldown().await;
+}

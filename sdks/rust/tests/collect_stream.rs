@@ -323,3 +323,80 @@ async fn chat_vs_stream_collect_consistency() {
         stream_response.tool_calls.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// stop_reason propagation through stream + collect_stream
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn collect_stream_propagates_explicit_stop_reason() {
+    // Synthetic stream: text + done event carrying MaxTokens.
+    let events = vec![
+        StreamEvent::text("partial"),
+        StreamEvent::done_with_stop_reason(StopReason::MaxTokens),
+    ];
+    let response = collect_stream(boxed_stream(events)).await;
+
+    assert_eq!(response.content, "partial");
+    assert_eq!(response.stop_reason, StopReason::MaxTokens);
+}
+
+#[tokio::test]
+async fn collect_stream_falls_back_to_heuristic_when_no_explicit_reason() {
+    // Plain done (no stop_reason) + tool call → should fall back to ToolUse.
+    let events = vec![
+        StreamEvent::tool_call_start("tool_1", "lookup"),
+        StreamEvent::tool_call_args("{}"),
+        StreamEvent::tool_call_end(),
+        StreamEvent::done(),
+    ];
+    let response = collect_stream(boxed_stream(events)).await;
+
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
+}
+
+#[tokio::test]
+async fn anthropic_stream_emits_max_tokens_stop_reason() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"truncated\"}}\n\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"},\"usage\":{\"input_tokens\":4,\"output_tokens\":8}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("write a long story"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events: Vec<StreamEvent> = Vec::new();
+    while let Some(event) = tokio_stream::StreamExt::next(&mut stream).await {
+        events.push(event);
+    }
+
+    // Last event is the terminal done, and it must carry MaxTokens.
+    let done = events.last().expect("at least one event");
+    assert!(done.done);
+    assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
+
+    // Replay the captured events through collect_stream — same MaxTokens
+    // should land on ChatResponse.stop_reason via the explicit-reason path.
+    let synthesized = collect_stream(boxed_stream(events)).await;
+    assert_eq!(synthesized.stop_reason, StopReason::MaxTokens);
+    assert_eq!(synthesized.content, "truncated");
+
+    mock.assert_async().await;
+}

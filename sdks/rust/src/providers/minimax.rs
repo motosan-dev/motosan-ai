@@ -527,6 +527,7 @@ impl ProviderImpl for MinimaxProvider {
             pending: std::collections::VecDeque::new(),
             expose_reasoning,
             seen_tool_ids: Vec::new(),
+            pending_stop_reason: None,
         };
 
         Ok(Box::pin(adapter))
@@ -548,6 +549,9 @@ struct MinimaxStreamAdapter {
     pending: std::collections::VecDeque<StreamEvent>,
     expose_reasoning: bool,
     seen_tool_ids: Vec<String>,
+    /// Stashed from the last chunk's `finish_reason`, drained on `[DONE]`.
+    /// Mirrors `OpenAIStreamAdapter::pending_stop_reason`.
+    pending_stop_reason: Option<StopReason>,
 }
 
 impl Stream for MinimaxStreamAdapter {
@@ -565,7 +569,11 @@ impl Stream for MinimaxStreamAdapter {
             match self.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(event))) => {
                     if event.data.trim() == "[DONE]" {
-                        return Poll::Ready(Some(StreamEvent::done()));
+                        let done = match self.pending_stop_reason.take() {
+                            Some(reason) => StreamEvent::done_with_stop_reason(reason),
+                            None => StreamEvent::done(),
+                        };
+                        return Poll::Ready(Some(done));
                     }
 
                     let payload: Value = match serde_json::from_str(&event.data) {
@@ -632,7 +640,16 @@ impl Stream for MinimaxStreamAdapter {
                                         .push_back(StreamEvent::tool_call_end_with_id(id));
                                 }
                             }
-                            self.pending.push_back(StreamEvent::done());
+                            // Stash for the upcoming `[DONE]` sentinel so we
+                            // emit exactly one terminal done event with
+                            // stop_reason attached. Mapping inlined to keep
+                            // `--features minimax` independent of openai.
+                            self.pending_stop_reason = Some(match reason {
+                                "stop" => StopReason::Stop,
+                                "length" => StopReason::MaxTokens,
+                                "tool_calls" => StopReason::ToolUse,
+                                _ => StopReason::Other,
+                            });
                         }
                     }
 
@@ -642,7 +659,14 @@ impl Stream for MinimaxStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(_))) => continue,
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    // End of upstream stream — flush a final done event with
+                    // the stashed stop_reason if `[DONE]` was never sent.
+                    if let Some(reason) = self.pending_stop_reason.take() {
+                        return Poll::Ready(Some(StreamEvent::done_with_stop_reason(reason)));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }

@@ -637,6 +637,7 @@ impl ProviderImpl for OpenAIProvider {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
             seen_tool_ids: Vec::new(),
+            pending_stop_reason: None,
         };
 
         Ok(Box::pin(adapter))
@@ -657,12 +658,23 @@ struct OpenAIStreamAdapter {
     >,
     pending: std::collections::VecDeque<StreamEvent>,
     seen_tool_ids: Vec<String>,
+    /// Captured from the last chunk's `choices[0].finish_reason`. Stashed
+    /// rather than emitted immediately so we can attach it to a single
+    /// terminal `done` event when the `[DONE]` sentinel arrives — this
+    /// avoids emitting two `done` events per stream.
+    pending_stop_reason: Option<StopReason>,
 }
 
 impl OpenAIStreamAdapter {
     fn parse_event(&mut self, data: &str) -> bool {
         if data.trim() == "[DONE]" {
-            self.pending.push_back(StreamEvent::done());
+            // Emit a single terminal done event, attaching any stop_reason
+            // captured from the previous chunk's finish_reason field.
+            let done = match self.pending_stop_reason.take() {
+                Some(reason) => StreamEvent::done_with_stop_reason(reason),
+                None => StreamEvent::done(),
+            };
+            self.pending.push_back(done);
             return true;
         }
 
@@ -726,7 +738,8 @@ impl OpenAIStreamAdapter {
             }
         }
 
-        // Finish reason
+        // Finish reason — stash for the upcoming `[DONE]` sentinel so we
+        // emit exactly one terminal done event with stop_reason attached.
         let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
         if let Some(reason) = finish_reason {
             if reason == "tool_calls" {
@@ -736,11 +749,22 @@ impl OpenAIStreamAdapter {
                         .push_back(StreamEvent::tool_call_end_with_id(id));
                 }
             }
-            self.pending.push_back(StreamEvent::done());
-            return true;
+            self.pending_stop_reason = Some(map_finish_reason(reason));
         }
 
         false
+    }
+}
+
+/// Map an OpenAI `finish_reason` string to our [`StopReason`] enum. Mirrors the
+/// non-streaming logic in `extract_chat_response` so the streaming path
+/// reports the same value.
+pub(crate) fn map_finish_reason(reason: &str) -> StopReason {
+    match reason {
+        "stop" => StopReason::Stop,
+        "length" => StopReason::MaxTokens,
+        "tool_calls" => StopReason::ToolUse,
+        _ => StopReason::Other,
     }
 }
 
@@ -765,7 +789,16 @@ impl Stream for OpenAIStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(_))) => continue,
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    // End of upstream stream. If the provider never sent
+                    // `[DONE]` (some non-conformant proxies skip it), emit
+                    // one final terminal done event with any stashed
+                    // stop_reason so downstream code always sees a done.
+                    if let Some(reason) = self.pending_stop_reason.take() {
+                        return Poll::Ready(Some(StreamEvent::done_with_stop_reason(reason)));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }

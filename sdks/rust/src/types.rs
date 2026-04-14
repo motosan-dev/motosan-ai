@@ -687,6 +687,11 @@ pub struct StreamEvent {
     /// Token usage reported via `message_start` or `message_delta` SSE events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<Usage>,
+    /// Final stop reason, attached to the terminal `done` event when the
+    /// provider reports one (Anthropic `message_delta.stop_reason`, OpenAI
+    /// `finish_reason`, etc.). `None` on intermediate events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<StopReason>,
 }
 
 impl StreamEvent {
@@ -699,6 +704,7 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
             usage: None,
+            stop_reason: None,
         }
     }
 
@@ -711,6 +717,21 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::Text,
             usage: None,
+            stop_reason: None,
+        }
+    }
+
+    /// Build a terminal `done` event carrying a stop reason.
+    pub fn done_with_stop_reason(stop_reason: StopReason) -> Self {
+        Self {
+            content: String::new(),
+            done: true,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Text,
+            usage: None,
+            stop_reason: Some(stop_reason),
         }
     }
 
@@ -723,6 +744,7 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::Usage,
             usage: Some(usage),
+            stop_reason: None,
         }
     }
 
@@ -735,6 +757,7 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallStart,
             usage: None,
+            stop_reason: None,
         }
     }
 
@@ -747,6 +770,7 @@ impl StreamEvent {
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
             usage: None,
+            stop_reason: None,
         }
     }
 
@@ -759,6 +783,7 @@ impl StreamEvent {
             tool_call_args_delta: Some(delta.into()),
             event_type: StreamEventType::ToolCallArgs,
             usage: None,
+            stop_reason: None,
         }
     }
 
@@ -771,6 +796,7 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
             usage: None,
+            stop_reason: None,
         }
     }
 
@@ -783,6 +809,7 @@ impl StreamEvent {
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
             usage: None,
+            stop_reason: None,
         }
     }
 }

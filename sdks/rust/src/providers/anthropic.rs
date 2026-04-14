@@ -799,6 +799,7 @@ impl ProviderImpl for AnthropicProvider {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
             current_tool_id: None,
+            current_stop_reason: None,
         };
 
         Ok(Box::pin(adapter))
@@ -819,6 +820,10 @@ struct AnthropicStreamAdapter {
     >,
     pending: std::collections::VecDeque<StreamEvent>,
     current_tool_id: Option<String>,
+    /// Captured from `message_delta.delta.stop_reason`; emitted on the
+    /// terminal `message_stop` event so callers see the reason in the
+    /// final `done` `StreamEvent`.
+    current_stop_reason: Option<crate::types::StopReason>,
 }
 
 impl Stream for AnthropicStreamAdapter {
@@ -879,6 +884,24 @@ impl Stream for AnthropicStreamAdapter {
                             continue;
                         }
                         "message_delta" => {
+                            // Anthropic carries the final stop_reason on
+                            // `message_delta.delta.stop_reason`. Stash it so
+                            // we can emit it on the terminal message_stop.
+                            if let Some(reason) = payload
+                                .get("delta")
+                                .and_then(|d| d.get("stop_reason"))
+                                .and_then(Value::as_str)
+                            {
+                                self.current_stop_reason = Some(match reason {
+                                    "end_turn" => StopReason::EndTurn,
+                                    "max_tokens" => StopReason::MaxTokens,
+                                    "tool_use" => StopReason::ToolUse,
+                                    "stop_sequence" => StopReason::StopSequence,
+                                    "stop" => StopReason::Stop,
+                                    _ => StopReason::Other,
+                                });
+                            }
+
                             if let Some(usage) = payload.get("usage") {
                                 let input_tokens = usage
                                     .get("input_tokens")
@@ -961,7 +984,11 @@ impl Stream for AnthropicStreamAdapter {
                             continue;
                         }
                         "message_stop" => {
-                            return Poll::Ready(Some(StreamEvent::done()));
+                            let done = match self.current_stop_reason.take() {
+                                Some(reason) => StreamEvent::done_with_stop_reason(reason),
+                                None => StreamEvent::done(),
+                            };
+                            return Poll::Ready(Some(done));
                         }
                         _ => continue,
                     }

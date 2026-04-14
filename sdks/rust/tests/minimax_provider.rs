@@ -628,3 +628,152 @@ async fn minimax_stream_falls_back_to_reasoning_content_when_delta_content_empty
     assert!(events[1].done);
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn minimax_stream_propagates_finish_reason_max_tokens() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"truncated\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("write a long story"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let first_done = events
+        .iter()
+        .find(|e| e.done)
+        .expect("expected a terminal done event");
+    assert_eq!(first_done.stop_reason, Some(StopReason::MaxTokens));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_stream_propagates_finish_reason_tool_calls() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"function\":{\"name\":\"lookup\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("call a tool"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let first_done = events
+        .iter()
+        .find(|e| e.done)
+        .expect("expected a terminal done event");
+    assert_eq!(first_done.stop_reason, Some(StopReason::ToolUse));
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_stream_propagates_finish_reason_stop() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"done.\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let done = events.iter().find(|e| e.done).expect("done event");
+    assert_eq!(done.stop_reason, Some(StopReason::Stop));
+    assert_eq!(events.iter().filter(|e| e.done).count(), 1);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn minimax_stream_eof_flush_when_done_sentinel_missing() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" // no [DONE] sentinel
+    );
+
+    let mock = server
+        .mock("POST", "/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = MinimaxProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+
+    let done = events
+        .iter()
+        .find(|e| e.done)
+        .expect("EOF flush should still emit a done event when [DONE] sentinel is missing");
+    assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
+    assert_eq!(events.iter().filter(|e| e.done).count(), 1);
+
+    mock.assert_async().await;
+}

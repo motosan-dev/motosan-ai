@@ -3,7 +3,7 @@
 use mockito::Matcher;
 use motosan_ai::providers::anthropic::AnthropicProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StreamEventType, Tool};
+use motosan_ai::{ChatRequest, Message, StopReason, StreamEventType, Tool};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -348,4 +348,72 @@ async fn anthropic_stream_emits_tool_use_events() {
     assert!(received.last().unwrap().done);
 
     mock.assert_async().await;
+}
+
+// ---------------------------------------------------------------------------
+// stop_reason variant coverage (table-driven via shared helper)
+// ---------------------------------------------------------------------------
+
+async fn anthropic_stream_with_message_delta_stop_reason(
+    delta_reason: &str,
+) -> motosan_ai::StreamEvent {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = format!(
+        concat!(
+            "event: content_block_delta\n",
+            "data: {{\"type\":\"content_block_delta\",\"delta\":{{\"text\":\"hi\"}}}}\n\n",
+            "event: message_delta\n",
+            "data: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"{}\"}},\"usage\":{{\"input_tokens\":3,\"output_tokens\":1}}}}\n\n",
+            "event: message_stop\n",
+            "data: {{\"type\":\"message_stop\"}}\n\n"
+        ),
+        delta_reason
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(&sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    mock.assert_async().await;
+
+    events.into_iter().find(|e| e.done).expect("done event")
+}
+
+#[tokio::test]
+async fn anthropic_stream_propagates_end_turn_stop_reason() {
+    let done = anthropic_stream_with_message_delta_stop_reason("end_turn").await;
+    assert_eq!(done.stop_reason, Some(StopReason::EndTurn));
+}
+
+#[tokio::test]
+async fn anthropic_stream_propagates_tool_use_stop_reason() {
+    let done = anthropic_stream_with_message_delta_stop_reason("tool_use").await;
+    assert_eq!(done.stop_reason, Some(StopReason::ToolUse));
+}
+
+#[tokio::test]
+async fn anthropic_stream_propagates_stop_sequence_stop_reason() {
+    let done = anthropic_stream_with_message_delta_stop_reason("stop_sequence").await;
+    assert_eq!(done.stop_reason, Some(StopReason::StopSequence));
+}
+
+#[tokio::test]
+async fn anthropic_stream_propagates_unknown_stop_reason_as_other() {
+    let done = anthropic_stream_with_message_delta_stop_reason("something_new").await;
+    assert_eq!(done.stop_reason, Some(StopReason::Other));
 }
