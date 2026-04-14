@@ -1,8 +1,8 @@
 //! Subprocess lifecycle and flag wiring for the Codex CLI provider.
 //!
-//! This module owns the translation from [`CodexCliClient`](super::CodexCliClient)
+//! This module owns the translation from [`CodexCliProvider`](super::CodexCliProvider)
 //! state to argv, plus the blocking [`invoke_cli`] path used by
-//! [`CodexCliClient::chat`](super::CodexCliClient::chat). The streaming path
+//! [`CodexCliProvider::chat`](super::CodexCliProvider::chat). The streaming path
 //! shares [`apply_common_args`] / [`common_args`] to stay in sync.
 
 use std::ffi::OsString;
@@ -49,7 +49,7 @@ impl SandboxMode {
 /// Local OSS provider for `--local-provider <p>`.
 ///
 /// Selects which on-device provider Codex should talk to when running with
-/// `--oss`. Only meaningful in combination with [`CodexCliClient::oss`].
+/// `--oss`. Only meaningful in combination with [`CodexCliProvider::oss`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalProvider {
     /// LM Studio (`lmstudio`).
@@ -69,9 +69,9 @@ impl LocalProvider {
 
 /// Configuration snapshot used to spawn a single `codex` CLI invocation.
 ///
-/// Built by [`CodexCliClient::build_spawn_config`](super::CodexCliClient)
+/// Built by [`CodexCliProvider::build_spawn_config`](super::CodexCliProvider)
 /// from the client state plus any per-request overrides. Each field mirrors
-/// a public field on [`CodexCliClient`](super::CodexCliClient); see that
+/// a public field on [`CodexCliProvider`](super::CodexCliProvider); see that
 /// type's docs for the semantics.
 pub struct SpawnConfig {
     /// Filesystem path to the `codex` binary.
@@ -112,7 +112,7 @@ pub struct SpawnConfig {
 const TIMEOUT_SECS: u64 = 600;
 
 /// Build the argv fragment shared between the blocking
-/// [`invoke_cli`] path and [`CodexCliClient::stream`](super::CodexCliClient::stream).
+/// [`invoke_cli`] path and [`CodexCliProvider::stream`](super::CodexCliProvider::stream).
 ///
 /// Returns a `Vec<OsString>` rather than mutating a `Command` so the
 /// config-to-argv mapping is pure and unit-testable. Callers append the

@@ -14,7 +14,7 @@ test-live     # Anthropic integration tests (auto-resolves API key)
 
 ## Rules That Prevent Mistakes
 
-HTTP provider logic goes in `providers/` only — never in `client.rs`/`client.py`. CLI backends that shell out to a local binary (`claude_code/`, `codex_cli/` in Rust) live as top-level modules outside `providers/` because they have subprocess lifetime, JSONL parsing, and exit-code semantics — not request/response serialization.
+Provider logic goes in `providers/` only — never in `client.rs`/`client.py`. This includes both HTTP providers (Anthropic / OpenAI / MiniMax / Ollama) and CLI backends (`providers/claude_code/`, `providers/codex_cli/` in Rust). All implement `ProviderImpl` and are interchangeable via `Box<dyn ProviderImpl>`.
 
 Tool call field is `input`, not `args` or `params`. Everywhere, both SDKs.
 

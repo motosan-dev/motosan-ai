@@ -13,12 +13,32 @@ pub mod tool_compat;
 #[cfg(feature = "claude-code")]
 pub use providers::claude_code;
 #[cfg(feature = "claude-code")]
-pub use providers::claude_code::ClaudeCodeClient;
+pub use providers::claude_code::ClaudeCodeProvider;
+
+/// Deprecated alias for [`ClaudeCodeProvider`]. Renamed in v0.10.0 for
+/// consistency with the HTTP provider naming (`AnthropicProvider`,
+/// `OpenAIProvider`, ...). The alias will be removed in a future release.
+#[cfg(feature = "claude-code")]
+#[deprecated(
+    since = "0.10.0",
+    note = "Renamed to `ClaudeCodeProvider` for consistency with other providers"
+)]
+pub type ClaudeCodeClient = ClaudeCodeProvider;
 
 #[cfg(feature = "codex-cli")]
 pub use providers::codex_cli;
 #[cfg(feature = "codex-cli")]
-pub use providers::codex_cli::CodexCliClient;
+pub use providers::codex_cli::CodexCliProvider;
+
+/// Deprecated alias for [`CodexCliProvider`]. Renamed in v0.10.0 for
+/// consistency with the HTTP provider naming. The alias will be removed
+/// in a future release.
+#[cfg(feature = "codex-cli")]
+#[deprecated(
+    since = "0.10.0",
+    note = "Renamed to `CodexCliProvider` for consistency with other providers"
+)]
+pub type CodexCliClient = CodexCliProvider;
 
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;

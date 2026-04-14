@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.10.0] — 2026-04-14
+
+### Breaking
+
+- **CLI backend types renamed**: `ClaudeCodeClient` → `ClaudeCodeProvider`, `CodexCliClient` → `CodexCliProvider`. Old names kept as `#[deprecated]` type aliases — existing code compiles with a warning. Both CLI backends moved from top-level modules into `providers/`, so every provider (HTTP + CLI) now lives under one umbrella.
+
+### Migration
+
+```rust
+// Before
+use motosan_ai::{ClaudeCodeClient, CodexCliClient};
+
+// After
+use motosan_ai::{ClaudeCodeProvider, CodexCliProvider};
+```
+
+### Why
+
+- After v0.9.1's `impl ProviderImpl` for both CLI backends, the only remaining difference vs HTTP providers was naming and module path. v0.10.0 closes that gap so all providers are structurally identical.
+
 ## [0.9.2] — 2026-04-14
 
 ### Added

@@ -2,6 +2,40 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.10.0] - 2026-04-14
+
+### Breaking
+- **CLI backend types renamed for naming consistency** with the HTTP providers (`AnthropicProvider`, `OpenAIProvider`, ...):
+  - `ClaudeCodeClient` → **`ClaudeCodeProvider`**
+  - `CodexCliClient` → **`CodexCliProvider`**
+- **Source layout**: both CLI backends moved from top-level modules into `providers/` so every provider lives under one umbrella:
+  - `sdks/rust/src/claude_code/` → `sdks/rust/src/providers/claude_code/`
+  - `sdks/rust/src/codex_cli/` → `sdks/rust/src/providers/codex_cli/`
+  - History preserved via `git mv`.
+
+### Migration
+The old type names are kept as `#[deprecated]` type aliases — existing code keeps compiling with a warning:
+
+```rust
+// v0.9.x — still works in 0.10.0 with a deprecation warning
+use motosan_ai::CodexCliClient;
+let c = CodexCliClient::new();
+
+// v0.10.0 — recommended
+use motosan_ai::CodexCliProvider;
+let c = CodexCliProvider::new();
+```
+
+The aliases will be removed in a future release. Submodule re-exports (`motosan_ai::codex_cli::SandboxMode` etc.) are unchanged because they go through the `providers::*` re-export.
+
+### Why
+- After v0.9.1's `impl ProviderImpl for {CodexCliClient, ClaudeCodeClient}`, the only difference between HTTP providers and CLI backends was naming (`*Client` vs `*Provider`) and module path (top-level vs under `providers/`). Both differences were historical accidents from v0.6.0 / v0.7.0 when the CLI backends were deliberately built as standalone structs outside the trait hierarchy.
+- v0.9.1 made them polymorphic. v0.10.0 makes them structurally identical to HTTP providers so future work (e.g. adding `Provider::CodexCli` enum variants, building `Client::builder().provider(...)` paths for CLI backends) is straightforward.
+- The `CLAUDE.md` rule that previously read "HTTP provider logic goes in `providers/` only" was a post-hoc justification for the original split. Updated to reflect that **all** providers (HTTP + CLI) live in `providers/` now.
+
+### Tests
+- 259 tests passing (no count change from v0.9.2). Internal trait coercion tests use `crate::providers::ProviderImpl` (full path) since the `tests` submodule is nested one level deeper than the trait.
+
 ## [0.9.2] - 2026-04-14
 
 ### Added

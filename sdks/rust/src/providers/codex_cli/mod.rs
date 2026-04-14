@@ -1,7 +1,7 @@
 //! OpenAI Codex CLI provider.
 //!
 //! This module wraps the `codex` CLI binary (from OpenAI's [Codex CLI][codex])
-//! as a [`CodexCliClient`] that implements the same `chat`/`stream` surface as
+//! as a [`CodexCliProvider`] that implements the same `chat`/`stream` surface as
 //! the HTTP providers under [`crate::providers`].
 //!
 //! # How it works
@@ -28,10 +28,10 @@
 //! # Example
 //!
 //! ```ignore
-//! use motosan_ai::{CodexCliClient, ChatRequestBuilder, Message, Role};
+//! use motosan_ai::{CodexCliProvider, ChatRequestBuilder, Message, Role};
 //! use motosan_ai::codex_cli::SandboxMode;
 //!
-//! let client = CodexCliClient::new()
+//! let client = CodexCliProvider::new()
 //!     .sandbox(SandboxMode::WorkspaceWrite)
 //!     .ephemeral(true);
 //!
@@ -72,7 +72,7 @@ pub use spawn::{LocalProvider, SandboxMode};
 ///
 /// See the [module-level docs](crate::codex_cli) for a full example.
 #[derive(Debug, Clone)]
-pub struct CodexCliClient {
+pub struct CodexCliProvider {
     /// Filesystem path to the `codex` binary. Defaults to `"codex"` (resolved
     /// through `PATH`) unless overridden by the `CODEX_PATH` env var or
     /// [`with_path`](Self::with_path).
@@ -80,7 +80,7 @@ pub struct CodexCliClient {
 
     /// When `true`, passes `--full-auto` so Codex can edit files and run
     /// shell commands without approval prompts. Equivalent in spirit to
-    /// `ClaudeCodeClient::agent_mode`.
+    /// `ClaudeCodeProvider::agent_mode`.
     ///
     /// Can coexist with an explicit [`sandbox`](Self::sandbox) — the Codex
     /// CLI reconciles the two.
@@ -138,7 +138,7 @@ pub struct CodexCliClient {
     pub local_provider: Option<LocalProvider>,
 }
 
-impl CodexCliClient {
+impl CodexCliProvider {
     /// Construct a client that resolves the `codex` binary from the
     /// `CODEX_PATH` environment variable, falling back to `"codex"` in
     /// `PATH`.
@@ -446,8 +446,8 @@ impl CodexCliClient {
     }
 }
 
-impl Default for CodexCliClient {
-    /// Equivalent to [`CodexCliClient::new`].
+impl Default for CodexCliProvider {
+    /// Equivalent to [`CodexCliProvider::new`].
     fn default() -> Self {
         Self::new()
     }
@@ -457,17 +457,17 @@ impl Default for CodexCliClient {
 ///
 /// The `chat` and `stream` methods on this impl forward directly to the
 /// inherent methods of the same name (via fully-qualified syntax to avoid
-/// recursion). This lets `CodexCliClient` slot into any
+/// recursion). This lets `CodexCliProvider` slot into any
 /// `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` consumer alongside the HTTP
 /// providers without changing call sites.
 #[async_trait::async_trait]
-impl super::ProviderImpl for CodexCliClient {
+impl super::ProviderImpl for CodexCliProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        CodexCliClient::chat(self, req).await
+        CodexCliProvider::chat(self, req).await
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        CodexCliClient::stream(self, req).await
+        CodexCliProvider::stream(self, req).await
     }
 }
 
@@ -476,7 +476,7 @@ mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
 
-    /// Compile-time + runtime check: `CodexCliClient` can be coerced into
+    /// Compile-time + runtime check: `CodexCliProvider` can be coerced into
     /// `Box<dyn ProviderImpl>` and used polymorphically. We don't actually
     /// invoke `chat`/`stream` here (that would spawn a subprocess); we just
     /// confirm the trait object can be constructed and the methods are
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn codex_cli_client_implements_provider_impl() {
         use crate::providers::ProviderImpl;
-        let _client: Box<dyn ProviderImpl> = Box::new(CodexCliClient::new());
+        let _client: Box<dyn ProviderImpl> = Box::new(CodexCliProvider::new());
     }
 
     fn pong_request() -> ChatRequest {
@@ -518,7 +518,7 @@ mod tests {
     async fn integration_chat_with_new_flags() {
         // Exercises sandbox + ephemeral + config_override end-to-end: if any
         // flag was malformed the CLI would exit non-zero and this test would fail.
-        let client = CodexCliClient::new()
+        let client = CodexCliProvider::new()
             .sandbox(SandboxMode::ReadOnly)
             .ephemeral(true)
             .config_override("model_reasoning_effort", "\"low\"");
@@ -540,7 +540,7 @@ mod tests {
         use crate::types::StreamEventType;
         use tokio_stream::StreamExt;
 
-        let client = CodexCliClient::new();
+        let client = CodexCliProvider::new();
         let mut stream = client
             .stream(pong_request())
             .await
@@ -578,7 +578,7 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -- --ignored`
     async fn integration_chat_roundtrip() {
-        let client = CodexCliClient::new();
+        let client = CodexCliProvider::new();
         let resp = client
             .chat(pong_request())
             .await

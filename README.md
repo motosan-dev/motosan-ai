@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.9.2 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.10.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.9.2", features = ["anthropic"] }
+motosan-ai = { version = "0.10.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli
 ```
 
@@ -88,9 +88,9 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 ```rust
 // 3. Claude Code CLI — no API key needed (uses your local claude session)
 // Requires: cargo add motosan-ai --features claude-code
-use motosan_ai::ClaudeCodeClient;
+use motosan_ai::ClaudeCodeProvider;
 
-let client = ClaudeCodeClient::new();
+let client = ClaudeCodeProvider::new();
 let response = client.chat(request).await?;
 let stream = client.stream(request).await?;   // NDJSON streaming
 ```
@@ -98,9 +98,9 @@ let stream = client.stream(request).await?;   // NDJSON streaming
 ```rust
 // 4. Codex CLI — shells out to OpenAI's `codex exec --json`
 // Requires: cargo add motosan-ai --features codex-cli
-use motosan_ai::{CodexCliClient, codex_cli::SandboxMode};
+use motosan_ai::{CodexCliProvider, codex_cli::SandboxMode};
 
-let client = CodexCliClient::new()
+let client = CodexCliProvider::new()
     .sandbox(SandboxMode::WorkspaceWrite)
     .ephemeral(true);
 let response = client.chat(request).await?;
@@ -119,8 +119,8 @@ let stream = client.stream(request).await?;
 - **Stream Read Timeout** — configurable per-chunk timeout to prevent SSE hanging
 - **Extended Thinking** — first-class support for Anthropic thinking mode
 - **MCP** — server-side MCP support in `ChatRequest`
-- **Claude Code Backend** — shell out to `claude` CLI via `ClaudeCodeClient` (`--features claude-code`)
-- **Codex CLI Backend** — shell out to `codex exec --json` via `CodexCliClient` with sandbox / profile / config-override support (`--features codex-cli`)
+- **Claude Code Backend** — shell out to `claude` CLI via `ClaudeCodeProvider` (`--features claude-code`)
+- **Codex CLI Backend** — shell out to `codex exec --json` via `CodexCliProvider` with sandbox / profile / config-override support (`--features codex-cli`)
 
 ## Quick Example
 

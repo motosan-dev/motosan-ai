@@ -11,13 +11,13 @@ use crate::types::{ChatRequest, ChatResponse, StopReason};
 
 /// Client that shells out to the `claude` CLI binary.
 #[derive(Debug, Clone)]
-pub struct ClaudeCodeClient {
+pub struct ClaudeCodeProvider {
     pub binary_path: PathBuf,
     pub agent_mode: bool,
     pub model: Option<String>,
 }
 
-impl ClaudeCodeClient {
+impl ClaudeCodeProvider {
     /// Resolve the binary from `CLAUDE_CODE_PATH` env or fall back to `"claude"` in `PATH`.
     pub fn new() -> Self {
         let binary_path = env::var_os("CLAUDE_CODE_PATH")
@@ -168,7 +168,7 @@ impl ClaudeCodeClient {
     }
 }
 
-impl Default for ClaudeCodeClient {
+impl Default for ClaudeCodeProvider {
     fn default() -> Self {
         Self::new()
     }
@@ -177,17 +177,17 @@ impl Default for ClaudeCodeClient {
 /// Polymorphic dispatch via [`super::ProviderImpl`].
 ///
 /// Forwards to the inherent `chat` / `stream` methods (via fully-qualified
-/// call syntax to avoid recursion). Lets `ClaudeCodeClient` plug into any
+/// call syntax to avoid recursion). Lets `ClaudeCodeProvider` plug into any
 /// `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` consumer alongside the HTTP
 /// providers.
 #[async_trait::async_trait]
-impl super::ProviderImpl for ClaudeCodeClient {
+impl super::ProviderImpl for ClaudeCodeProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        ClaudeCodeClient::chat(self, req).await
+        ClaudeCodeProvider::chat(self, req).await
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        ClaudeCodeClient::stream(self, req).await
+        ClaudeCodeProvider::stream(self, req).await
     }
 }
 
@@ -196,19 +196,19 @@ mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
 
-    /// Compile-time + runtime check that `ClaudeCodeClient` can be coerced
+    /// Compile-time + runtime check that `ClaudeCodeProvider` can be coerced
     /// into `Box<dyn ProviderImpl>` and used polymorphically alongside the
     /// HTTP providers. No subprocess is spawned.
     #[test]
     fn claude_code_client_implements_provider_impl() {
         use crate::providers::ProviderImpl;
-        let _client: Box<dyn ProviderImpl> = Box::new(ClaudeCodeClient::new());
+        let _client: Box<dyn ProviderImpl> = Box::new(ClaudeCodeProvider::new());
     }
 
     #[tokio::test]
     #[ignore] // Requires `claude` CLI installed; run manually with `cargo test --features claude-code -- --ignored`
     async fn integration_chat_roundtrip() {
-        let client = ClaudeCodeClient::new();
+        let client = ClaudeCodeProvider::new();
         let request = ChatRequest {
             messages: vec![Message {
                 role: Role::User,

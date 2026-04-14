@@ -307,16 +307,16 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Claude Code Backend
 
-The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
+The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.9.2", features = ["claude-code"] }
+motosan-ai = { version = "0.10.0", features = ["claude-code"] }
 ```
 
 ```rust
-use motosan_ai::ClaudeCodeClient;
+use motosan_ai::ClaudeCodeProvider;
 
-let client = ClaudeCodeClient::new()         // uses $CLAUDE_CODE_PATH or "claude" in PATH
+let client = ClaudeCodeProvider::new()         // uses $CLAUDE_CODE_PATH or "claude" in PATH
     .model("sonnet")                          // forwards --model sonnet to the CLI
     .agent_mode(false);                       // set true to enable --dangerously-skip-permissions
 ```
@@ -325,16 +325,16 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 
 ## Codex CLI Backend
 
-The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
+The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.9.2", features = ["codex-cli"] }
+motosan-ai = { version = "0.10.0", features = ["codex-cli"] }
 ```
 
 ```rust
-use motosan_ai::{CodexCliClient, codex_cli::{LocalProvider, SandboxMode}};
+use motosan_ai::{CodexCliProvider, codex_cli::{LocalProvider, SandboxMode}};
 
-let client = CodexCliClient::new()           // uses $CODEX_PATH or "codex" in PATH
+let client = CodexCliProvider::new()           // uses $CODEX_PATH or "codex" in PATH
     .model("gpt-5.1-codex")                  // --model
     .sandbox(SandboxMode::WorkspaceWrite)    // --sandbox workspace-write
     .profile("work")                         // --profile work (from ~/.codex/config.toml)
@@ -346,12 +346,12 @@ let client = CodexCliClient::new()           // uses $CODEX_PATH or "codex" in P
     .config_override("model_reasoning_effort", "\"low\"");  // -c key=value (repeatable)
 
 // Run against a local OSS provider instead of the OpenAI cloud:
-let local = CodexCliClient::new()
+let local = CodexCliProvider::new()
     .oss(true)
     .local_provider(LocalProvider::Ollama);  // or LocalProvider::LmStudio
 
 // Externally-sandboxed environments only — disables ALL approvals and the sandbox:
-let unsafe_client = CodexCliClient::new()
+let unsafe_client = CodexCliProvider::new()
     .dangerously_bypass_approvals_and_sandbox(true);
 
 let response = client.chat(request).await?;
