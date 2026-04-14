@@ -2,6 +2,17 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.9.1] - 2026-04-14
+
+### Added
+- **`CodexCliClient` and `ClaudeCodeClient` now implement `ProviderImpl`.** Both CLI backends were previously standalone structs with their own `chat()` / `stream()` inherent methods, leaving them inaccessible to any code that dispatches via `Box<dyn ProviderImpl>` or `&dyn ProviderImpl`. The trait impls forward to the existing inherent methods via fully-qualified call syntax (zero runtime overhead, zero behavior change), unlocking polymorphism for downstream consumers that want to treat HTTP and CLI backends uniformly.
+- Two new compile-time + runtime trait coercion tests (`codex_cli_client_implements_provider_impl`, `claude_code_client_implements_provider_impl`) — they don't spawn a subprocess, just verify `Box<dyn ProviderImpl> = Box::new(client)` works.
+
+### Why
+- The original v0.6.0 design (when `ClaudeCodeClient` was added) deliberately kept CLI backends out of the trait hierarchy because CLI subprocess lifecycle differs from HTTP request/response. v0.7.0 (`CodexCliClient`) followed the same pattern.
+- Real-world consumers (e.g. `motosan-chat` / `MotosanAiClient`) now want a single `Box<dyn ProviderImpl>` field that can hold either an HTTP provider or a CLI backend. The signatures already matched exactly — only the `impl` lines were missing.
+- Pure additive change: existing `CodexCliClient::chat(req)` / `ClaudeCodeClient::chat(req)` calls still work; this just adds a second way to invoke them.
+
 ## [0.9.0] - 2026-04-14
 
 ### Added

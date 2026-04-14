@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.9.1] — 2026-04-14
+
+### Added
+
+- **`CodexCliClient` and `ClaudeCodeClient` now implement `ProviderImpl`.** Both CLI backends can now be used polymorphically via `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` alongside the HTTP providers (Anthropic, OpenAI, MiniMax, Ollama). Pure additive change — existing inherent `chat()` / `stream()` calls still work. Unlocks downstream consumers (e.g. `motosan-chat`'s `MotosanAiClient`) that want a single trait object holding any backend.
+
 ## [0.9.0] — 2026-04-14
 
 ### Added

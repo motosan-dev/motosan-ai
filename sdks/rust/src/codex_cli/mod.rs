@@ -365,10 +365,39 @@ impl Default for CodexCliClient {
     }
 }
 
+/// Polymorphic dispatch via [`crate::providers::ProviderImpl`].
+///
+/// The `chat` and `stream` methods on this impl forward directly to the
+/// inherent methods of the same name (via fully-qualified syntax to avoid
+/// recursion). This lets `CodexCliClient` slot into any
+/// `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` consumer alongside the HTTP
+/// providers without changing call sites.
+#[async_trait::async_trait]
+impl crate::providers::ProviderImpl for CodexCliClient {
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        CodexCliClient::chat(self, req).await
+    }
+
+    async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        CodexCliClient::stream(self, req).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// Compile-time + runtime check: `CodexCliClient` can be coerced into
+    /// `Box<dyn ProviderImpl>` and used polymorphically. We don't actually
+    /// invoke `chat`/`stream` here (that would spawn a subprocess); we just
+    /// confirm the trait object can be constructed and the methods are
+    /// addressable through the dyn dispatch.
+    #[test]
+    fn codex_cli_client_implements_provider_impl() {
+        use crate::providers::ProviderImpl;
+        let _client: Box<dyn ProviderImpl> = Box::new(CodexCliClient::new());
+    }
 
     fn pong_request() -> ChatRequest {
         ChatRequest {

@@ -310,7 +310,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeClient`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.9.0", features = ["claude-code"] }
+motosan-ai = { version = "0.9.1", features = ["claude-code"] }
 ```
 
 ```rust
@@ -328,7 +328,7 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliClient`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.9.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.9.1", features = ["codex-cli"] }
 ```
 
 ```rust

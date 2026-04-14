@@ -174,10 +174,36 @@ impl Default for ClaudeCodeClient {
     }
 }
 
+/// Polymorphic dispatch via [`crate::providers::ProviderImpl`].
+///
+/// Forwards to the inherent `chat` / `stream` methods (via fully-qualified
+/// call syntax to avoid recursion). Lets `ClaudeCodeClient` plug into any
+/// `Box<dyn ProviderImpl>` / `&dyn ProviderImpl` consumer alongside the HTTP
+/// providers.
+#[async_trait::async_trait]
+impl crate::providers::ProviderImpl for ClaudeCodeClient {
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        ClaudeCodeClient::chat(self, req).await
+    }
+
+    async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        ClaudeCodeClient::stream(self, req).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// Compile-time + runtime check that `ClaudeCodeClient` can be coerced
+    /// into `Box<dyn ProviderImpl>` and used polymorphically alongside the
+    /// HTTP providers. No subprocess is spawned.
+    #[test]
+    fn claude_code_client_implements_provider_impl() {
+        use crate::providers::ProviderImpl;
+        let _client: Box<dyn ProviderImpl> = Box::new(ClaudeCodeClient::new());
+    }
 
     #[tokio::test]
     #[ignore] // Requires `claude` CLI installed; run manually with `cargo test --features claude-code -- --ignored`
