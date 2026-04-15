@@ -20,6 +20,11 @@ pub use providers::codex_cli;
 #[cfg(feature = "codex-cli")]
 pub use providers::codex_cli::CodexCliProvider;
 
+#[cfg(feature = "gemini-cli")]
+pub use providers::gemini_cli;
+#[cfg(feature = "gemini-cli")]
+pub use providers::gemini_cli::GeminiCliProvider;
+
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;
 pub use models::{

@@ -1,6 +1,6 @@
 # motosan-ai (Rust SDK)
 
-Feature-flagged Rust SDK for Anthropic, OpenAI, MiniMax, Ollama, and the Claude Code CLI.
+Feature-flagged Rust SDK for Anthropic, OpenAI, MiniMax, Ollama, and the Claude Code / Codex / Gemini CLIs.
 
 ## Quickstart
 
@@ -307,20 +307,40 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 
 ## Claude Code Backend
 
-The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary.
+The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.11.1", features = ["claude-code"] }
+motosan-ai = { version = "0.12.0", features = ["claude-code"] }
 ```
 
-**Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers):
+**Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
 
 ```rust
+use motosan_ai::claude_code::{EffortLevel, PermissionMode};
 use motosan_ai::{ClaudeCodeProvider, Client, Provider};
 
 let client = Client::builder()
     .provider(Provider::ClaudeCode)
-    .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+    .claude_code(
+        ClaudeCodeProvider::new()                       // uses $CLAUDE_CODE_PATH or "claude" in PATH
+            .model("sonnet")                            // --model
+            .system_prompt("Be terse.")                 // --system-prompt (full replacement)
+            .permission_mode(PermissionMode::Plan)      // --permission-mode plan
+            .effort(EffortLevel::Low)                   // --effort low
+            .fallback_model("opus")                     // --fallback-model
+            .add_dir("/tmp/workspace")                  // --add-dir (repeatable)
+            .allow_tool("Edit")                         // --allowed-tools (variadic)
+            .allow_tool("Read")
+            .disallow_tool("WebFetch")                  // --disallowed-tools (variadic)
+            .mcp_config("./mcp.json")                   // --mcp-config (variadic)
+            .strict_mcp_config(true)                    // --strict-mcp-config
+            .settings("./settings.json")                // --settings
+            .setting_source("user")                     // --setting-sources user,project
+            .setting_source("project")
+            .session_id("11111111-2222-3333-4444-555555555555") // --session-id
+            .no_session_persistence(true)               // --no-session-persistence
+            .max_budget_usd(2.5),                       // --max-budget-usd
+    )
     .build()?;  // api_key not required for CLI backends
 
 let response = client.chat(vec![Message::user("hi")]).await?;
@@ -333,18 +353,69 @@ let stream = client.stream(vec![Message::user("hi")]).await?;
 use motosan_ai::ClaudeCodeProvider;
 
 let client = ClaudeCodeProvider::new()         // uses $CLAUDE_CODE_PATH or "claude" in PATH
-    .model("sonnet")                          // forwards --model sonnet to the CLI
-    .agent_mode(false);                       // set true to enable --dangerously-skip-permissions
+    .model("sonnet")                           // forwards --model sonnet to the CLI
+    .agent_mode(false);                        // set true to enable --dangerously-skip-permissions
+
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;
 ```
 
-Model selection rules: `--model` is forwarded when the model string is non-empty and not `"default"` (case-insensitive). Pass `"default"` or omit `.model()` to let the CLI use its own default.
+### Builder reference
+
+All setters return `Self` for chaining. Omitted setters leave the corresponding flag off. Blank strings and non-finite budgets are dropped at argv-build time.
+
+**Prompts**
+- `.system_prompt(text)` — `--system-prompt` (full replacement). Coexists with the message-extracted system prompt, which flows through `--append-system-prompt`.
+
+**Model & reasoning**
+- `.model(name)` — `--model`. `""` / `"default"` (case-insensitive) are skipped so the CLI default applies.
+- `.fallback_model(name)` — `--fallback-model`. Only meaningful under `--print`; triggers automatic fallback when the primary model is overloaded.
+- `.effort(EffortLevel::{Low,Medium,High,Max})` — `--effort`.
+
+**Permissions**
+- `.agent_mode(bool)` — `--dangerously-skip-permissions`, also switches the blocking path to `--output-format json` so usage tokens can be parsed.
+- `.permission_mode(PermissionMode::{AcceptEdits,Auto,BypassPermissions,Default,DontAsk,Plan})` — `--permission-mode`.
+
+**Workspace & tools**
+- `.add_dir(path)` / `.add_dirs(vec)` — `--add-dir` (repeatable).
+- `.allow_tool(name)` / `.allowed_tools(vec)` — `--allowed-tools` (variadic).
+- `.disallow_tool(name)` / `.disallowed_tools(vec)` — `--disallowed-tools` (variadic).
+- Blank entries are skipped.
+
+**MCP**
+- `.mcp_config(path_or_json)` / `.mcp_configs(vec)` — `--mcp-config` (variadic, accepts file paths or inline JSON strings).
+- `.strict_mcp_config(bool)` — `--strict-mcp-config` (only use servers from `mcp_config`).
+
+**Settings**
+- `.settings(path_or_json)` — `--settings`.
+- `.setting_source(source)` / `.setting_sources(vec)` — `--setting-sources`. Entries are joined with commas at argv time; blanks are filtered. Valid values: `user` / `project` / `local`.
+
+**Session continuity**
+- `.session_id(uuid)` — `--session-id`.
+- `.resume(value)` — `--resume` (accepts `"latest"` or a specific session ID).
+- `.continue_latest(bool)` — `--continue` (continue the most recent conversation in cwd).
+- `.fork_session(bool)` — `--fork-session` (when resuming, create a new session ID).
+- `.no_session_persistence(bool)` — `--no-session-persistence` (don't save to disk).
+
+**Plugins & agents**
+- `.plugin_dir(path)` / `.plugin_dirs(vec)` — `--plugin-dir` (repeatable).
+- `.agent(name)` — `--agent`.
+
+**Budget**
+- `.max_budget_usd(amount)` — `--max-budget-usd`. Negative, `NaN`, and infinite values are silently dropped so the CLI never receives an invalid number.
+
+Notes:
+- Authentication: `claude` uses your existing local login state — motosan-ai does not pass any credentials through.
+- `tool_calls` is always empty — tools run inside the CLI and are not surfaced on `ChatResponse`.
+- Argv order is stable and locked by the `common_args_full_loadout_order_is_stable` unit test. Changing the order may break callers that grep spawned command lines for debugging.
+- Live integration tests that actually spawn `claude` and verify each flag group are gated behind `#[ignore]` — run with `cargo test --features claude-code -- --ignored`.
 
 ## Codex CLI Backend
 
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.11.1", features = ["codex-cli"] }
+motosan-ai = { version = "0.12.0", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -401,6 +472,54 @@ Notes:
 - Authentication: Codex CLI uses `CODEX_API_KEY` or `~/.codex/auth.json`, not `OPENAI_API_KEY`.
 - `agent_mode(true)` passes `--full-auto` (workspace-write sandbox + approvals off); can coexist with an explicit `sandbox()`.
 - `dangerously_bypass_approvals_and_sandbox(true)` should ONLY be used inside an externally sandboxed environment (disposable container, ephemeral VM).
+
+## Gemini CLI Backend
+
+The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
+
+```toml
+motosan-ai = { version = "0.12.0", features = ["gemini-cli"] }
+```
+
+**Option A — via `Client::builder()`**:
+
+```rust
+use motosan_ai::gemini_cli::ApprovalMode;
+use motosan_ai::{Client, GeminiCliProvider, Provider};
+
+let client = Client::builder()
+    .provider(Provider::GeminiCli)
+    .gemini_cli(
+        GeminiCliProvider::new()                // uses $GEMINI_CLI_PATH or "gemini" in PATH
+            .model("gemini-2.5-pro")            // -m
+            .approval_mode(ApprovalMode::Yolo)  // --approval-mode yolo
+            .sandbox(true),                     // --sandbox
+    )
+    .build()?;                                  // api_key optional for CLI backends
+
+let response = client.chat(vec![Message::user("hi")]).await?;
+```
+
+**Option B — direct use of the provider**:
+
+```rust
+use motosan_ai::{GeminiCliProvider, gemini_cli::ApprovalMode};
+
+let client = GeminiCliProvider::new()
+    .model("gemini-2.5-flash")
+    .yolo(true);                 // shorthand for --yolo
+
+let response = client.chat(request).await?;
+let stream = client.stream(request).await?;
+```
+
+Notes:
+- **Argv layout**: `gemini -p "" -o stream-json [-m <model>] [--yolo] [--sandbox] [--approval-mode <mode>]`. The empty `-p` puts Gemini CLI in headless mode; the real prompt flows via stdin (Gemini appends stdin to the `-p` value per `--help`).
+- **System prompts**: Gemini CLI has no `--system-prompt` flag, so motosan-ai merges system text into the stdin payload as a blank-line-separated prefix. This matches how the CLI treats `GEMINI.md` context.
+- **Streaming**: Gemini emits delta chunks (`{"type":"message","role":"assistant","content":"...","delta":true}`) followed by a terminal `{"type":"result","stats":{...}}` that carries token usage. Both `chat()` and `stream()` use the same parser.
+- **Usage**: populated from `result.stats.input_tokens` / `output_tokens` / `cached` (mapped to `cache_read_input_tokens`). Gemini CLI does not expose cache-creation tokens.
+- **`tool_calls`**: always empty — Gemini runs tools internally. Tool-loop use cases belong on the HTTP providers.
+- **Model selection**: `-m` is forwarded when the model string is non-empty and not `"default"` (case-insensitive).
 
 ## Publishing
 

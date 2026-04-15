@@ -2,6 +2,75 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.12.0] - 2026-04-15
+
+### Breaking
+- **`Provider` enum gained a new variant**: `Provider::GeminiCli`. Downstream code that exhaustively matches on `Provider` without a `_ =>` catch-all will no longer compile. Same mitigation as v0.11.0 — add a catch-all or handle the new variant.
+- **`ClaudeCodeProvider` gained 19 new public fields** (`system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dirs`, `allowed_tools`, `disallowed_tools`, `mcp_config`, `strict_mcp_config`, `settings`, `setting_sources`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dirs`, `agent`, `no_session_persistence`, `max_budget_usd`). Struct-literal construction of `ClaudeCodeProvider { binary_path, agent_mode, model }` no longer compiles — use `ClaudeCodeProvider::new()` plus builder methods, which is what the README and docs have always recommended.
+- **`claude_code::spawn::SpawnConfig` field rename**: `system_prompt` → `append_system_prompt`. The field is `pub` so direct users of `SpawnConfig` (rare — the struct is primarily an internal handoff) need to rename. A new `system_prompt` field now maps to `--system-prompt` (full replacement), distinct from append.
+
+### Added
+- **`ClaudeCodeProvider` argument surface expanded to match the `claude` CLI's SDK-relevant flag set.** The provider previously exposed only `binary_path` / `agent_mode` / `model`; this release adds builder methods for every flag that meaningfully controls a non-interactive `claude --print` session:
+  - **Prompts**: `.system_prompt(...)` (`--system-prompt`, full replacement — coexists with the message-extracted `--append-system-prompt`).
+  - **Permissions / effort**: `.permission_mode(PermissionMode::*)` (`--permission-mode`, 6 variants: `AcceptEdits` / `Auto` / `BypassPermissions` / `Default` / `DontAsk` / `Plan`), `.effort(EffortLevel::*)` (`--effort`, 4 variants: `Low` / `Medium` / `High` / `Max`).
+  - **Model reliability**: `.fallback_model(...)` (`--fallback-model`).
+  - **Workspace**: `.add_dir(path)` / `.add_dirs(vec)` (`--add-dir`, repeated).
+  - **Tool control**: `.allow_tool(name)` / `.allowed_tools(vec)` (`--allowed-tools`, variadic), `.disallow_tool(name)` / `.disallowed_tools(vec)` (`--disallowed-tools`, variadic).
+  - **MCP**: `.mcp_config(path_or_json)` / `.mcp_configs(vec)` (`--mcp-config`, variadic), `.strict_mcp_config(bool)` (`--strict-mcp-config`).
+  - **Settings**: `.settings(path_or_json)` (`--settings`), `.setting_source(source)` / `.setting_sources(vec)` (`--setting-sources`, joined with commas).
+  - **Session continuity**: `.session_id(uuid)` (`--session-id`), `.resume(value)` (`--resume`, accepts `"latest"` or a session ID), `.continue_latest(bool)` (`--continue`), `.fork_session(bool)` (`--fork-session`), `.no_session_persistence(bool)` (`--no-session-persistence`).
+  - **Plugins & agents**: `.plugin_dir(path)` / `.plugin_dirs(vec)` (`--plugin-dir`, repeated), `.agent(name)` (`--agent`).
+  - **Budget**: `.max_budget_usd(amount)` (`--max-budget-usd`, non-finite/negative values dropped at argv-build time).
+- **New enums re-exported at the provider module root**: `motosan_ai::claude_code::{PermissionMode, EffortLevel}`. Both `#[derive(Debug, Clone, Copy, PartialEq, Eq)]`.
+- **Refactor — `claude_code::spawn::common_args`**. The 3-flag argv wiring that used to live inline in both `invoke_cli` (blocking) and `ClaudeCodeProvider::stream` (streaming) is now a single pure `common_args(&SpawnConfig) -> Vec<OsString>` helper. Both paths call it after pushing their path-specific `--print` / `--output-format` prefix. This mirrors the Codex CLI / Gemini CLI provider layout and makes argv order test-coverable via `common_args_full_loadout_order_is_stable`.
+- **24 new unit tests** under `providers::claude_code::spawn::tests` covering the new argv wiring: empty-config baseline, each permission-mode and effort-level variant, model / fallback model forwarding (with `default` / blank sentinel skip), system-prompt replacement + append interaction, add-dir / plugin-dir repeated flags, variadic allowed-tools / disallowed-tools / mcp-config with blank filtering, settings + setting-sources (including csv join with blank filtering), session-id / resume / continue / fork-session, budget and persistence flags (including negative / NaN / infinity skip), and a full-loadout order test that locks argv sequence against accidental reordering. Plus a `builder_methods_populate_spawn_config` round-trip test on `ClaudeCodeProvider` itself.
+- **4 new live integration tests** (`#[ignore]`, gated on the installed `claude` binary) that actually spawn `claude --print` through `ClaudeCodeProvider` and verify each flag group end-to-end:
+  - `integration_system_prompt_replacement` — `.system_prompt("Always reply with exactly one emoji, nothing else.")` forces an emoji-only reply; test asserts a short non-ASCII response. Proves `--system-prompt` actually shapes the model output, not just that the flag was accepted.
+  - `integration_permission_effort_and_model_combo` — `.model("sonnet") + .permission_mode(PermissionMode::Plan) + .effort(EffortLevel::Low)` together on a plain Q&A, verifying three new enum-backed flags all coexist under `--print`.
+  - `integration_workspace_and_budget_flags` — `.add_dir(tmp) + .no_session_persistence(true) + .max_budget_usd(2.5)` together, verifying workspace-root + session + budget flags survive argv construction.
+  - `integration_tool_allow_deny_flags` — `.allow_tool("Edit").allow_tool("Read").disallow_tool("WebFetch")` verifying variadic `--allowed-tools` / `--disallowed-tools` argv encoding is accepted by Claude Code.
+- All 5 Claude Code live tests (the 4 above + the pre-existing `integration_chat_roundtrip`) pass together in ~34s when run with `cargo test --features claude-code -- --ignored --test-threads=1`.
+
+- **New CLI backend: `GeminiCliProvider`** (feature `gemini-cli`). Shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream into the standard `ChatResponse` / `BoxStream` types. Lives in `providers/gemini_cli/` alongside the Claude Code / Codex CLI backends and implements the same `ProviderImpl` trait, so it's interchangeable via `Box<dyn ProviderImpl>`.
+  ```rust
+  use motosan_ai::gemini_cli::ApprovalMode;
+  use motosan_ai::{Client, GeminiCliProvider, Message, Provider};
+
+  let client = Client::builder()
+      .provider(Provider::GeminiCli)
+      .gemini_cli(
+          GeminiCliProvider::new()
+              .model("gemini-2.5-pro")
+              .approval_mode(ApprovalMode::Yolo)
+              .sandbox(true),
+      )
+      .build()?;  // no api_key needed — Gemini CLI uses local auth
+
+  let response = client.chat(vec![Message::user("hi")]).await?;
+  ```
+- **New `ClientBuilder::gemini_cli(GeminiCliProvider)` setter** — accepts a pre-built provider instance so every provider-specific flag (model, yolo, sandbox, approval_mode) is reachable without adding dedicated builder methods. Defaults to `GeminiCliProvider::new()` with the top-level `.model()` forwarded when the setter is not called.
+- **`api_key` optional for `Provider::GeminiCli`** — same relaxation v0.11.0 introduced for `ClaudeCode` / `CodexCli`. Gemini CLI handles its own auth (`gemini auth` once — personal Google account or API key).
+- **`ApprovalMode` enum** (`Default` / `AutoEdit` / `Yolo` / `Plan`) mirrors Gemini CLI's `--approval-mode` choices. Re-exported from `motosan_ai::gemini_cli::ApprovalMode`. A `.yolo(true)` shorthand on `GeminiCliProvider` is also available for `--yolo`.
+- **Workspace / extension / MCP / resume flags**: `.include_dir(path)` / `.include_dirs(vec)` (`--include-directories`), `.extension(name)` / `.extensions(vec)` (`-e`), `.allowed_mcp_server(name)` / `.allowed_mcp_servers(vec)` (`--allowed-mcp-server-names`), and `.resume("latest" | "5")` (`-r`). All four accept repeated flags, skip blank entries, and have a stable argv order locked by `common_args_full_loadout_order_is_stable`.
+- **Argv layout**: `gemini -p "" -o stream-json [-m <model>] [--yolo] [--sandbox] [--approval-mode <mode>]`. The empty `-p` enables headless mode; the real prompt flows via stdin (Gemini CLI appends stdin to the `-p` value per `--help`), which matches how the Claude Code / Codex CLI providers hand off prompts. Avoids argv quoting and `ARG_MAX` footguns.
+- **System prompts**: Gemini CLI has no `--system-prompt` flag, so `GeminiCliProvider` merges system text into the stdin payload as a blank-line-separated prefix. Matches how the CLI treats `GEMINI.md` context.
+- **Streaming parser**: one NDJSON parser drives both `chat()` and `stream()`. Handles `init` (skipped), `message role:user` (stdin echo, skipped), `message role:assistant delta:true` (text chunk), and `result status:... stats:{...}` (usage + done). Non-`success` result statuses surface as `MotosanError::ProviderError`.
+- **Usage mapping**: `stats.input_tokens` → `input_tokens`, `stats.output_tokens` → `output_tokens`, `stats.cached` → `cache_read_input_tokens`. Gemini CLI does not expose cache-creation tokens, so `cache_creation_input_tokens` is always `None`.
+- **Env override**: `$GEMINI_CLI_PATH` points `GeminiCliProvider` at a non-default binary path, falling back to `"gemini"` in `$PATH`.
+- **Unit tests**: 36 new tests under `providers::gemini_cli` covering argv construction (empty config, model forwarding, `default` sentinel handling, yolo / sandbox / approval mode flags, include-directories / extensions / allowed-mcp-server-names / resume forwarding + blank filtering, full loadout order), NDJSON parsing (assistant delta, user echo skip, non-delta skip, empty content skip, init skip, result with/without stats, error status, unknown types, malformed JSON), stream aggregation, and `ProviderImpl` dyn coercion.
+- **Live integration test** (`#[ignore]`): `integration_chat_roundtrip` actually spawns `gemini` and verifies end-to-end that a turn comes back with `pong` in the content. Run with `cargo test --features gemini-cli -- --ignored`.
+
+### Docs
+- **Root `README.md`**: added a Gemini CLI row to the Providers table, bumped the Backends intro from "four ways" to "five ways", added a fifth `Client::builder()` example for Gemini CLI, updated the CLI backend limitations callout to include Gemini, and listed the new feature under Features.
+- **`sdks/rust/README.md`**: new `## Gemini CLI Backend` section with Option A (via `Client::builder()`) + Option B (direct provider) examples and Notes covering argv layout, system prompt merging, streaming semantics, usage mapping, empty `tool_calls`, and model selection rules. Header tagline updated from "Claude Code CLI" to "Claude Code / Codex / Gemini CLIs".
+- **`llms.txt`**: added `gemini-cli` row to the features comment block, added `GeminiCli` to the `Provider` variant list, added a Gemini CLI block to the CLI Backends dispatch example, expanded Key notes with Gemini's NDJSON schema, auth model, stats mapping, and system prompt merging behavior. Updated stale "v0.11.0" framing for CLI backends.
+- **`skills/motosan-ai/SKILL.md`**: updated features comment, extended the CLI backends bullet and the Unified dispatch bullet to mention `GeminiCliProvider` / `Provider::GeminiCli` / `.gemini_cli(...)`.
+- **`AGENTS.md`**: added `providers/gemini_cli/` to the CLI backends row in the Where To Find Things table; version bumped from v0.11.1 to v0.12.0.
+
+### Notes
+- Python SDK is unchanged (still v0.5.0). Gemini CLI backend is Rust-only for now; the Python side can follow using the same argv / NDJSON contract documented here if there's demand.
+- Tool calls run inside Gemini CLI itself — `ChatResponse.tool_calls` is always empty on this backend, consistent with Claude Code / Codex CLI. Tool-loop use cases belong on the HTTP providers.
+
 ## [0.11.1] - 2026-04-15
 
 ### Docs

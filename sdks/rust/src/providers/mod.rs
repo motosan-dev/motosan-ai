@@ -50,6 +50,8 @@ pub enum Provider {
     ClaudeCode,
     /// Shells out to OpenAI's `codex exec --json`. Requires the `codex-cli` feature.
     CodexCli,
+    /// Shells out to Google's `gemini -p` CLI. Requires the `gemini-cli` feature.
+    GeminiCli,
 }
 
 #[async_trait]
@@ -271,3 +273,6 @@ pub mod claude_code;
 
 #[cfg(feature = "codex-cli")]
 pub mod codex_cli;
+
+#[cfg(feature = "gemini-cli")]
+pub mod gemini_cli;

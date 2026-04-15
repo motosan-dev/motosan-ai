@@ -33,6 +33,10 @@ pub struct Client {
     /// Provider::CodexCli`. Configured via [`ClientBuilder::codex_cli`].
     #[cfg(feature = "codex-cli")]
     codex_cli: Option<crate::providers::codex_cli::CodexCliProvider>,
+    /// Pre-built Gemini CLI provider instance used when `provider ==
+    /// Provider::GeminiCli`. Configured via [`ClientBuilder::gemini_cli`].
+    #[cfg(feature = "gemini-cli")]
+    gemini_cli: Option<crate::providers::gemini_cli::GeminiCliProvider>,
 }
 
 impl Client {
@@ -237,6 +241,17 @@ impl Client {
                     return Err(Self::feature_not_enabled("codex-cli"));
                 }
             }
+            Provider::GeminiCli => {
+                #[cfg(feature = "gemini-cli")]
+                {
+                    return self.build_gemini_cli_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "gemini-cli"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini-cli"));
+                }
+            }
         }
     }
 
@@ -333,6 +348,17 @@ impl Client {
                     return Err(Self::feature_not_enabled("codex-cli"));
                 }
             }
+            Provider::GeminiCli => {
+                #[cfg(feature = "gemini-cli")]
+                {
+                    return self.build_gemini_cli_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "gemini-cli"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini-cli"));
+                }
+            }
         }
     }
 
@@ -344,6 +370,7 @@ impl Client {
         not(feature = "ollama_native"),
         not(feature = "claude-code"),
         not(feature = "codex-cli"),
+        not(feature = "gemini-cli"),
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -446,6 +473,20 @@ impl Client {
         }
     }
 
+    #[cfg(feature = "gemini-cli")]
+    fn build_gemini_cli_provider(&self) -> crate::providers::gemini_cli::GeminiCliProvider {
+        match self.gemini_cli.clone() {
+            Some(provider) => provider,
+            None => {
+                let mut provider = crate::providers::gemini_cli::GeminiCliProvider::new();
+                if let Some(ref m) = self.model {
+                    provider = provider.model(m.clone());
+                }
+                provider
+            }
+        }
+    }
+
     #[cfg(feature = "codex-cli")]
     fn build_codex_cli_provider(&self) -> crate::providers::codex_cli::CodexCliProvider {
         match self.codex_cli.clone() {
@@ -482,6 +523,8 @@ pub struct ClientBuilder {
     claude_code: Option<crate::providers::claude_code::ClaudeCodeProvider>,
     #[cfg(feature = "codex-cli")]
     codex_cli: Option<crate::providers::codex_cli::CodexCliProvider>,
+    #[cfg(feature = "gemini-cli")]
+    gemini_cli: Option<crate::providers::gemini_cli::GeminiCliProvider>,
 }
 
 impl ClientBuilder {
@@ -600,6 +643,17 @@ impl ClientBuilder {
         self
     }
 
+    /// Attach a pre-built [`GeminiCliProvider`] to use when `Provider::GeminiCli`
+    /// is selected. If not called, the client uses `GeminiCliProvider::new()`
+    /// with the top-level `.model()` forwarded.
+    ///
+    /// [`GeminiCliProvider`]: crate::providers::gemini_cli::GeminiCliProvider
+    #[cfg(feature = "gemini-cli")]
+    pub fn gemini_cli(mut self, provider: crate::providers::gemini_cli::GeminiCliProvider) -> Self {
+        self.gemini_cli = Some(provider);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -608,7 +662,10 @@ impl ClientBuilder {
         // channels (local login state / `CODEX_API_KEY`), so `api_key` is
         // optional when the selected provider is a CLI backend. HTTP
         // providers still require it.
-        let api_key_required = !matches!(provider, Provider::ClaudeCode | Provider::CodexCli);
+        let api_key_required = !matches!(
+            provider,
+            Provider::ClaudeCode | Provider::CodexCli | Provider::GeminiCli
+        );
         let api_key = match self.api_key {
             Some(k) => k,
             None if api_key_required => {
@@ -639,6 +696,8 @@ impl ClientBuilder {
             claude_code: self.claude_code,
             #[cfg(feature = "codex-cli")]
             codex_cli: self.codex_cli,
+            #[cfg(feature = "gemini-cli")]
+            gemini_cli: self.gemini_cli,
         })
     }
 }
