@@ -607,9 +607,8 @@ async fn openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel(
     // with no `finish_reason` and no `[DONE]`. Adapter must still emit
     // exactly one terminal `done` event so callers don't hang.
     let mut server = mockito::Server::new_async().await;
-    let sse_body = concat!(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" // no finish_reason, no [DONE]
-    );
+    // no finish_reason, no [DONE] — exercises the EOF-flush invariant.
+    let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n";
 
     let mock = server
         .mock("POST", "/v1/chat/completions")

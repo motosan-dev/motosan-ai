@@ -781,9 +781,8 @@ async fn minimax_stream_eof_flush_when_done_sentinel_missing() {
 #[tokio::test]
 async fn minimax_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel() {
     let mut server = mockito::Server::new_async().await;
-    let sse_body = concat!(
-        "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" // no finish_reason, no [DONE]
-    );
+    // no finish_reason, no [DONE] — exercises the EOF-flush invariant.
+    let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n";
 
     let mock = server
         .mock("POST", "/chat/completions")
