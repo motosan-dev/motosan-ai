@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.11.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.11.1 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.11.0", features = ["anthropic"] }
+motosan-ai = { version = "0.11.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli
 ```
 
@@ -52,6 +52,8 @@ pip install "motosan-ai[full]"   # all providers
 | OpenAI | `gpt-5.3-codex` | `openai` | `[openai]` |
 | MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
+| Claude Code CLI | (CLI default) | `claude-code` | — |
+| Codex CLI | (CLI default) | `codex-cli` | — |
 
 > **OpenAI-compatible providers** (Groq, DeepSeek, Together, self-hosted proxies, etc.) work via the `openai` feature with a custom chat URL — pass the full endpoint you want POSTed:
 >
@@ -120,6 +122,7 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 ## Features
 
 - **Chat & Streaming** — `chat()`, `stream()`, `chat_with()`, `stream_with()`, `stream_collect()`
+- **Unified dispatch** — a single `Client::builder()` handles HTTP and CLI backends alike; `Provider::ClaudeCode` and `Provider::CodexCli` are first-class variants (since v0.11.0)
 - **Tool Use** — define tools, multi-turn tool loops, streaming tool calls
 - **Vision** — send images alongside text (base64 or URL)
 - **ThinkStripper** — auto-strips `<think>` reasoning blocks from streaming output

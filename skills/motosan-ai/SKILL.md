@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) — LLM ch
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.11.0
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.11.1
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama
 
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.11.0", features = ["anthropic"] }
+motosan-ai = { version = "0.11.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (shell out to a local binary): claude-code | codex-cli
 ```
@@ -53,7 +53,7 @@ resp = await client.chat([Message.user("Hi")]) # returns ChatResponse
 print(resp.content)                            # str
 ```
 
-**Rust:**
+**Rust (HTTP provider):**
 ```rust
 use motosan_ai::{Client, Provider, Message};
 let client = Client::builder()
@@ -62,6 +62,22 @@ let client = Client::builder()
     .build()?;
 let resp = client.chat(vec![Message::user("Hi")]).await?;
 println!("{}", resp.content);
+```
+
+**Rust (CLI backend — same `Client` API, since v0.11.0):**
+```rust
+use motosan_ai::codex_cli::SandboxMode;
+use motosan_ai::{Client, CodexCliProvider, Message, Provider};
+
+let client = Client::builder()
+    .provider(Provider::CodexCli)
+    .codex_cli(
+        CodexCliProvider::new()
+            .sandbox(SandboxMode::WorkspaceWrite)
+            .ephemeral(true),
+    )
+    .build()?;  // no api_key needed for CLI backends
+let resp = client.chat(vec![Message::user("Hi")]).await?;
 ```
 
 ## When to Read References

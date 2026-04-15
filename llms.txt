@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.11.0
+- Python 0.5.0 · Rust 0.11.1
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.11.0", features = ["anthropic"] }
+motosan-ai = { version = "0.11.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
@@ -161,14 +161,16 @@ use motosan_ai::{Client, Provider, Message};
 
 let client = Client::builder()
     .provider(Provider::Anthropic)    // required
-    .api_key(std::env::var("ANTHROPIC_API_KEY")?)  // required
+    .api_key(std::env::var("ANTHROPIC_API_KEY")?)  // required for HTTP providers
     .model("claude-sonnet-4-6")       // optional
     .retry_policy(RetryPolicy::new()) // optional
     .stream_read_timeout_secs(30)      // optional — terminate stream after 30s of silence
     .build()?;
 ```
 
-Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama`
+Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `ClaudeCode` | `CodexCli`
+
+CLI backends (`ClaudeCode` / `CodexCli`, since v0.11.0) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` via `.claude_code(...)` / `.codex_cli(...)`. See the CLI Backends section under Provider-Specific Notes for a full example.
 
 ### chat() — single turn
 

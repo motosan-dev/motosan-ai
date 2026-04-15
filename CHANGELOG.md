@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.11.1] — 2026-04-15
+
+### Docs
+
+- **Root `README.md`**: Providers table now lists Claude Code CLI and Codex CLI alongside HTTP providers. Features section gains a "Unified dispatch" bullet.
+- **`skills/motosan-ai/SKILL.md`**: minimal Rust example now covers both HTTP and CLI backend paths through `Client::builder()`.
+- **`llms.txt`**: `Provider` variant list updated to include `ClaudeCode` / `CodexCli`. Notes that CLI backends go through the same `client.chat()` / `client.stream()` API and that `api_key` is optional for those paths.
+
+Pure docs patch — no code changes from v0.11.0.
+
 ## [0.11.0] — 2026-04-14
 
 ### Breaking

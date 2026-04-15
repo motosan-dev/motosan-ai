@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.11.1] - 2026-04-15
+
+### Docs
+- **Root `README.md`**: added `Claude Code CLI` and `Codex CLI` rows to the Providers table; added a "Unified dispatch" bullet to the Features section highlighting that a single `Client::builder()` handles HTTP and CLI backends alike (since v0.11.0).
+- **`skills/motosan-ai/SKILL.md`**: expanded the minimal Rust example with a CLI backend variant (`Client::builder().provider(Provider::CodexCli).codex_cli(...).build()?`) alongside the existing Anthropic example, so the skill teaches both paths.
+- **`llms.txt`** § Rust API → Client: updated the `Provider` variant list from 4 to 6 (adds `ClaudeCode` / `CodexCli`); added a paragraph explaining that CLI backends dispatch through the same `client.chat()` / `client.stream()` API and that `api_key` is optional on the builder for those paths.
+
+No code changes. Pure documentation patch on top of v0.11.0.
+
 ## [0.11.0] - 2026-04-14
 
 ### Breaking

@@ -310,7 +310,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary.
 
 ```toml
-motosan-ai = { version = "0.11.0", features = ["claude-code"] }
+motosan-ai = { version = "0.11.1", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers):
@@ -344,7 +344,7 @@ Model selection rules: `--model` is forwarded when the model string is non-empty
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.11.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.11.1", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
