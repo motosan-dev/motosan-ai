@@ -99,6 +99,7 @@ let client = Client::builder()
     .provider(Provider::ClaudeCode)
     .claude_code(
         ClaudeCodeProvider::new()
+            .bare(true)                               // --bare (daemon-safe; skip hooks/plugins/auto-memory)
             .model("sonnet")
             .system_prompt("Be terse.")              // --system-prompt
             .permission_mode(PermissionMode::Plan)    // --permission-mode plan
