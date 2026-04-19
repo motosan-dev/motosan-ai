@@ -12,20 +12,7 @@ keywords = ["openai", "codex", "oauth", "authentication"]
 categories = ["authentication", "api-bindings"]
 
 [dependencies]
-thiserror = "2"
-serde = { version = "1", features = ["derive"] }
-base64 = "0.22"
-sha2 = "0.10"
-rand = "0.9"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-percent-encoding = "2"
-tokio = { version = "1", features = [
-  "net",
-  "io-util",
-  "rt-multi-thread",
-  "macros",
-  "time",
-] }
+motosan-ai-oauth = { path = "../motosan-ai-oauth", features = ["codex"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
