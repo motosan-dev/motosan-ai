@@ -94,6 +94,17 @@ pub struct SpawnConfig {
     /// Whether to pass `--dangerously-skip-permissions`. Also flips the
     /// blocking path to `--output-format json` so usage can be parsed.
     pub agent_mode: bool,
+    /// Whether to pass `--bare`. Skips hooks, plugins, auto-memory,
+    /// keychain reads, and user/project settings discovery so the
+    /// subprocess does not inherit ambient Claude Code state.
+    /// Under `--bare`, Anthropic auth is restricted to
+    /// `ANTHROPIC_API_KEY` or an `apiKeyHelper` declared inside
+    /// `settings`; `setting_sources` is inert because the discovery
+    /// it controls is disabled. Explicit `settings`, `mcp_config`,
+    /// `add_dirs`, `plugin_dirs`, `agent`, and `system_prompt` are
+    /// still honoured. See [`super::ClaudeCodeProvider::bare`] for
+    /// the public-API documentation.
+    pub bare: bool,
     /// Model name for `--model`. `None` / `"default"` / blank are skipped.
     pub model: Option<String>,
     /// Text appended via `--append-system-prompt`. Usually populated
@@ -180,6 +191,10 @@ pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
 /// command line for debugging.
 pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
     let mut args: Vec<OsString> = Vec::new();
+
+    if config.bare {
+        args.push("--bare".into());
+    }
 
     if config.agent_mode {
         args.push("--dangerously-skip-permissions".into());
@@ -455,6 +470,7 @@ mod tests {
         SpawnConfig {
             binary_path: PathBuf::from("claude"),
             agent_mode: false,
+            bare: false,
             model: None,
             append_system_prompt: None,
             system_prompt: None,
@@ -525,6 +541,28 @@ mod tests {
         assert_eq!(
             args_as_strings(&common_args(&cfg)),
             vec!["--dangerously-skip-permissions"]
+        );
+    }
+
+    #[test]
+    fn common_args_bare_emits_bare_flag() {
+        let cfg = SpawnConfig {
+            bare: true,
+            ..empty_config()
+        };
+        assert_eq!(args_as_strings(&common_args(&cfg)), vec!["--bare"]);
+    }
+
+    #[test]
+    fn common_args_bare_precedes_agent_mode() {
+        let cfg = SpawnConfig {
+            bare: true,
+            agent_mode: true,
+            ..empty_config()
+        };
+        assert_eq!(
+            args_as_strings(&common_args(&cfg)),
+            vec!["--bare", "--dangerously-skip-permissions"]
         );
     }
 
@@ -813,6 +851,7 @@ mod tests {
         let cfg = SpawnConfig {
             binary_path: PathBuf::from("claude"),
             agent_mode: true,
+            bare: true,
             model: Some("sonnet".to_string()),
             append_system_prompt: Some("append".to_string()),
             system_prompt: Some("base".to_string()),
@@ -838,6 +877,7 @@ mod tests {
         assert_eq!(
             args_as_strings(&common_args(&cfg)),
             vec![
+                "--bare",
                 "--dangerously-skip-permissions",
                 "--permission-mode",
                 "plan",
