@@ -612,16 +612,53 @@ Key notes:
 
 ---
 
+## codex-oauth
+
+Standalone crate for browser-based PKCE OAuth login against `auth.openai.com`. Returns an access token usable with the ChatGPT backend API.
+
+- crates.io: https://crates.io/crates/codex-oauth
+- Version: 0.1.0
+
+### Install
+
+```toml
+codex-oauth = "0.1"
+```
+
+### API
+
+```rust
+// Login (opens browser, listens on localhost:1455, times out after 120s)
+let token = codex_oauth::login().await?;
+
+// Refresh
+let token = codex_oauth::refresh(&token.refresh_token).await?;
+
+// Expiry check
+if token.is_expired() { /* refresh */ }
+
+// Token fields
+token.access_token   // Bearer token for chatgpt.com/backend-api
+token.refresh_token  // long-lived, use with refresh()
+token.expires_in     // lifetime in seconds
+token.issued_at      // Unix timestamp of issue time
+```
+
+`Token` implements `Serialize`/`Deserialize` for disk persistence.
+
+---
+
 ## Release
 
 Python and Rust SDKs are versioned and released **independently**.
 
 ### Tag Convention
 
-| SDK    | Tag format       | Example          |
-|--------|------------------|------------------|
-| Python | `python-vX.Y.Z`  | `python-v0.4.2`  |
-| Rust   | `rust-vX.Y.Z`    | `rust-v0.3.3`    |
+| SDK          | Tag format            | Example               |
+|--------------|-----------------------|-----------------------|
+| Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
+| Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
+| codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
 
 ### Release Steps (Python)
 
@@ -671,13 +708,32 @@ git tag -a rust-v0.4.1 -m "rust-v0.4.1 — summary"
 git push origin main rust-v0.4.1
 ```
 
+### Release Steps (codex-oauth)
+
+```bash
+# 1. Bump version
+#    sdks/rust/crates/codex-oauth/Cargo.toml → version = "0.1.1"
+
+# 2. Update CHANGELOG
+#    sdks/rust/crates/codex-oauth/CHANGELOG.md → ## [0.1.1] - YYYY-MM-DD
+
+# 3. Commit
+git add sdks/rust/crates/codex-oauth/Cargo.toml sdks/rust/crates/codex-oauth/CHANGELOG.md
+git commit -m "chore: release codex-oauth-v0.1.1"
+
+# 4. Tag + push (triggers publish-codex-oauth.yml → crates.io)
+git tag -a codex-oauth-v0.1.1 -m "codex-oauth-v0.1.1 — summary"
+git push origin main codex-oauth-v0.1.1
+```
+
 ### CI Pipeline
 
 Tag push triggers GitHub Actions:
 - **publish-python.yml**: `uv build` → `pypa/gh-action-pypi-publish` (secret: `PYPI_API_TOKEN`)
 - **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+- **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 
-Rust publish also supports `workflow_dispatch` for manual trigger.
+All Rust workflows support `workflow_dispatch` for manual trigger.
 
 ### Pre-Push Validation (Local)
 

@@ -246,9 +246,7 @@ class ClaudeCodeClient:
         try:
             while True:
                 try:
-                    raw_line = await asyncio.wait_for(
-                        proc.stdout.readline(), timeout=_TIMEOUT_SECS
-                    )
+                    raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=_TIMEOUT_SECS)
                 except TimeoutError as exc:
                     raise ProviderError(
                         f"claude CLI stream timed out after {_TIMEOUT_SECS} seconds"

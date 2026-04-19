@@ -1,6 +1,6 @@
 ---
 name: motosan-ai
-description: Help developers use the motosan-ai SDK (Python and Rust) — LLM chat, streaming, tool use, ThinkStripper, and multi-provider setup. Use when code imports motosan_ai, or user asks how to integrate Anthropic/OpenAI/Ollama/MiniMax via motosan-ai, implement streaming, handle tool calls, or filter <think> tags.
+description: Help developers use the motosan-ai SDK (Python and Rust) and the codex-oauth crate — LLM chat, streaming, tool use, ThinkStripper, multi-provider setup, and Codex OAuth login. Use when code imports motosan_ai or codex_oauth, or user asks how to integrate Anthropic/OpenAI/Ollama/MiniMax via motosan-ai, implement streaming, handle tool calls, filter <think> tags, or get an OpenAI Codex access token.
 ---
 
 # motosan-ai SDK
@@ -22,6 +22,9 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 motosan-ai = { version = "0.12.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
+
+# Codex OAuth (standalone — get a token for chatgpt.com/backend-api)
+codex-oauth = "0.1"
 ```
 
 ## Environment Variables
@@ -79,6 +82,23 @@ let client = Client::builder()
     .build()?;  // no api_key needed for CLI backends
 let resp = client.chat(vec![Message::user("Hi")]).await?;
 ```
+
+## codex-oauth (Rust, standalone crate)
+
+Browser-based PKCE OAuth login for OpenAI Codex. Returns an access token for `https://chatgpt.com/backend-api`.
+
+```rust
+// Login — opens browser, listens on localhost:1455, times out 120s
+let token = codex_oauth::login().await?;
+
+// Refresh
+let token = codex_oauth::refresh(&token.refresh_token).await?;
+
+// Expiry
+if token.is_expired() { /* refresh */ }
+```
+
+`Token` implements `Serialize`/`Deserialize`. Use `token.access_token` as the Bearer token.
 
 ## When to Read References
 
