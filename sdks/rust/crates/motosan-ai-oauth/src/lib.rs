@@ -32,7 +32,7 @@ pub struct Token {
 
 impl Token {
     pub fn is_expired(&self) -> bool {
-        unix_now() >= self.issued_at + self.expires_in
+        unix_now() + 60 >= self.issued_at + self.expires_in
     }
 }
 
@@ -180,5 +180,17 @@ mod tests {
             issued_at: unix_now(),
         };
         assert!(!token.is_expired());
+    }
+
+    #[test]
+    fn token_within_buffer_is_considered_expired() {
+        let token = Token {
+            access_token: "a".into(),
+            refresh_token: "r".into(),
+            id_token: None,
+            expires_in: 30, // expires in 30s, within the 60s buffer
+            issued_at: unix_now(),
+        };
+        assert!(token.is_expired());
     }
 }

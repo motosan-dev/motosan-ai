@@ -1,3 +1,11 @@
+//! Gemini (Google Cloud Code Assist) OAuth provider config.
+//!
+//! The `client_id` and `client_secret` below are Google's public installed-application
+//! credentials from the Gemini CLI open-source project
+//! (<https://github.com/google-gemini/gemini-cli>). Per Google's OAuth2 documentation for
+//! installed apps, these values are intentionally distributed in client software and are
+//! not treated as confidential — embedding them in source code is the documented practice.
+
 use crate::OAuthConfig;
 
 pub fn gemini() -> OAuthConfig {
