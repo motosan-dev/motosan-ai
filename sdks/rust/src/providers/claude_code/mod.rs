@@ -49,7 +49,9 @@ pub struct ClaudeCodeProvider {
     ///   `~/.claude/` user settings, project `.claude/` settings,
     ///   auto-memory, plugin sync, and `CLAUDE.md` auto-discovery
     ///   all stop. [`setting_sources`](Self::setting_sources) becomes
-    ///   inert because the discovery step it controls is disabled.
+    ///   inert because the discovery step it controls is disabled —
+    ///   the CLI accepts the flag without error, the values simply
+    ///   have no effect.
     /// - **Explicit context still flows**: values you pass via
     ///   [`settings`](Self::settings), [`mcp_config`](Self::mcp_config),
     ///   [`add_dirs`](Self::add_dirs), [`plugin_dirs`](Self::plugin_dirs),
@@ -596,6 +598,26 @@ mod tests {
         assert!(
             content.chars().any(|c| c as u32 > 0x2000),
             "expected a non-ASCII character (emoji), got: {content:?}"
+        );
+    }
+
+    /// End-to-end verification that `.bare(true)` is accepted by the
+    /// installed `claude` CLI and a plain `--print` turn still completes.
+    /// Catches a future CLI rename of the flag. Requires `ANTHROPIC_API_KEY`
+    /// in the environment because `--bare` disables OAuth / keychain auth.
+    #[tokio::test]
+    #[ignore]
+    async fn integration_bare_flag_accepted_by_cli() {
+        let client = ClaudeCodeProvider::new().bare(true);
+
+        let resp = client
+            .chat(test_request("Reply with only the word 'pong'."))
+            .await
+            .expect("chat should succeed under --bare");
+        assert!(
+            resp.content.to_lowercase().contains("pong"),
+            "expected 'pong' in response, got: {}",
+            resp.content
         );
     }
 
