@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.12.1] — 2026-04-19
+
+### Added (Rust only)
+
+- **`ClaudeCodeProvider.bare(bool)`** — forwards `--bare` to the spawned `claude` subprocess (skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery). Intended for daemon / server embeddings that must not inherit the operator's interactive Claude Code state. Leave `false` (default) for workflows that should pick up `~/.claude/` configuration.
+
 ## [0.11.1] — 2026-04-15
 
 ### Docs

@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.12.1] - 2026-04-19
+
+### Added
+- **`ClaudeCodeProvider.bare` field + `.bare(bool)` builder** — forwards `--bare` to the spawned `claude` subprocess, which skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery. Intended for daemon / server embeddings that must not inherit the operator's interactive Claude Code state. Leave `false` (default) for workflows that should pick up `~/.claude/` configuration. Emitted in argv before `--dangerously-skip-permissions` so the two flags compose deterministically; order locked by `common_args_bare_precedes_agent_mode` and the full-loadout order test.
+
 ## [0.12.0] - 2026-04-15
 
 ### Breaking

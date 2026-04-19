@@ -310,7 +310,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.12.0", features = ["claude-code"] }
+motosan-ai = { version = "0.12.1", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -323,6 +323,7 @@ let client = Client::builder()
     .provider(Provider::ClaudeCode)
     .claude_code(
         ClaudeCodeProvider::new()                       // uses $CLAUDE_CODE_PATH or "claude" in PATH
+            .bare(true)                                 // --bare (daemon-safe: skip hooks/plugins/auto-memory)
             .model("sonnet")                            // --model
             .system_prompt("Be terse.")                 // --system-prompt (full replacement)
             .permission_mode(PermissionMode::Plan)      // --permission-mode plan
@@ -376,6 +377,9 @@ All setters return `Self` for chaining. Omitted setters leave the corresponding 
 - `.agent_mode(bool)` — `--dangerously-skip-permissions`, also switches the blocking path to `--output-format json` so usage tokens can be parsed.
 - `.permission_mode(PermissionMode::{AcceptEdits,Auto,BypassPermissions,Default,DontAsk,Plan})` — `--permission-mode`.
 
+**Isolation**
+- `.bare(bool)` — `--bare`. Spawned `claude` skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery, so the subprocess does not inherit the operator's interactive Claude Code state. Recommended `true` for daemon / server use; leave `false` for interactive workflows that should pick up `~/.claude/` configuration. Emitted before `--dangerously-skip-permissions` in argv.
+
 **Workspace & tools**
 - `.add_dir(path)` / `.add_dirs(vec)` — `--add-dir` (repeatable).
 - `.allow_tool(name)` / `.allowed_tools(vec)` — `--allowed-tools` (variadic).
@@ -415,7 +419,7 @@ Notes:
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.12.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.12.1", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -478,7 +482,7 @@ Notes:
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
 ```toml
-motosan-ai = { version = "0.12.0", features = ["gemini-cli"] }
+motosan-ai = { version = "0.12.1", features = ["gemini-cli"] }
 ```
 
 **Option A — via `Client::builder()`**:

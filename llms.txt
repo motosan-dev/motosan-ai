@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.12.0
+- Python 0.5.0 · Rust 0.12.1
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.12.0", features = ["anthropic"] }
+motosan-ai = { version = "0.12.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
@@ -530,6 +530,7 @@ let client = Client::builder()
     .provider(Provider::ClaudeCode)
     .claude_code(
         ClaudeCodeProvider::new()
+            .bare(true)                                 // --bare (daemon-safe; skip hooks/plugins/auto-memory)
             .model("sonnet")                            // --model
             .system_prompt("Be terse.")                 // --system-prompt (full replacement)
             .permission_mode(PermissionMode::Plan)      // --permission-mode plan
@@ -599,6 +600,7 @@ Key notes:
 - `ApprovalMode` variants (Gemini): `Default` / `AutoEdit` / `Yolo` / `Plan`. `yolo(true)` is shorthand for `--yolo` (same effect as `ApprovalMode::Yolo`).
 - `PermissionMode` variants (Claude Code): `AcceptEdits` / `Auto` / `BypassPermissions` / `Default` / `DontAsk` / `Plan`. Distinct from `.agent_mode(true)`, which forwards `--dangerously-skip-permissions` and switches the blocking path to `--output-format json` so usage tokens can be parsed.
 - `EffortLevel` variants (Claude Code): `Low` / `Medium` / `High` / `Max`. Maps to `--effort`.
+- Claude Code isolation: `.bare(true)` forwards `--bare`, so the spawned `claude` skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery. Recommended for daemons / servers that must not inherit the operator's interactive state; leave `false` for workflows that should pick up `~/.claude/`. Emitted before `--dangerously-skip-permissions`.
 - Claude Code system prompts: `.system_prompt(...)` forwards `--system-prompt` (full replacement); message-extracted system prompts flow through `--append-system-prompt`. Both can coexist — Claude applies append on top of replace.
 - Claude Code budget: `.max_budget_usd(amount)` drops non-finite and negative values at argv-build time so the CLI never receives an invalid number. Only meaningful under `--print`.
 - Claude Code session flags (`--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`) all live on the same `ClaudeCodeProvider` builder; blank string inputs are skipped so `.resume("")` is a no-op.
