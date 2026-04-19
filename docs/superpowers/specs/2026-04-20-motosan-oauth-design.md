@@ -104,8 +104,8 @@ pub mod providers {
 - `redirect_port`: `Some(1455)` (hardcoded by OpenAI's app registration)
 
 ### Gemini (Google)
-- `client_id`: `681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com`
-- `client_secret`: `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` (installed app — safe to embed per Google's OAuth2 docs)
+- `client_id`: same as Gemini CLI open-source (see `providers/gemini.rs`)
+- `client_secret`: same as Gemini CLI open-source installed-app credential (see `providers/gemini.rs`)
 - `auth_url`: `https://accounts.google.com/o/oauth2/auth`
 - `token_url`: `https://oauth2.googleapis.com/token`
 - `scopes`: `["https://www.googleapis.com/auth/cloud-platform", "https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile"]`

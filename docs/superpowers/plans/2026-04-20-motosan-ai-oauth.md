@@ -945,8 +945,8 @@ use crate::OAuthConfig;
 
 pub fn gemini() -> OAuthConfig {
     OAuthConfig {
-        client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-        client_secret: Some("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"),
+        client_id: "<gemini-cli-client-id>",   // same as Gemini CLI open-source
+        client_secret: Some("<gemini-cli-client-secret>"), // installed app, same as Gemini CLI
         auth_url: "https://accounts.google.com/o/oauth2/auth",
         token_url: "https://oauth2.googleapis.com/token",
         scopes: &[
