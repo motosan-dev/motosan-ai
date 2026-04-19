@@ -37,6 +37,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.82.0
+      - name: Pin indexmap for MSRV
+        # indexmap >=2.14 requires hashbrown >=0.17, which itself requires
+        # the unstable `edition2024` Cargo feature — unavailable on 1.82.
+        # Cargo.lock is gitignored (library crate), so without this pin
+        # CI resolves transitively to the latest indexmap on every run.
+        run: |
+          cargo generate-lockfile
+          cargo update -p indexmap --precise 2.13.1
       - name: Cargo build (no features)
         run: cargo build
       - name: Cargo test (no features)
