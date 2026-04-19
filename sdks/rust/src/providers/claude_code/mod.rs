@@ -29,6 +29,36 @@ pub struct ClaudeCodeProvider {
     /// Whether to pass `--dangerously-skip-permissions` and switch the
     /// blocking path to `--output-format json` (so usage can be parsed).
     pub agent_mode: bool,
+    /// Whether to pass `--bare`. Skips hooks, plugins, auto-memory,
+    /// keychain reads, and user/project settings discovery, so the
+    /// subprocess does not inherit ambient Claude Code state from
+    /// the operator's shell. Recommended `true` for daemon / server
+    /// use; leave `false` for interactive workflows that should pick
+    /// up the operator's `~/.claude/` configuration.
+    ///
+    /// # Interactions with other fields
+    ///
+    /// - **Auth**: under `--bare`, Anthropic auth is restricted to
+    ///   `ANTHROPIC_API_KEY` or an `apiKeyHelper` declared inside
+    ///   the file passed to [`settings`](Self::settings). OAuth
+    ///   subscription and keychain reads are **never** consulted.
+    ///   Callers running headless must export `ANTHROPIC_API_KEY`
+    ///   or hand a `--settings` JSON before flipping this on, or
+    ///   every request will fail with an auth error.
+    /// - **Auto-discovered context is suppressed**: hooks,
+    ///   `~/.claude/` user settings, project `.claude/` settings,
+    ///   auto-memory, plugin sync, and `CLAUDE.md` auto-discovery
+    ///   all stop. [`setting_sources`](Self::setting_sources) becomes
+    ///   inert because the discovery step it controls is disabled.
+    /// - **Explicit context still flows**: values you pass via
+    ///   [`settings`](Self::settings), [`mcp_config`](Self::mcp_config),
+    ///   [`add_dirs`](Self::add_dirs), [`plugin_dirs`](Self::plugin_dirs),
+    ///   [`agent`](Self::agent), [`system_prompt`](Self::system_prompt),
+    ///   and the message-extracted `--append-system-prompt` are
+    ///   honoured normally — `--bare` only kills the *implicit*
+    ///   discovery path, not what you hand the CLI yourself.
+    /// - Skills still resolve via `/skill-name` invocation.
+    pub bare: bool,
     /// Default model forwarded as `--model <name>`.
     pub model: Option<String>,
     /// Full system-prompt replacement (`--system-prompt`). Coexists
@@ -83,6 +113,7 @@ impl ClaudeCodeProvider {
         Self {
             binary_path,
             agent_mode: false,
+            bare: false,
             model: None,
             system_prompt: None,
             permission_mode: None,
@@ -117,6 +148,22 @@ impl ClaudeCodeProvider {
     /// Enable or disable agent mode (`--dangerously-skip-permissions`).
     pub fn agent_mode(mut self, enabled: bool) -> Self {
         self.agent_mode = enabled;
+        self
+    }
+
+    /// Enable or disable `--bare`. When `true`, the spawned `claude`
+    /// subprocess skips hooks, plugins, auto-memory, keychain reads,
+    /// and user/project settings discovery — useful for daemons that
+    /// must not inherit the operator's interactive Claude Code state.
+    ///
+    /// **Read [`Self::bare`] before flipping this on** — `--bare`
+    /// restricts Anthropic auth to `ANTHROPIC_API_KEY` /
+    /// `apiKeyHelper` (no OAuth, no keychain) and silently makes
+    /// [`Self::setting_sources`] inert. Explicit `settings`,
+    /// `mcp_config`, `add_dirs`, `plugin_dirs`, `agent`, and
+    /// `system_prompt` still work as expected.
+    pub fn bare(mut self, enabled: bool) -> Self {
+        self.bare = enabled;
         self
     }
 
@@ -285,6 +332,7 @@ impl ClaudeCodeProvider {
         spawn::SpawnConfig {
             binary_path: self.binary_path.clone(),
             agent_mode: self.agent_mode,
+            bare: self.bare,
             model: request_model.or_else(|| self.model.clone()),
             append_system_prompt,
             system_prompt: self.system_prompt.clone(),
@@ -447,6 +495,7 @@ mod tests {
     fn builder_methods_populate_spawn_config() {
         let provider = ClaudeCodeProvider::new()
             .agent_mode(true)
+            .bare(true)
             .model("sonnet")
             .system_prompt("be terse")
             .permission_mode(PermissionMode::Plan)
@@ -471,6 +520,7 @@ mod tests {
 
         let cfg = provider.build_spawn_config(None, Some("append".to_string()));
         assert!(cfg.agent_mode);
+        assert!(cfg.bare);
         assert_eq!(cfg.model.as_deref(), Some("sonnet"));
         assert_eq!(cfg.system_prompt.as_deref(), Some("be terse"));
         assert_eq!(cfg.append_system_prompt.as_deref(), Some("append"));
