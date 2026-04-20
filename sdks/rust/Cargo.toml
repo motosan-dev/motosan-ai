@@ -49,8 +49,14 @@ gemini = [
   "dep:tokio-stream",
   "dep:tokio",
 ]
+gemini-code-assist = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
 agent-tool = ["dep:motosan-agent-tool"]
-full = ["anthropic", "openai", "minimax", "ollama", "ollama_native", "gemini"]
+full = ["anthropic", "openai", "minimax", "ollama", "ollama_native", "gemini", "gemini-code-assist"]
 
 [dependencies]
 async-trait = "0.1"

@@ -36,3 +36,6 @@ pub const GEMINI_MODELS: &[&str] = &[
     "gemini-1.5-pro",
     "gemini-1.5-flash",
 ];
+
+pub const DEFAULT_GEMINI_CODE_ASSIST_MODEL: &str = "gemini-2.0-flash";
+pub const GEMINI_CODE_ASSIST_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";

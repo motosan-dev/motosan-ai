@@ -5,6 +5,7 @@ use crate::error::MotosanError;
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -17,6 +18,7 @@ use crate::types::{ChatRequest, ChatResponse};
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 use crate::types::{StopReason, ToolCall, Usage};
 use async_trait::async_trait;
@@ -26,6 +28,7 @@ use async_trait::async_trait;
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 use reqwest::header::HeaderMap;
 #[cfg(any(
@@ -34,6 +37,7 @@ use reqwest::header::HeaderMap;
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 use serde_json::Value;
 #[cfg(any(
@@ -42,6 +46,7 @@ use serde_json::Value;
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 use std::time::Duration;
 
@@ -59,6 +64,9 @@ pub enum Provider {
     GeminiCli,
     /// HTTP client for the Google Generative AI REST API. Requires the `gemini` feature.
     Gemini,
+    /// Shells out to Google Cloud Code Assist API (cloudcode-pa.googleapis.com).
+    /// Requires OAuth token with cloud-platform scope. Requires the `gemini-code-assist` feature.
+    GeminiCodeAssist,
 }
 
 #[async_trait]
@@ -73,6 +81,7 @@ pub trait ProviderImpl: Send + Sync {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
@@ -89,6 +98,7 @@ pub(crate) struct ChatResponseBuilder {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
@@ -170,6 +180,7 @@ impl ChatResponseBuilder {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     payload
@@ -186,6 +197,7 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
     match status_code {
@@ -202,6 +214,7 @@ pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError 
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     status_code == 429 || status_code >= 500
@@ -213,6 +226,7 @@ pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
@@ -224,6 +238,7 @@ pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
@@ -237,6 +252,7 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
 ))]
 pub(crate) async fn sleep_before_retry(
     policy: &RetryPolicy,
@@ -294,3 +310,6 @@ pub mod gemini_cli;
 
 #[cfg(feature = "gemini")]
 pub mod gemini;
+
+#[cfg(feature = "gemini-code-assist")]
+pub mod gemini_code_assist;
