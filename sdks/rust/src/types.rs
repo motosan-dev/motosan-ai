@@ -814,6 +814,35 @@ impl StreamEvent {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderCapabilities {
+    pub supports_image: bool,
+    pub supports_document: bool,
+}
+
+impl ProviderCapabilities {
+    pub fn text_only() -> Self {
+        Self {
+            supports_image: false,
+            supports_document: false,
+        }
+    }
+
+    pub fn with_image() -> Self {
+        Self {
+            supports_image: true,
+            supports_document: false,
+        }
+    }
+
+    pub fn full() -> Self {
+        Self {
+            supports_image: true,
+            supports_document: true,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1044,5 +1073,31 @@ mod tests {
 
         assert!(req.system_blocks.is_none());
         assert_eq!(req.system.as_deref(), Some("Plain system"));
+    }
+}
+
+#[cfg(test)]
+mod capabilities_tests {
+    use super::*;
+
+    #[test]
+    fn text_only_has_no_capabilities() {
+        let caps = ProviderCapabilities::text_only();
+        assert!(!caps.supports_image);
+        assert!(!caps.supports_document);
+    }
+
+    #[test]
+    fn with_image_supports_image_only() {
+        let caps = ProviderCapabilities::with_image();
+        assert!(caps.supports_image);
+        assert!(!caps.supports_document);
+    }
+
+    #[test]
+    fn full_supports_everything() {
+        let caps = ProviderCapabilities::full();
+        assert!(caps.supports_image);
+        assert!(caps.supports_document);
     }
 }
