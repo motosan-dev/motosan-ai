@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 from collections.abc import AsyncIterator
@@ -266,8 +267,6 @@ class ClaudeCodeClient:
             # breaks out of the async-for loop early or an exception is raised.
             # Guard against ProcessLookupError when the process has already exited
             # (the normal completion path).
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 proc.kill()
-            except ProcessLookupError:
-                pass
             await proc.wait()
