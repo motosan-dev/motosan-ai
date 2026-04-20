@@ -278,9 +278,11 @@ impl GeminiProvider {
             .unwrap_or("STOP");
 
         let stop_reason = match finish_reason {
+            "STOP" if !tool_calls.is_empty() => StopReason::ToolUse,
+            "STOP" => StopReason::EndTurn,
             "MAX_TOKENS" => StopReason::MaxTokens,
             _ if !tool_calls.is_empty() => StopReason::ToolUse,
-            _ => StopReason::EndTurn,
+            _ => StopReason::Other,
         };
 
         let usage_meta = payload.get("usageMetadata").cloned().unwrap_or(json!({}));
@@ -503,9 +505,11 @@ impl Stream for GeminiStreamAdapter {
 
                     if let Some(reason) = finish_reason {
                         let stop_reason = match reason {
+                            "STOP" if has_tool_calls => StopReason::ToolUse,
+                            "STOP" => StopReason::EndTurn,
                             "MAX_TOKENS" => StopReason::MaxTokens,
                             _ if has_tool_calls => StopReason::ToolUse,
-                            _ => StopReason::EndTurn,
+                            _ => StopReason::Other,
                         };
                         self.pending
                             .push_back(StreamEvent::done_with_stop_reason(stop_reason));
@@ -527,7 +531,7 @@ impl Stream for GeminiStreamAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Message, Tool};
+    use crate::types::{ContentBlock, ImageSource, Message, SystemBlock, Tool, ToolCall};
 
     fn user_msg(text: &str) -> Message {
         Message::user(text)
@@ -682,6 +686,339 @@ mod tests {
         });
         let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
         assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    // ---- build_request: additional coverage ----
+
+    #[test]
+    fn image_base64_block_serialized_as_inline_data() {
+        // Only image block → content is empty → one part: the inlineData
+        let msg = Message::user_with_blocks(vec![ContentBlock::Image {
+            source: ImageSource::Base64 {
+                media_type: "image/png".into(),
+                data: "abc123".into(),
+            },
+        }]);
+        let body = build(vec![user_msg("look at this"), msg]);
+        let parts = &body["contents"][1]["parts"];
+        assert_eq!(parts[0]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(parts[0]["inlineData"]["data"], "abc123");
+    }
+
+    #[test]
+    fn image_url_block_serialized_as_file_data() {
+        let msg = Message::user_with_blocks(vec![ContentBlock::Image {
+            source: ImageSource::Url {
+                url: "https://example.com/img.jpg".into(),
+            },
+        }]);
+        let body = build(vec![msg]);
+        let part = &body["contents"][0]["parts"][0];
+        assert_eq!(part["fileData"]["fileUri"], "https://example.com/img.jpg");
+    }
+
+    #[test]
+    fn multiple_tools_become_function_declarations() {
+        let tools = vec![
+            Tool {
+                name: "search".into(),
+                description: Some("Search".into()),
+                input_schema: None,
+                cache: false,
+            },
+            Tool {
+                name: "calc".into(),
+                description: Some("Calculate".into()),
+                input_schema: None,
+                cache: false,
+            },
+        ];
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .tools(tools)
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let declarations = &body["tools"][0]["functionDeclarations"];
+        assert_eq!(declarations.as_array().unwrap().len(), 2);
+        assert_eq!(declarations[0]["name"], "search");
+        assert_eq!(declarations[1]["name"], "calc");
+    }
+
+    #[test]
+    fn tool_input_schema_included_in_declaration() {
+        let schema =
+            json!({"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]});
+        let tool = Tool {
+            name: "search".into(),
+            description: None,
+            input_schema: Some(schema.clone()),
+            cache: false,
+        };
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("find")])
+            .tools(vec![tool])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        assert_eq!(
+            body["tools"][0]["functionDeclarations"][0]["parameters"],
+            schema
+        );
+    }
+
+    #[test]
+    fn tool_choice_auto_maps_to_auto_mode() {
+        let tool = Tool {
+            name: "t".into(),
+            description: None,
+            input_schema: None,
+            cache: false,
+        };
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .tools(vec![tool])
+            .tool_choice(ToolChoice::Auto)
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "AUTO");
+    }
+
+    #[test]
+    fn tool_choice_specific_tool_sets_allowed_function_names() {
+        let tool = Tool {
+            name: "special".into(),
+            description: None,
+            input_schema: None,
+            cache: false,
+        };
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .tools(vec![tool])
+            .tool_choice(ToolChoice::Tool {
+                name: "special".into(),
+            })
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let fc = &body["toolConfig"]["functionCallingConfig"];
+        assert_eq!(fc["mode"], "ANY");
+        assert_eq!(fc["allowedFunctionNames"][0], "special");
+    }
+
+    #[test]
+    fn stop_sequences_in_generation_config() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .stop_sequences(vec!["END".into(), "STOP".into()])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let stops = &body["generationConfig"]["stopSequences"];
+        assert_eq!(stops[0], "END");
+        assert_eq!(stops[1], "STOP");
+    }
+
+    #[test]
+    fn max_tokens_override_in_generation_config() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .max_tokens(256)
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        assert_eq!(body["generationConfig"]["maxOutputTokens"], 256);
+    }
+
+    #[test]
+    fn provider_options_merged_into_body() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .provider_options(
+                json!({"safetySettings": [{"category": "ALL", "threshold": "BLOCK_NONE"}]}),
+            )
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        assert!(body.get("safetySettings").is_some());
+    }
+
+    #[test]
+    fn system_blocks_joined_into_system_instruction() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .system_blocks(vec![
+                SystemBlock::new("Block 1."),
+                SystemBlock::new("Block 2."),
+            ])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let text = body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(text, "Block 1.\nBlock 2.");
+    }
+
+    #[test]
+    fn system_blocks_take_priority_over_system_field() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .system("fallback")
+            .system_blocks(vec![SystemBlock::new("from blocks")])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let text = body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(text, "from blocks");
+        assert!(!text.contains("fallback"));
+    }
+
+    #[test]
+    fn empty_system_blocks_falls_back_to_system_field() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .system("use this")
+            .system_blocks(vec![])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        let text = body["systemInstruction"]["parts"][0]["text"]
+            .as_str()
+            .unwrap();
+        assert_eq!(text, "use this");
+    }
+
+    #[test]
+    fn assistant_with_text_and_tool_calls() {
+        let tc = ToolCall {
+            id: "c1".into(),
+            name: "foo".into(),
+            input: json!({"x": 1}),
+        };
+        let msg = Message::assistant_with_tool_calls("Let me check.", vec![tc]);
+        let body = build(vec![user_msg("go"), msg]);
+        let parts = &body["contents"][1]["parts"];
+        assert_eq!(body["contents"][1]["role"], "model");
+        assert_eq!(parts[0]["text"], "Let me check.");
+        assert_eq!(parts[1]["functionCall"]["name"], "foo");
+        assert_eq!(parts[1]["functionCall"]["args"]["x"], 1);
+    }
+
+    #[test]
+    fn empty_tools_list_omits_tools_key() {
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .tools(vec![])
+            .build();
+        let body = GeminiProvider::build_request(&req);
+        assert!(body.get("tools").is_none());
+        assert!(body.get("toolConfig").is_none());
+    }
+
+    // ---- parse_response: additional coverage ----
+
+    #[test]
+    fn parse_multiple_tool_calls() {
+        let raw = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"functionCall": {"name": "search", "args": {"q": "a"}}},
+                        {"functionCall": {"name": "calc", "args": {"n": 2}}}
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 5}
+        });
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_eq!(resp.tool_calls.len(), 2);
+        assert_eq!(resp.tool_calls[0].name, "search");
+        assert_eq!(resp.tool_calls[1].name, "calc");
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn parse_tool_calls_have_unique_ids() {
+        let raw = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"functionCall": {"name": "a", "args": {}}},
+                        {"functionCall": {"name": "b", "args": {}}}
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1}
+        });
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_ne!(resp.tool_calls[0].id, resp.tool_calls[1].id);
+        assert!(!resp.tool_calls[0].id.is_empty());
+    }
+
+    #[test]
+    fn parse_mixed_text_and_tool_call() {
+        let raw = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {"text": "Let me search for that."},
+                        {"functionCall": {"name": "search", "args": {"q": "test"}}}
+                    ],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 6}
+        });
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_eq!(resp.content, "Let me search for that.");
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn parse_missing_model_version_uses_default() {
+        let raw = json!({
+            "candidates": [{
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP"
+            }],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1}
+        });
+        let resp = GeminiProvider::parse_response(&raw, "my-default-model");
+        assert_eq!(resp.model, "my-default-model");
+    }
+
+    #[test]
+    fn parse_missing_usage_metadata_yields_zero_tokens() {
+        let raw = json!({
+            "candidates": [{
+                "content": {"parts": [{"text": "hi"}], "role": "model"},
+                "finishReason": "STOP"
+            }]
+        });
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_eq!(resp.usage.input_tokens, 0);
+        assert_eq!(resp.usage.output_tokens, 0);
+    }
+
+    #[test]
+    fn parse_safety_finish_reason_returns_other() {
+        let raw = json!({
+            "candidates": [{
+                "content": {"parts": [{"text": ""}], "role": "model"},
+                "finishReason": "SAFETY"
+            }],
+            "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 0}
+        });
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_eq!(resp.stop_reason, StopReason::Other);
+    }
+
+    #[test]
+    fn parse_empty_candidates_array_returns_empty_response() {
+        let raw = json!({"candidates": []});
+        let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
+        assert_eq!(resp.content, "");
+        assert_eq!(resp.tool_calls.len(), 0);
     }
 
     mod chat_tests {
