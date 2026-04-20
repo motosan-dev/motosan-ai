@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.13.0 (crates.io) · Python v0.5.0 (PyPI)
+Rust v0.13.1 (crates.io) · Python v0.5.0 (PyPI)
 
 ## Where To Find Things
 
@@ -45,6 +45,20 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 3. `ChatResponse.tool_calls` is always `Vec`/`list` — never optional
 4. `Message::tool_result(id, content)` constructor must exist in both SDKs
 5. All providers implement: `chat()`, `stream()`, `chat_with()`, `stream_with()`
+
+## Adding a New Provider (Rust)
+
+1. Implement `ProviderImpl` in `sdks/rust/src/providers/<name>.rs`
+2. Override `capabilities()` if the provider supports image or document content:
+   ```rust
+   fn capabilities(&self) -> ProviderCapabilities {
+       ProviderCapabilities::with_image()  // or full() or text_only() (default)
+   }
+   ```
+   — `text_only()` is the safe default; no override needed for text-only providers.
+3. Add a `Provider::<Name>` variant and wire it into `dispatch_chat` / `dispatch_stream_inner` in `client.rs` (same 3-line pattern as existing arms).
+4. Gate with `#[cfg(feature = "<name>")]` and add the feature to `Cargo.toml`.
+5. Add mock tests in `tests/<name>_provider.rs` and vision tests in `tests/vision_<name>.rs` if the provider supports images.
 
 ## Architecture Decisions
 

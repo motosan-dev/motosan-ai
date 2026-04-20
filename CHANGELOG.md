@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.13.1] — 2026-04-20
+
+### Added (Rust only)
+
+- **`ProviderCapabilities`** — new type in `types.rs` (`pub use motosan_ai::ProviderCapabilities`) with `supports_image: bool` and `supports_document: bool` fields. Named constructors: `text_only()`, `with_image()`, `full()`.
+
+- **`ProviderImpl::capabilities()`** — new provided method (default: `text_only()`). Providers that support image or document content blocks override it: `AnthropicProvider` → `full()`, `OpenAIProvider` / `GeminiProvider` / `GeminiCodeAssistProvider` → `with_image()`. All others (MiniMax, Ollama, CLI backends) use the default and require no changes.
+
+- **`ProviderImpl::validate_request()`** — new provided method. Iterates `ChatRequest.messages[*].content_blocks`, returns `Err(MotosanError::UnsupportedFeature(...))` for any `ContentBlock::Image` or `ContentBlock::Document` that the provider's `capabilities()` does not declare. Validation fires inside `LlmClient::dispatch_chat` and `dispatch_stream_inner` before any network call.
+
+### Removed (Rust only)
+
+- **`reject_document_blocks()`** internal helper — removed from `providers/mod.rs`, `openai.rs`, `minimax.rs`, `ollama.rs`. Superseded by the framework-level `validate_request()` check.
+
+### Tests
+
+- `sdks/rust/tests/vision_gemini.rs` — 6 mock tests covering `GeminiProvider` image serialization (`inlineData` / `fileData` / mixed text+image), mirroring `vision_anthropic.rs` and `vision_openai.rs`.
+- `sdks/rust/tests/gemini_vision_live.rs` — live test for `GeminiProvider` image input (requires `GOOGLE_API_KEY`).
+
 ## [rust-0.13.0] — 2026-04-20
 
 ### Added (Rust only)
