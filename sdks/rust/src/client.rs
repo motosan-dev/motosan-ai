@@ -180,7 +180,9 @@ impl Client {
                 #[cfg(feature = "anthropic")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_anthropic_provider().chat(request).await;
+                    let p = self.build_anthropic_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
@@ -192,7 +194,9 @@ impl Client {
                 #[cfg(feature = "openai")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_openai_provider().chat(request).await;
+                    let p = self.build_openai_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
@@ -204,7 +208,9 @@ impl Client {
                 #[cfg(feature = "minimax")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_minimax_provider().chat(request).await;
+                    let p = self.build_minimax_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
@@ -217,13 +223,17 @@ impl Client {
                 {
                     if self.ollama_native {
                         use crate::providers::ProviderImpl;
-                        return self.build_ollama_native_provider().chat(request).await;
+                        let p = self.build_ollama_native_provider();
+                        p.validate_request(&request)?;
+                        return p.chat(request).await;
                     }
                 }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_ollama_provider().chat(request).await;
+                    let p = self.build_ollama_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
@@ -234,7 +244,10 @@ impl Client {
             Provider::ClaudeCode => {
                 #[cfg(feature = "claude-code")]
                 {
-                    return self.build_claude_code_provider().chat(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_claude_code_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "claude-code"))]
                 {
@@ -245,7 +258,10 @@ impl Client {
             Provider::CodexCli => {
                 #[cfg(feature = "codex-cli")]
                 {
-                    return self.build_codex_cli_provider().chat(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_codex_cli_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "codex-cli"))]
                 {
@@ -256,7 +272,10 @@ impl Client {
             Provider::GeminiCli => {
                 #[cfg(feature = "gemini-cli")]
                 {
-                    return self.build_gemini_cli_provider().chat(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_gemini_cli_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "gemini-cli"))]
                 {
@@ -268,7 +287,9 @@ impl Client {
                 #[cfg(feature = "gemini")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_gemini_provider().chat(request).await;
+                    let p = self.build_gemini_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "gemini"))]
                 {
@@ -280,7 +301,9 @@ impl Client {
                 #[cfg(feature = "gemini-code-assist")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_gemini_code_assist_provider().chat(request).await;
+                    let p = self.build_gemini_code_assist_provider();
+                    p.validate_request(&request)?;
+                    return p.chat(request).await;
                 }
                 #[cfg(not(feature = "gemini-code-assist"))]
                 {
@@ -312,7 +335,9 @@ impl Client {
                 #[cfg(feature = "anthropic")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_anthropic_provider().stream(request).await;
+                    let p = self.build_anthropic_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
@@ -324,7 +349,9 @@ impl Client {
                 #[cfg(feature = "openai")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_openai_provider().stream(request).await;
+                    let p = self.build_openai_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "openai"))]
                 {
@@ -336,7 +363,9 @@ impl Client {
                 #[cfg(feature = "minimax")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_minimax_provider().stream(request).await;
+                    let p = self.build_minimax_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
@@ -349,13 +378,17 @@ impl Client {
                 {
                     if self.ollama_native {
                         use crate::providers::ProviderImpl;
-                        return self.build_ollama_native_provider().stream(request).await;
+                        let p = self.build_ollama_native_provider();
+                        p.validate_request(&request)?;
+                        return p.stream(request).await;
                     }
                 }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_ollama_provider().stream(request).await;
+                    let p = self.build_ollama_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
@@ -366,7 +399,10 @@ impl Client {
             Provider::ClaudeCode => {
                 #[cfg(feature = "claude-code")]
                 {
-                    return self.build_claude_code_provider().stream(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_claude_code_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "claude-code"))]
                 {
@@ -377,7 +413,10 @@ impl Client {
             Provider::CodexCli => {
                 #[cfg(feature = "codex-cli")]
                 {
-                    return self.build_codex_cli_provider().stream(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_codex_cli_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "codex-cli"))]
                 {
@@ -388,7 +427,10 @@ impl Client {
             Provider::GeminiCli => {
                 #[cfg(feature = "gemini-cli")]
                 {
-                    return self.build_gemini_cli_provider().stream(request).await;
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_gemini_cli_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "gemini-cli"))]
                 {
@@ -400,7 +442,9 @@ impl Client {
                 #[cfg(feature = "gemini")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self.build_gemini_provider().stream(request).await;
+                    let p = self.build_gemini_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "gemini"))]
                 {
@@ -412,10 +456,9 @@ impl Client {
                 #[cfg(feature = "gemini-code-assist")]
                 {
                     use crate::providers::ProviderImpl;
-                    return self
-                        .build_gemini_code_assist_provider()
-                        .stream(request)
-                        .await;
+                    let p = self.build_gemini_code_assist_provider();
+                    p.validate_request(&request)?;
+                    return p.stream(request).await;
                 }
                 #[cfg(not(feature = "gemini-code-assist"))]
                 {
@@ -896,6 +939,44 @@ impl futures_core::Stream for ReadTimeoutStream {
                 Poll::Pending => Poll::Pending,
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod dispatch_validation_tests {
+    use super::*;
+    use crate::types::Message;
+
+    #[cfg(feature = "ollama_native")]
+    #[tokio::test]
+    async fn dispatch_chat_rejects_image_for_ollama() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Ollama)
+            .api_key("")
+            .ollama_base_url("http://localhost:11434")
+            .ollama_native(true)
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.chat_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
+
+    #[cfg(feature = "ollama_native")]
+    #[tokio::test]
+    async fn dispatch_stream_rejects_image_for_ollama() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Ollama)
+            .api_key("")
+            .ollama_base_url("http://localhost:11434")
+            .ollama_native(true)
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.stream_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
     }
 }
 
