@@ -8,7 +8,7 @@
 #![cfg(feature = "gemini")]
 
 use motosan_ai::{
-    ChatRequest, Client, Message, Provider, StopReason, StreamEventType, Tool, ToolCall, ToolChoice,
+    ChatRequest, Client, Message, Provider, StopReason, StreamEventType, Tool, ToolChoice,
 };
 use serde_json::json;
 use std::time::Duration;
