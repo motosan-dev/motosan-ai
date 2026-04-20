@@ -404,6 +404,10 @@ impl AnthropicRequestBuilder {
 
 #[async_trait]
 impl ProviderImpl for AnthropicProvider {
+    fn capabilities(&self) -> crate::types::ProviderCapabilities {
+        crate::types::ProviderCapabilities::full()
+    }
+
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let is_oauth = Self::is_setup_token(&self.api_key);
 
@@ -998,5 +1002,18 @@ impl Stream for AnthropicStreamAdapter {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_are_full() {
+        let p = AnthropicProvider::new("key", None, None);
+        let caps = p.capabilities();
+        assert!(caps.supports_image);
+        assert!(caps.supports_document);
     }
 }

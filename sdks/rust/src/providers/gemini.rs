@@ -314,6 +314,10 @@ impl GeminiProvider {
 
 #[async_trait]
 impl ProviderImpl for GeminiProvider {
+    fn capabilities(&self) -> crate::types::ProviderCapabilities {
+        crate::types::ProviderCapabilities::with_image()
+    }
+
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let url = self.generate_url(&req);
@@ -549,6 +553,14 @@ mod tests {
     fn build(msgs: Vec<Message>) -> Value {
         let req = ChatRequest::builder().messages(msgs).build();
         GeminiProvider::build_request(&req)
+    }
+
+    #[test]
+    fn capabilities_support_image_only() {
+        let p = GeminiProvider::new("key", None, None);
+        let caps = p.capabilities();
+        assert!(caps.supports_image);
+        assert!(!caps.supports_document);
     }
 
     #[test]

@@ -471,6 +471,10 @@ impl OpenAIRequestBuilder {
 
 #[async_trait]
 impl ProviderImpl for OpenAIProvider {
+    fn capabilities(&self) -> crate::types::ProviderCapabilities {
+        crate::types::ProviderCapabilities::with_image()
+    }
+
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         reject_document_blocks(&req, "OpenAI")?;
         let fallback_request = req.clone();
@@ -814,5 +818,18 @@ impl Stream for OpenAIStreamAdapter {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_support_image_only() {
+        let p = OpenAIProvider::new("key", None);
+        let caps = p.capabilities();
+        assert!(caps.supports_image);
+        assert!(!caps.supports_document);
     }
 }

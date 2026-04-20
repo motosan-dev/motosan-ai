@@ -104,6 +104,10 @@ impl GeminiCodeAssistProvider {
 
 #[async_trait]
 impl ProviderImpl for GeminiCodeAssistProvider {
+    fn capabilities(&self) -> crate::types::ProviderCapabilities {
+        crate::types::ProviderCapabilities::with_image()
+    }
+
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let stream = self.stream(req).await?;
@@ -323,6 +327,14 @@ mod tests {
 
     fn provider() -> GeminiCodeAssistProvider {
         GeminiCodeAssistProvider::new("ya29.fake", "test-project", None, None)
+    }
+
+    #[test]
+    fn capabilities_support_image_only() {
+        let p = GeminiCodeAssistProvider::new("ya29.fake", "test-project", None, None);
+        let caps = p.capabilities();
+        assert!(caps.supports_image);
+        assert!(!caps.supports_document);
     }
 
     #[test]
