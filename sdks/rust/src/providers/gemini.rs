@@ -9,8 +9,8 @@ use crate::providers::{
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent,
-    SystemBlock, ToolCall, ToolChoice, Usage,
+    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
+    ToolChoice, Usage,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -360,7 +360,6 @@ impl ProviderImpl for GeminiProvider {
     }
 
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
-        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let url = self.stream_url(&req);
         let body = Self::build_request(&req);
 
