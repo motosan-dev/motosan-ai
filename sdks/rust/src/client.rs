@@ -532,6 +532,8 @@ impl Client {
     }
 
     #[cfg(feature = "ollama")]
+    // Uses OpenAIProvider under the hood, which declares with_image() capabilities.
+    // Multimodal accuracy here is model-dependent; use the ollama_native path for text-only safety.
     fn build_ollama_provider(&self) -> crate::providers::openai::OpenAIProvider {
         use crate::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 
