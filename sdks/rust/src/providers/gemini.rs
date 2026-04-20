@@ -59,20 +59,45 @@ impl GeminiProvider {
         self
     }
 
+    /// Google OAuth access tokens start with `ya29.`.
+    /// API keys use `?key=` query param; OAuth tokens use `Authorization: Bearer`.
+    fn is_oauth_token(token: &str) -> bool {
+        token.starts_with("ya29.")
+    }
+
     fn generate_url(&self, req: &ChatRequest) -> String {
         let model = req.model.as_deref().unwrap_or(&self.model);
-        format!(
-            "{}/models/{}:generateContent?key={}",
-            self.base_url, model, self.api_key
-        )
+        if Self::is_oauth_token(&self.api_key) {
+            format!("{}/models/{}:generateContent", self.base_url, model)
+        } else {
+            format!(
+                "{}/models/{}:generateContent?key={}",
+                self.base_url, model, self.api_key
+            )
+        }
     }
 
     fn stream_url(&self, req: &ChatRequest) -> String {
         let model = req.model.as_deref().unwrap_or(&self.model);
-        format!(
-            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
-            self.base_url, model, self.api_key
-        )
+        if Self::is_oauth_token(&self.api_key) {
+            format!(
+                "{}/models/{}:streamGenerateContent?alt=sse",
+                self.base_url, model
+            )
+        } else {
+            format!(
+                "{}/models/{}:streamGenerateContent?alt=sse&key={}",
+                self.base_url, model, self.api_key
+            )
+        }
+    }
+
+    fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if Self::is_oauth_token(&self.api_key) {
+            request.header("authorization", format!("Bearer {}", self.api_key))
+        } else {
+            request
+        }
     }
 
     pub(crate) fn build_request(req: &ChatRequest) -> Value {
@@ -320,9 +345,11 @@ impl ProviderImpl for GeminiProvider {
         let mut attempt = 0u32;
         loop {
             let result = self
-                .http
-                .post(&url)
-                .header("content-type", "application/json")
+                .apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
                 .json(&body)
                 .send()
                 .await;
@@ -367,9 +394,11 @@ impl ProviderImpl for GeminiProvider {
         let mut attempt = 0u32;
         loop {
             let result = self
-                .http
-                .post(&url)
-                .header("content-type", "application/json")
+                .apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
                 .json(&body)
                 .send()
                 .await;
@@ -1019,6 +1048,42 @@ mod tests {
         let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
         assert_eq!(resp.content, "");
         assert_eq!(resp.tool_calls.len(), 0);
+    }
+
+    // ---- OAuth auth detection ----
+
+    #[test]
+    fn api_key_url_contains_key_param() {
+        let provider = GeminiProvider::new("AIzaSy-fake-key", None, None);
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .build();
+        let url = provider.generate_url(&req);
+        assert!(url.contains("?key=AIzaSy-fake-key"), "url: {url}");
+        let surl = provider.stream_url(&req);
+        assert!(surl.contains("&key=AIzaSy-fake-key"), "stream url: {surl}");
+    }
+
+    #[test]
+    fn oauth_token_url_omits_key_param() {
+        let provider = GeminiProvider::new("ya29.a0fake-oauth-token", None, None);
+        let req = ChatRequest::builder()
+            .messages(vec![user_msg("hi")])
+            .build();
+        let url = provider.generate_url(&req);
+        assert!(!url.contains("key="), "url should not have key=: {url}");
+        let surl = provider.stream_url(&req);
+        assert!(
+            !surl.contains("key="),
+            "stream url should not have key=: {surl}"
+        );
+    }
+
+    #[test]
+    fn is_oauth_token_detects_ya29_prefix() {
+        assert!(GeminiProvider::is_oauth_token("ya29.abc123"));
+        assert!(!GeminiProvider::is_oauth_token("AIzaSyFakeApiKey"));
+        assert!(!GeminiProvider::is_oauth_token(""));
     }
 
     mod chat_tests {
