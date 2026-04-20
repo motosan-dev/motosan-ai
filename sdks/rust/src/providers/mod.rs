@@ -3,18 +3,25 @@ use crate::error::MotosanError;
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
+#[cfg(any(
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini"
+))]
 use crate::types::ContentBlock;
 use crate::types::{ChatRequest, ChatResponse};
 #[cfg(any(
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 use crate::types::{StopReason, ToolCall, Usage};
 use async_trait::async_trait;
@@ -22,21 +29,24 @@ use async_trait::async_trait;
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 use reqwest::header::HeaderMap;
 #[cfg(any(
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 use serde_json::Value;
 #[cfg(any(
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 use std::time::Duration;
 
@@ -52,6 +62,8 @@ pub enum Provider {
     CodexCli,
     /// Shells out to Google's `gemini -p` CLI. Requires the `gemini-cli` feature.
     GeminiCli,
+    /// HTTP client for the Google Generative AI REST API. Requires the `gemini` feature.
+    Gemini,
 }
 
 #[async_trait]
@@ -64,7 +76,8 @@ pub trait ProviderImpl: Send + Sync {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) struct ChatResponseBuilder {
     content: String,
@@ -79,7 +92,8 @@ pub(crate) struct ChatResponseBuilder {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
@@ -159,7 +173,8 @@ impl ChatResponseBuilder {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     payload
@@ -174,7 +189,8 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
     match status_code {
@@ -189,7 +205,8 @@ pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError 
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     status_code == 429 || status_code >= 500
@@ -199,7 +216,8 @@ pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
@@ -209,7 +227,8 @@ pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
@@ -221,7 +240,8 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub(crate) async fn sleep_before_retry(
     policy: &RetryPolicy,
@@ -276,3 +296,6 @@ pub mod codex_cli;
 
 #[cfg(feature = "gemini-cli")]
 pub mod gemini_cli;
+
+#[cfg(feature = "gemini")]
+pub mod gemini;
