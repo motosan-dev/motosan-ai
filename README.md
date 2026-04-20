@@ -34,8 +34,9 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.12.1", features = ["anthropic"] }
-# features: anthropic | openai | minimax | ollama | ollama_native | full | claude-code | codex-cli | gemini-cli
+motosan-ai = { version = "0.13.0", features = ["anthropic"] }
+# features: anthropic | openai | minimax | ollama | ollama_native | full
+#           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
 
 ```bash
@@ -52,6 +53,8 @@ pip install "motosan-ai[full]"   # all providers
 | OpenAI | `gpt-5.3-codex` | `openai` | `[openai]` |
 | MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
+| Gemini | `gemini-2.0-flash` | `gemini` | — |
+| Gemini Code Assist | `gemini-2.5-flash` | `gemini-code-assist` | — |
 | Claude Code CLI | (CLI default) | `claude-code` | — |
 | Codex CLI | (CLI default) | `codex-cli` | — |
 | Gemini CLI | (CLI default) | `gemini-cli` | — |
