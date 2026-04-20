@@ -292,25 +292,6 @@ pub(crate) async fn sleep_before_retry(
     tokio::time::sleep(delay).await;
 }
 
-/// Return an `UnsupportedFeature` error if any message contains a `Document` block.
-#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
-pub(crate) fn reject_document_blocks(
-    req: &ChatRequest,
-    provider_name: &str,
-) -> Result<(), MotosanError> {
-    for message in &req.messages {
-        for block in &message.content_blocks {
-            if matches!(block, ContentBlock::Document { .. }) {
-                return Err(MotosanError::UnsupportedFeature(format!(
-                    "Document content blocks (PDF) are not supported by the {} provider",
-                    provider_name
-                )));
-            }
-        }
-    }
-    Ok(())
-}
-
 #[cfg(feature = "anthropic")]
 pub mod anthropic;
 
@@ -341,7 +322,7 @@ pub mod gemini_code_assist;
 #[cfg(test)]
 mod validate_tests {
     use super::*;
-    use crate::types::{ContentBlock, ImageSource, Message, ProviderCapabilities};
+    use crate::types::{Message, ProviderCapabilities};
 
     struct TextOnlyProvider;
 
