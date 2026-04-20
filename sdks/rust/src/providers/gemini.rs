@@ -75,7 +75,7 @@ impl GeminiProvider {
         )
     }
 
-    pub(crate) fn build_request(req: &ChatRequest, model: &str) -> Value {
+    pub(crate) fn build_request(req: &ChatRequest) -> Value {
         let mut contents: Vec<Value> = Vec::new();
         let mut extracted_system: Option<String> = None;
 
@@ -134,15 +134,14 @@ impl GeminiProvider {
                     contents.push(json!({"role": "model", "parts": parts}));
                 }
                 Role::Tool => {
-                    if let Some(ref tool_call_id) = message.tool_call_id {
-                        let name = tool_call_id.as_str();
-                        let response: Value = serde_json::from_str(&message.content)
-                            .unwrap_or_else(|_| json!({"result": message.content}));
-                        contents.push(json!({
-                            "role": "user",
-                            "parts": [{"functionResponse": {"name": name, "response": response}}]
-                        }));
-                    }
+                    // tool_call_id holds the function name in this SDK's convention
+                    let name = message.tool_call_id.as_deref().unwrap_or("");
+                    let response: Value = serde_json::from_str(&message.content)
+                        .unwrap_or_else(|_| json!({"result": message.content}));
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{"functionResponse": {"name": name, "response": response}}]
+                    }));
                 }
             }
         }
@@ -234,7 +233,6 @@ impl GeminiProvider {
             }
         }
 
-        let _ = model;
         body
     }
 
@@ -315,7 +313,7 @@ impl ProviderImpl for GeminiProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let url = self.generate_url(&req);
-        let body = Self::build_request(&req, &model);
+        let body = Self::build_request(&req);
 
         let mut attempt = 0u32;
         loop {
@@ -362,7 +360,7 @@ impl ProviderImpl for GeminiProvider {
     async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let url = self.stream_url(&req);
-        let body = Self::build_request(&req, &model);
+        let body = Self::build_request(&req);
 
         let mut attempt = 0u32;
         loop {
@@ -541,7 +539,7 @@ mod tests {
 
     fn build(msgs: Vec<Message>) -> Value {
         let req = ChatRequest::builder().messages(msgs).build();
-        GeminiProvider::build_request(&req, DEFAULT_GEMINI_MODEL)
+        GeminiProvider::build_request(&req)
     }
 
     #[test]
@@ -564,7 +562,7 @@ mod tests {
             .messages(vec![user_msg("Hi")])
             .system("Be concise.")
             .build();
-        let body = GeminiProvider::build_request(&req, DEFAULT_GEMINI_MODEL);
+        let body = GeminiProvider::build_request(&req);
         assert_eq!(body["systemInstruction"]["parts"][0]["text"], "Be concise.");
         assert_eq!(body["contents"].as_array().unwrap().len(), 1);
     }
@@ -576,6 +574,15 @@ mod tests {
         let part = &body["contents"][1]["parts"][0];
         assert_eq!(part["functionResponse"]["name"], "get_weather");
         assert_eq!(part["functionResponse"]["response"]["result"], "sunny");
+    }
+
+    #[test]
+    fn tool_result_without_id_uses_empty_name() {
+        let tool_msg = Message::tool_result("", "done");
+        let body = build(vec![user_msg("?"), tool_msg]);
+        let part = &body["contents"][1]["parts"][0];
+        assert_eq!(part["functionResponse"]["name"], "");
+        assert_eq!(part["functionResponse"]["response"]["result"], "done");
     }
 
     #[test]
@@ -591,7 +598,7 @@ mod tests {
             .tools(vec![tool])
             .tool_choice(ToolChoice::Required)
             .build();
-        let body = GeminiProvider::build_request(&req, DEFAULT_GEMINI_MODEL);
+        let body = GeminiProvider::build_request(&req);
         assert_eq!(body["toolConfig"]["functionCallingConfig"]["mode"], "ANY");
     }
 
@@ -608,7 +615,7 @@ mod tests {
             .tools(vec![tool])
             .tool_choice(ToolChoice::None)
             .build();
-        let body = GeminiProvider::build_request(&req, DEFAULT_GEMINI_MODEL);
+        let body = GeminiProvider::build_request(&req);
         assert!(body.get("tools").is_none());
     }
 
@@ -618,7 +625,7 @@ mod tests {
             .messages(vec![user_msg("hi")])
             .temperature(0.3)
             .build();
-        let body = GeminiProvider::build_request(&req, DEFAULT_GEMINI_MODEL);
+        let body = GeminiProvider::build_request(&req);
         let temp = body["generationConfig"]["temperature"]
             .as_f64()
             .expect("temperature should be a number");
