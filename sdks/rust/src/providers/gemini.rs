@@ -31,6 +31,7 @@ fn gen_tool_call_id() -> String {
     format!("call_{n}")
 }
 
+#[derive(Debug, Clone)]
 pub struct GeminiProvider {
     http: Client,
     api_key: String,
@@ -61,18 +62,19 @@ impl GeminiProvider {
 
     fn generate_url(&self, req: &ChatRequest) -> String {
         let model = req.model.as_deref().unwrap_or(&self.model);
-        format!(
-            "{}/models/{}:generateContent?key={}",
-            self.base_url, model, self.api_key
-        )
+        format!("{}/models/{}:generateContent", self.base_url, model)
     }
 
     fn stream_url(&self, req: &ChatRequest) -> String {
         let model = req.model.as_deref().unwrap_or(&self.model);
         format!(
-            "{}/models/{}:streamGenerateContent?alt=sse&key={}",
-            self.base_url, model, self.api_key
+            "{}/models/{}:streamGenerateContent?alt=sse",
+            self.base_url, model
         )
+    }
+
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        req.header("x-goog-api-key", &self.api_key)
     }
 
     pub(crate) fn build_request(req: &ChatRequest) -> Value {
@@ -320,9 +322,11 @@ impl ProviderImpl for GeminiProvider {
         let mut attempt = 0u32;
         loop {
             let result = self
-                .http
-                .post(&url)
-                .header("content-type", "application/json")
+                .apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
                 .json(&body)
                 .send()
                 .await;
@@ -366,9 +370,11 @@ impl ProviderImpl for GeminiProvider {
         let mut attempt = 0u32;
         loop {
             let result = self
-                .http
-                .post(&url)
-                .header("content-type", "application/json")
+                .apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
                 .json(&body)
                 .send()
                 .await;

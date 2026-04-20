@@ -204,18 +204,19 @@ async fn chat_multi_turn_conversation() {
         .await;
 
     let provider = GeminiProvider::new("key", None, Some(server.url()));
-    let tool_id = "fn_1";
+    // For Gemini providers, Message::tool_result must use the function name as tool_call_id.
+    // The Gemini API needs functionResponse.name = function name, not an opaque call ID.
     let msgs = vec![
         Message::user("ping"),
         Message::assistant_with_tool_calls(
             "",
             vec![ToolCall {
-                id: tool_id.into(),
+                id: "ping_fn".into(),
                 name: "ping_fn".into(),
                 input: json!({}),
             }],
         ),
-        Message::tool_result(tool_id, r#"{"ok":true}"#),
+        Message::tool_result("ping_fn", r#"{"ok":true}"#),
         Message::user("continue"),
     ];
     let resp = provider

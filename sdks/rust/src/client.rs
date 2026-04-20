@@ -42,6 +42,11 @@ pub struct Client {
     /// [`ClientBuilder::gemini_code_assist`].
     #[cfg(feature = "gemini-code-assist")]
     gemini_code_assist: Option<crate::providers::gemini_code_assist::GeminiCodeAssistProvider>,
+    /// GCP project ID used to construct a [`GeminiCodeAssistProvider`] on demand
+    /// when no pre-built provider is available. Defaults to empty string when
+    /// not set (which will produce an API error on first use).
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist_project_id: Option<String>,
 }
 
 impl Client {
@@ -552,7 +557,9 @@ impl Client {
             Some(provider) => provider,
             None => crate::providers::gemini_code_assist::GeminiCodeAssistProvider::new(
                 self.api_key.clone(),
-                String::new(),
+                self.gemini_code_assist_project_id
+                    .clone()
+                    .unwrap_or_default(),
                 self.model.clone(),
                 None,
             )
@@ -614,6 +621,8 @@ pub struct ClientBuilder {
     gemini_cli: Option<crate::providers::gemini_cli::GeminiCliProvider>,
     #[cfg(feature = "gemini-code-assist")]
     gemini_code_assist: Option<crate::providers::gemini_code_assist::GeminiCodeAssistProvider>,
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist_project_id: Option<String>,
 }
 
 impl ClientBuilder {
@@ -757,6 +766,17 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the GCP project ID used when constructing a [`GeminiCodeAssistProvider`]
+    /// from scratch (i.e. when [`gemini_code_assist`](Self::gemini_code_assist)
+    /// has not been called). Has no effect if a pre-built provider is provided.
+    ///
+    /// [`GeminiCodeAssistProvider`]: crate::providers::gemini_code_assist::GeminiCodeAssistProvider
+    #[cfg(feature = "gemini-code-assist")]
+    pub fn gemini_code_assist_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.gemini_code_assist_project_id = Some(project_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -806,6 +826,8 @@ impl ClientBuilder {
             gemini_cli: self.gemini_cli,
             #[cfg(feature = "gemini-code-assist")]
             gemini_code_assist: self.gemini_code_assist,
+            #[cfg(feature = "gemini-code-assist")]
+            gemini_code_assist_project_id: self.gemini_code_assist_project_id,
         })
     }
 }

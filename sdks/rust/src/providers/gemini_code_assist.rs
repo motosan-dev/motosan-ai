@@ -157,7 +157,7 @@ impl ProviderImpl for GeminiCodeAssistProvider {
                     let adapter = CodeAssistStreamAdapter {
                         inner: Box::pin(sse),
                         pending: VecDeque::new(),
-                        seen_tool_ids: Vec::new(),
+                        seen_tool_ids: std::collections::HashSet::new(),
                     };
                     return Ok(Box::pin(adapter));
                 }
@@ -179,7 +179,7 @@ struct CodeAssistStreamAdapter {
     >,
     pending: VecDeque<StreamEvent>,
     /// Track tool call IDs we've seen to detect duplicates (API may reuse IDs).
-    seen_tool_ids: Vec<String>,
+    seen_tool_ids: std::collections::HashSet<String>,
 }
 
 impl Stream for CodeAssistStreamAdapter {
@@ -248,12 +248,10 @@ impl Stream for CodeAssistStreamAdapter {
                                 .and_then(Value::as_str)
                                 .filter(|id| !id.is_empty());
                             let id = match provided_id {
-                                Some(id) if !self.seen_tool_ids.contains(&id.to_string()) => {
-                                    id.to_string()
-                                }
+                                Some(id) if !self.seen_tool_ids.contains(id) => id.to_string(),
                                 _ => gen_tool_call_id(&name),
                             };
-                            self.seen_tool_ids.push(id.clone());
+                            self.seen_tool_ids.insert(id.clone());
 
                             self.pending
                                 .push_back(StreamEvent::tool_call_start(&id, &name));
@@ -413,7 +411,7 @@ mod tests {
             let mut adapter = CodeAssistStreamAdapter {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
-                seen_tool_ids: Vec::new(),
+                seen_tool_ids: std::collections::HashSet::new(),
             };
             let events: Vec<_> = (&mut adapter).collect().await;
             let text: String = events
@@ -432,7 +430,7 @@ mod tests {
             let mut adapter = CodeAssistStreamAdapter {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
-                seen_tool_ids: Vec::new(),
+                seen_tool_ids: std::collections::HashSet::new(),
             };
             let events: Vec<_> = (&mut adapter).collect().await;
             let start = events
@@ -448,7 +446,7 @@ mod tests {
             let mut adapter = CodeAssistStreamAdapter {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
-                seen_tool_ids: Vec::new(),
+                seen_tool_ids: std::collections::HashSet::new(),
             };
             let events: Vec<_> = (&mut adapter).collect().await;
             let start = events
