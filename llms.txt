@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.13.0", features = ["anthropic"] }
+motosan-ai = { version = "0.13.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust only, shell out to a local binary):
@@ -172,7 +172,7 @@ let client = Client::builder()
 
 Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `GeminiCodeAssist` | `ClaudeCode` | `CodexCli` | `GeminiCli`
 
-`Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
+`Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.5-flash` (note: `gemini-2.0-flash` is deprecated for new users). **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
 
 `GeminiCodeAssist` (v0.13.0, feature `gemini-code-assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` PKCE flow). Requires GCP project ID via `.gemini_code_assist_project_id("...")`. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
 

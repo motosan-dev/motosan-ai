@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.13.0", features = ["anthropic"] }
+motosan-ai = { version = "0.13.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
