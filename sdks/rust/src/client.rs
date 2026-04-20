@@ -113,7 +113,8 @@ impl Client {
         feature = "anthropic",
         feature = "openai",
         feature = "minimax",
-        feature = "ollama_native"
+        feature = "ollama_native",
+        feature = "gemini",
     ))]
     pub async fn stream_collect(
         &self,
@@ -136,7 +137,8 @@ impl Client {
         feature = "anthropic",
         feature = "openai",
         feature = "minimax",
-        feature = "ollama_native"
+        feature = "ollama_native",
+        feature = "gemini",
     ))]
     pub async fn stream_collect_with(
         &self,
@@ -252,6 +254,18 @@ impl Client {
                     return Err(Self::feature_not_enabled("gemini-cli"));
                 }
             }
+            Provider::Gemini => {
+                #[cfg(feature = "gemini")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_gemini_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "gemini"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini"));
+                }
+            }
         }
     }
 
@@ -261,7 +275,8 @@ impl Client {
             feature = "anthropic",
             feature = "openai",
             feature = "minimax",
-            feature = "ollama_native"
+            feature = "ollama_native",
+            feature = "gemini",
         ))]
         if let Some(timeout) = self.stream_read_timeout {
             return Ok(Box::pin(ReadTimeoutStream::new(raw, timeout)));
@@ -357,6 +372,18 @@ impl Client {
                 {
                     let _ = request;
                     return Err(Self::feature_not_enabled("gemini-cli"));
+                }
+            }
+            Provider::Gemini => {
+                #[cfg(feature = "gemini")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_gemini_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "gemini"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini"));
                 }
             }
         }
@@ -471,6 +498,15 @@ impl Client {
                 provider
             }
         }
+    }
+
+    #[cfg(feature = "gemini")]
+    fn build_gemini_provider(&self) -> crate::providers::gemini::GeminiProvider {
+        crate::providers::gemini::GeminiProvider::new(
+            self.api_key.clone(),
+            self.model.clone(),
+            None,
+        )
     }
 
     #[cfg(feature = "gemini-cli")]
@@ -709,7 +745,8 @@ impl ClientBuilder {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 struct ReadTimeoutStream {
     inner: BoxStream,
@@ -721,7 +758,8 @@ struct ReadTimeoutStream {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 impl ReadTimeoutStream {
     fn new(inner: BoxStream, timeout: Duration) -> Self {
@@ -737,7 +775,8 @@ impl ReadTimeoutStream {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = StreamEvent;

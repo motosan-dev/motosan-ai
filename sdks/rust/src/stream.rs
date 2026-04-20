@@ -23,7 +23,8 @@ pub type BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse {
     use crate::types::{ChatResponse, StopReason, StreamEventType, ToolCall, Usage};
