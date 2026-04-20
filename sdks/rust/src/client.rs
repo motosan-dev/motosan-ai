@@ -942,44 +942,6 @@ impl futures_core::Stream for ReadTimeoutStream {
     }
 }
 
-#[cfg(test)]
-mod dispatch_validation_tests {
-    use super::*;
-    use crate::types::Message;
-
-    #[cfg(feature = "ollama_native")]
-    #[tokio::test]
-    async fn dispatch_chat_rejects_image_for_ollama() {
-        let client = Client::builder()
-            .provider(crate::providers::Provider::Ollama)
-            .api_key("")
-            .ollama_base_url("http://localhost:11434")
-            .ollama_native(true)
-            .build()
-            .expect("client build");
-        let msg = Message::user_with_image("look", "abc123", "image/png");
-        let req = ChatRequest::builder().messages(vec![msg]).build();
-        let result = client.chat_with(req).await;
-        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
-    }
-
-    #[cfg(feature = "ollama_native")]
-    #[tokio::test]
-    async fn dispatch_stream_rejects_image_for_ollama() {
-        let client = Client::builder()
-            .provider(crate::providers::Provider::Ollama)
-            .api_key("")
-            .ollama_base_url("http://localhost:11434")
-            .ollama_native(true)
-            .build()
-            .expect("client build");
-        let msg = Message::user_with_image("look", "abc123", "image/png");
-        let req = ChatRequest::builder().messages(vec![msg]).build();
-        let result = client.stream_with(req).await;
-        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
-    }
-}
-
 /// Stream wrapper that filters `<think>...</think>` tags from text events.
 struct ThinkStripperStream {
     inner: BoxStream,
@@ -1016,5 +978,43 @@ impl futures_core::Stream for ThinkStripperStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod dispatch_validation_tests {
+    use super::*;
+    use crate::types::Message;
+
+    #[cfg(feature = "ollama_native")]
+    #[tokio::test]
+    async fn dispatch_chat_rejects_image_for_ollama() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Ollama)
+            .api_key("")
+            .ollama_base_url("http://localhost:11434")
+            .ollama_native(true)
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.chat_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
+
+    #[cfg(feature = "ollama_native")]
+    #[tokio::test]
+    async fn dispatch_stream_rejects_image_for_ollama() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Ollama)
+            .api_key("")
+            .ollama_base_url("http://localhost:11434")
+            .ollama_native(true)
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.stream_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
     }
 }
