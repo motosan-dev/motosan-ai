@@ -41,7 +41,6 @@ mod tests {
             !pkce.verifier.contains('='),
             "verifier must not have padding"
         );
-        // 64 bytes → 86 base64url chars (no padding)
         assert_eq!(pkce.verifier.len(), 86);
     }
 
@@ -56,12 +55,10 @@ mod tests {
     #[test]
     fn challenge_is_base64url_no_pad() {
         let pkce = Pkce::generate();
-        assert!(
-            pkce.challenge
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'),
-            "challenge contains non-base64url chars"
-        );
+        assert!(pkce
+            .challenge
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
         assert!(!pkce.challenge.contains('='));
     }
 

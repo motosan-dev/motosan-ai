@@ -1,3 +1,7 @@
 [workspace]
-members = ["sdks/rust", "sdks/rust/crates/codex-oauth"]
+members = [
+  "sdks/rust",
+  "sdks/rust/crates/codex-oauth",
+  "sdks/rust/crates/motosan-ai-oauth",
+]
 resolver = "2"

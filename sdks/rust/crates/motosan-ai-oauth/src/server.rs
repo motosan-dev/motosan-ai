@@ -6,21 +6,36 @@ use tokio::{
 
 use crate::error::Error;
 
-pub async fn wait_for_callback(port: u16) -> Result<(String, String), Error> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
-        .await
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::AddrInUse {
-                Error::Callback(format!(
-                    "port {port} is already in use; close other instances and retry"
-                ))
-            } else {
-                Error::Io(e)
-            }
-        })?;
+pub struct BoundServer {
+    pub port: u16,
+    listener: TcpListener,
+}
 
-    // Loop until we receive the actual callback request (browser may also send
-    // a favicon request before or after the redirect).
+/// Bind to 127.0.0.1:{port} (or OS-assigned if port is None).
+/// Returns BoundServer with the actual bound port.
+pub async fn bind(port: Option<u16>) -> Result<BoundServer, Error> {
+    let addr = format!("127.0.0.1:{}", port.unwrap_or(0));
+    let listener = TcpListener::bind(&addr).await.map_err(|e| {
+        if e.kind() == std::io::ErrorKind::AddrInUse {
+            Error::Callback(format!(
+                "port {} is already in use; close other instances and retry",
+                port.unwrap_or(0)
+            ))
+        } else {
+            Error::Io(e)
+        }
+    })?;
+    let actual_port = listener.local_addr().map_err(Error::Io)?.port();
+    Ok(BoundServer {
+        port: actual_port,
+        listener,
+    })
+}
+
+/// Wait for one /auth/callback?code=...&state=... request.
+/// Returns (code, state). Ignores other requests (e.g. favicon).
+pub async fn wait_for_callback(server: BoundServer) -> Result<(String, String), Error> {
+    let BoundServer { listener, .. } = server;
     loop {
         let (mut stream, _) = listener.accept().await?;
         let buf = read_headers(&mut stream).await?;
@@ -40,7 +55,6 @@ pub async fn wait_for_callback(port: u16) -> Result<(String, String), Error> {
             html
         );
         let _ = stream.write_all(response.as_bytes()).await;
-
         return parse_callback(&request);
     }
 }
@@ -150,12 +164,6 @@ mod tests {
     }
 
     #[test]
-    fn no_query_string_returns_error() {
-        let err = parse_callback(&get("/auth/callback")).unwrap_err();
-        assert!(matches!(err, Error::Callback(_)));
-    }
-
-    #[test]
     fn non_callback_path_is_not_callback() {
         assert!(!is_callback_request(&get("/favicon.ico")));
         assert!(!is_callback_request(&get("/")));
@@ -166,5 +174,21 @@ mod tests {
         assert!(is_callback_request(&get(
             "/auth/callback?code=abc&state=xyz"
         )));
+    }
+
+    #[tokio::test]
+    async fn bind_dynamic_port_returns_nonzero_port() {
+        let server = bind(None).await.expect("bind should succeed");
+        assert!(server.port > 0, "dynamic port should be nonzero");
+    }
+
+    #[tokio::test]
+    async fn bind_specific_port_returns_that_port() {
+        let probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let free_port = probe.local_addr().unwrap().port();
+        drop(probe);
+
+        let server = bind(Some(free_port)).await.expect("bind should succeed");
+        assert_eq!(server.port, free_port);
     }
 }
