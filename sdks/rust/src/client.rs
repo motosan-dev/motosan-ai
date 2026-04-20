@@ -398,6 +398,7 @@ impl Client {
         not(feature = "claude-code"),
         not(feature = "codex-cli"),
         not(feature = "gemini-cli"),
+        not(feature = "gemini"),
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -507,6 +508,7 @@ impl Client {
             self.model.clone(),
             None,
         )
+        .with_retry_policy(self.retry_policy.clone())
     }
 
     #[cfg(feature = "gemini-cli")]

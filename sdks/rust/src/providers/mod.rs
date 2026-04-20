@@ -8,12 +8,7 @@ use crate::error::MotosanError;
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-#[cfg(any(
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini"
-))]
+#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
 use crate::types::ContentBlock;
 use crate::types::{ChatRequest, ChatResponse};
 #[cfg(any(

@@ -1,10 +1,11 @@
-{ rustToolchain
-, pkgs
+{ pkgs
 , lib
 , stdenv
-, libiconv
 , ...
 }:
+
+# Most tools (Rust, Python, formatters, libiconv) come from home-config.
+# This devshell only adds project-specific dev scripts and the CC override.
 
 let
   scripts = pkgs.callPackage ./scripts.nix { };
@@ -12,26 +13,7 @@ in
 pkgs.mkShell {
   name = "motosan-dev";
 
-  buildInputs = lib.optionals stdenv.isDarwin [
-    libiconv
-  ];
-
-  nativeBuildInputs = with pkgs; [
-    # Rust
-    rustToolchain
-    cargo-nextest
-
-    # Python
-    python312
-    uv
-    ruff
-
-    # Formatters (used by treefmt)
-    treefmt
-    taplo
-    nixpkgs-fmt
-
-    # Dev scripts
+  nativeBuildInputs = [
     scripts.fmt
     scripts.lint
     scripts.check-rust
@@ -42,5 +24,8 @@ pkgs.mkShell {
 
   shellHook = ''
     export NIX_PATH="nixpkgs=${pkgs.path}"
+  '' + lib.optionalString stdenv.isDarwin ''
+    export CC=/usr/bin/cc
+    export CXX=/usr/bin/c++
   '';
 }

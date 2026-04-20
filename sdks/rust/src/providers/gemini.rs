@@ -9,8 +9,8 @@ use crate::providers::{
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
-    ToolChoice, Usage,
+    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent,
+    SystemBlock, ToolCall, ToolChoice, Usage,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -147,11 +147,28 @@ impl GeminiProvider {
             }
         }
 
-        let system_text = req
-            .system
-            .as_deref()
-            .or(extracted_system.as_deref())
-            .unwrap_or("");
+        let system_text = if let Some(ref blocks) = req.system_blocks {
+            let joined: String = blocks
+                .iter()
+                .map(|b| b.text.as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if joined.is_empty() {
+                req.system
+                    .as_deref()
+                    .or(extracted_system.as_deref())
+                    .unwrap_or("")
+                    .to_string()
+            } else {
+                joined
+            }
+        } else {
+            req.system
+                .as_deref()
+                .or(extracted_system.as_deref())
+                .unwrap_or("")
+                .to_string()
+        };
 
         let max_tokens = req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         let mut gen_config = json!({"maxOutputTokens": max_tokens});
