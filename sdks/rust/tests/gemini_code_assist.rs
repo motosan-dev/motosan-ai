@@ -93,7 +93,7 @@ async fn chat_returns_text() {
 #[tokio::test]
 async fn chat_sends_bearer_header() {
     let mut server = mockito::Server::new_async().await;
-    let body = format!("{}", sse_text("ok", Some("STOP")));
+    let body = sse_text("ok", Some("STOP"));
     let mock = server
         .mock("POST", Matcher::Regex("streamGenerateContent".into()))
         .match_header("authorization", "Bearer ya29.fake")
@@ -120,7 +120,7 @@ async fn chat_sends_bearer_header() {
 #[tokio::test]
 async fn chat_sends_project_in_body() {
     let mut server = mockito::Server::new_async().await;
-    let body = format!("{}", sse_text("ok", Some("STOP")));
+    let body = sse_text("ok", Some("STOP"));
     let mock = server
         .mock("POST", Matcher::Regex("streamGenerateContent".into()))
         .match_body(Matcher::PartialJsonString(
@@ -149,7 +149,7 @@ async fn chat_sends_project_in_body() {
 #[tokio::test]
 async fn chat_model_in_body_not_url() {
     let mut server = mockito::Server::new_async().await;
-    let body = format!("{}", sse_text("ok", Some("STOP")));
+    let body = sse_text("ok", Some("STOP"));
     // The URL path should NOT contain the model name
     let mock = server
         .mock("POST", Matcher::Regex("streamGenerateContent".into()))
@@ -222,7 +222,7 @@ async fn chat_500_retries_then_succeeds() {
         .expect(1)
         .create_async()
         .await;
-    let body = format!("{}", sse_text("recovered", Some("STOP")));
+    let body = sse_text("recovered", Some("STOP"));
     server
         .mock("POST", Matcher::Regex("streamGenerateContent".into()))
         .with_status(200)
