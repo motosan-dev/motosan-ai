@@ -37,6 +37,16 @@ pub struct Client {
     /// Provider::GeminiCli`. Configured via [`ClientBuilder::gemini_cli`].
     #[cfg(feature = "gemini-cli")]
     gemini_cli: Option<crate::providers::gemini_cli::GeminiCliProvider>,
+    /// Pre-built Gemini Code Assist provider instance used when `provider ==
+    /// Provider::GeminiCodeAssist`. Configured via
+    /// [`ClientBuilder::gemini_code_assist`].
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist: Option<crate::providers::gemini_code_assist::GeminiCodeAssistProvider>,
+    /// GCP project ID used to construct a [`GeminiCodeAssistProvider`] on demand
+    /// when no pre-built provider is available. Defaults to empty string when
+    /// not set (which will produce an API error on first use).
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist_project_id: Option<String>,
 }
 
 impl Client {
@@ -113,7 +123,8 @@ impl Client {
         feature = "anthropic",
         feature = "openai",
         feature = "minimax",
-        feature = "ollama_native"
+        feature = "ollama_native",
+        feature = "gemini",
     ))]
     pub async fn stream_collect(
         &self,
@@ -136,7 +147,8 @@ impl Client {
         feature = "anthropic",
         feature = "openai",
         feature = "minimax",
-        feature = "ollama_native"
+        feature = "ollama_native",
+        feature = "gemini",
     ))]
     pub async fn stream_collect_with(
         &self,
@@ -252,6 +264,30 @@ impl Client {
                     return Err(Self::feature_not_enabled("gemini-cli"));
                 }
             }
+            Provider::Gemini => {
+                #[cfg(feature = "gemini")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_gemini_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "gemini"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini"));
+                }
+            }
+            Provider::GeminiCodeAssist => {
+                #[cfg(feature = "gemini-code-assist")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_gemini_code_assist_provider().chat(request).await;
+                }
+                #[cfg(not(feature = "gemini-code-assist"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini-code-assist"));
+                }
+            }
         }
     }
 
@@ -261,7 +297,8 @@ impl Client {
             feature = "anthropic",
             feature = "openai",
             feature = "minimax",
-            feature = "ollama_native"
+            feature = "ollama_native",
+            feature = "gemini",
         ))]
         if let Some(timeout) = self.stream_read_timeout {
             return Ok(Box::pin(ReadTimeoutStream::new(raw, timeout)));
@@ -359,6 +396,33 @@ impl Client {
                     return Err(Self::feature_not_enabled("gemini-cli"));
                 }
             }
+            Provider::Gemini => {
+                #[cfg(feature = "gemini")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self.build_gemini_provider().stream(request).await;
+                }
+                #[cfg(not(feature = "gemini"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini"));
+                }
+            }
+            Provider::GeminiCodeAssist => {
+                #[cfg(feature = "gemini-code-assist")]
+                {
+                    use crate::providers::ProviderImpl;
+                    return self
+                        .build_gemini_code_assist_provider()
+                        .stream(request)
+                        .await;
+                }
+                #[cfg(not(feature = "gemini-code-assist"))]
+                {
+                    let _ = request;
+                    return Err(Self::feature_not_enabled("gemini-code-assist"));
+                }
+            }
         }
     }
 
@@ -371,6 +435,8 @@ impl Client {
         not(feature = "claude-code"),
         not(feature = "codex-cli"),
         not(feature = "gemini-cli"),
+        not(feature = "gemini"),
+        not(feature = "gemini-code-assist"),
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -473,6 +539,34 @@ impl Client {
         }
     }
 
+    #[cfg(feature = "gemini")]
+    fn build_gemini_provider(&self) -> crate::providers::gemini::GeminiProvider {
+        crate::providers::gemini::GeminiProvider::new(
+            self.api_key.clone(),
+            self.model.clone(),
+            None,
+        )
+        .with_retry_policy(self.retry_policy.clone())
+    }
+
+    #[cfg(feature = "gemini-code-assist")]
+    fn build_gemini_code_assist_provider(
+        &self,
+    ) -> crate::providers::gemini_code_assist::GeminiCodeAssistProvider {
+        match self.gemini_code_assist.clone() {
+            Some(provider) => provider,
+            None => crate::providers::gemini_code_assist::GeminiCodeAssistProvider::new(
+                self.api_key.clone(),
+                self.gemini_code_assist_project_id
+                    .clone()
+                    .unwrap_or_default(),
+                self.model.clone(),
+                None,
+            )
+            .with_retry_policy(self.retry_policy.clone()),
+        }
+    }
+
     #[cfg(feature = "gemini-cli")]
     fn build_gemini_cli_provider(&self) -> crate::providers::gemini_cli::GeminiCliProvider {
         match self.gemini_cli.clone() {
@@ -525,6 +619,10 @@ pub struct ClientBuilder {
     codex_cli: Option<crate::providers::codex_cli::CodexCliProvider>,
     #[cfg(feature = "gemini-cli")]
     gemini_cli: Option<crate::providers::gemini_cli::GeminiCliProvider>,
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist: Option<crate::providers::gemini_code_assist::GeminiCodeAssistProvider>,
+    #[cfg(feature = "gemini-code-assist")]
+    gemini_code_assist_project_id: Option<String>,
 }
 
 impl ClientBuilder {
@@ -654,6 +752,31 @@ impl ClientBuilder {
         self
     }
 
+    /// Attach a pre-built [`GeminiCodeAssistProvider`] to use when
+    /// `Provider::GeminiCodeAssist` is selected. The provider must already have
+    /// the OAuth access token and GCP project ID configured.
+    ///
+    /// [`GeminiCodeAssistProvider`]: crate::providers::gemini_code_assist::GeminiCodeAssistProvider
+    #[cfg(feature = "gemini-code-assist")]
+    pub fn gemini_code_assist(
+        mut self,
+        provider: crate::providers::gemini_code_assist::GeminiCodeAssistProvider,
+    ) -> Self {
+        self.gemini_code_assist = Some(provider);
+        self
+    }
+
+    /// Set the GCP project ID used when constructing a [`GeminiCodeAssistProvider`]
+    /// from scratch (i.e. when [`gemini_code_assist`](Self::gemini_code_assist)
+    /// has not been called). Has no effect if a pre-built provider is provided.
+    ///
+    /// [`GeminiCodeAssistProvider`]: crate::providers::gemini_code_assist::GeminiCodeAssistProvider
+    #[cfg(feature = "gemini-code-assist")]
+    pub fn gemini_code_assist_project_id(mut self, project_id: impl Into<String>) -> Self {
+        self.gemini_code_assist_project_id = Some(project_id.into());
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -664,7 +787,10 @@ impl ClientBuilder {
         // providers still require it.
         let api_key_required = !matches!(
             provider,
-            Provider::ClaudeCode | Provider::CodexCli | Provider::GeminiCli
+            Provider::ClaudeCode
+                | Provider::CodexCli
+                | Provider::GeminiCli
+                | Provider::GeminiCodeAssist
         );
         let api_key = match self.api_key {
             Some(k) => k,
@@ -698,6 +824,10 @@ impl ClientBuilder {
             codex_cli: self.codex_cli,
             #[cfg(feature = "gemini-cli")]
             gemini_cli: self.gemini_cli,
+            #[cfg(feature = "gemini-code-assist")]
+            gemini_code_assist: self.gemini_code_assist,
+            #[cfg(feature = "gemini-code-assist")]
+            gemini_code_assist_project_id: self.gemini_code_assist_project_id,
         })
     }
 }
@@ -709,7 +839,8 @@ impl ClientBuilder {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 struct ReadTimeoutStream {
     inner: BoxStream,
@@ -721,7 +852,8 @@ struct ReadTimeoutStream {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 impl ReadTimeoutStream {
     fn new(inner: BoxStream, timeout: Duration) -> Self {
@@ -737,7 +869,8 @@ impl ReadTimeoutStream {
     feature = "anthropic",
     feature = "openai",
     feature = "minimax",
-    feature = "ollama_native"
+    feature = "ollama_native",
+    feature = "gemini",
 ))]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = StreamEvent;

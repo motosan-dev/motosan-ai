@@ -18,8 +18,9 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.12.1", features = ["anthropic"] }
+motosan-ai = { version = "0.13.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
+#           gemini | gemini-code-assist
 # CLI backends (Rust only, shell out to a local binary):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
 #   codex-cli    → CodexCliProvider   → `codex exec --json -`
@@ -169,7 +170,11 @@ let client = Client::builder()
     .build()?;
 ```
 
-Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `ClaudeCode` | `CodexCli` | `GeminiCli`
+Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `GeminiCodeAssist` | `ClaudeCode` | `CodexCli` | `GeminiCli`
+
+`Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
+
+`GeminiCodeAssist` (v0.13.0, feature `gemini-code-assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` PKCE flow). Requires GCP project ID via `.gemini_code_assist_project_id("...")`. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
 
 CLI backends (`ClaudeCode` / `CodexCli` / `GeminiCli`) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` via `.claude_code(...)` / `.codex_cli(...)` / `.gemini_cli(...)`. `ClaudeCode` and `CodexCli` landed in v0.11.0; `GeminiCli` followed in the same generation. See the CLI Backends section under Provider-Specific Notes for a full example.
 
@@ -462,6 +467,50 @@ let tail = stripper.flush();  // call at stream end
 ---
 
 ## Provider-Specific Notes
+
+### Gemini (HTTP — generativelanguage.googleapis.com)
+
+```rust
+// Cargo.toml: features = ["gemini"]
+let client = Client::builder()
+    .provider(Provider::Gemini)
+    .api_key("AIzaSy...")               // Google AI Studio API key
+    .model("gemini-2.0-flash")          // optional, this is the default
+    .build()?;
+
+// tool use multi-turn: pass function name (not call ID) as tool_call_id
+let resp = client.chat_with(req_with_tools).await?;
+let tc = &resp.tool_calls[0];
+let result = Message::tool_result(&tc.name, tool_output); // ← tc.name, NOT tc.id
+```
+
+Billing: pay-per-token (`$0.10/1M` input, `$0.40/1M` output for `gemini-2.0-flash`). Free tier available but rate-limited and content used for training.
+
+### GeminiCodeAssist (HTTP — cloudcode-pa.googleapis.com)
+
+```rust
+// Cargo.toml: features = ["gemini-code-assist"]
+// Also: motosan-ai-oauth = { version = "0.1", features = ["gemini"] }
+
+use motosan_ai_oauth::{refresh, providers::gemini};
+
+// Refresh OAuth token (stored refresh_token from initial PKCE login)
+let token = refresh(&gemini(), &stored_refresh_token).await?;
+
+// Get project ID from loadCodeAssist API (one-time setup):
+// POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
+// Authorization: Bearer <token>
+// → response["cloudaicompanionProject"] = "your-project-id"
+
+let client = Client::builder()
+    .provider(Provider::GeminiCodeAssist)
+    .api_key(token.access_token)        // ya29.xxx OAuth token
+    .gemini_code_assist_project_id("your-gcp-project-id")
+    .model("gemini-2.5-flash")          // optional, this is the default
+    .build()?;
+```
+
+Billing: subscription-based ($19–$45/seat/month). 1,000–2,000 requests/day depending on tier. If you have an active Gemini CLI subscription, this is effectively free (no extra cost). Default model must be `gemini-2.5-flash` or `gemini-2.5-pro` — `gemini-2.0-flash` is not available on `cloudcode-pa` for standard-tier accounts.
 
 ### Anthropic Auth
 

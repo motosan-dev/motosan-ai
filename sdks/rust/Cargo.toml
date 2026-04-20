@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.12.1"
+version = "0.13.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -43,8 +43,29 @@ ollama_native = [
 claude-code = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 codex-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 gemini-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
+gemini = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
+gemini-code-assist = [
+  "gemini",
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
 agent-tool = ["dep:motosan-agent-tool"]
-full = ["anthropic", "openai", "minimax", "ollama", "ollama_native"]
+full = [
+  "anthropic",
+  "openai",
+  "minimax",
+  "ollama",
+  "ollama_native",
+  "gemini",
+  "gemini-code-assist",
+]
 
 [dependencies]
 async-trait = "0.1"

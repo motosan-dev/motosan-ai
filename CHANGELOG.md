@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.13.0] — 2026-04-20
+
+### Added (Rust only)
+
+- **`Provider::Gemini`** — native HTTP client for the Google Generative AI REST API (`generativelanguage.googleapis.com`). Feature flag `gemini`. Authenticates via `x-goog-api-key` header. Supports `chat()` and `stream()` with full SSE adapter. Handles `system_blocks`, tool declarations, `ToolChoice`, image content blocks, stop sequences, `provider_options` passthrough, and retry on 429/5xx. `finishReason` maps: `STOP` → `EndTurn`, `MAX_TOKENS` → `MaxTokens`, anything else (e.g. `SAFETY`) → `Other`. Default model: `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must use the function name (not an opaque ID) as `tool_call_id` — the Gemini API requires `functionResponse.name` to be the function name.
+
+- **`Provider::GeminiCodeAssist`** — native HTTP client for Google Cloud Code Assist (`cloudcode-pa.googleapis.com/v1internal`). Feature flag `gemini-code-assist` (depends on `gemini`). Authenticates via `Authorization: Bearer <ya29.* OAuth token>` obtained from the `motosan-ai-oauth` PKCE flow. Requires a GCP project ID (`ClientBuilder::gemini_code_assist_project_id()`). Only has a streaming endpoint; `chat()` is implemented internally as `stream()` + collect. Request wraps Gemini content in `{ project, model, request: {...}, requestId, userAgent }`. SSE response wrapped in `{ response: { candidates: [...] } }`. Uses API-provided tool call IDs when present; generates `{fn_name}_{ts}_{counter}` otherwise. Default model: `gemini-2.5-flash` (required for standard-tier accounts; `gemini-2.0-flash` is not available on `cloudcode-pa`). Billing: subscription-based (per seat), not per-token.
+
+- **`motosan-ai-oauth` Gemini provider config** — `providers::gemini()` returns PKCE config for the Gemini CLI client credentials (`cloud-platform` scope). Used to obtain `ya29.*` tokens for `GeminiCodeAssist`.
+
 ## [rust-0.12.1] — 2026-04-19
 
 ### Added (Rust only)
