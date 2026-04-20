@@ -1019,4 +1019,35 @@ mod dispatch_validation_tests {
         let result = client.stream_with(req).await;
         assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
     }
+
+    // Validates that the framework-level guard fires before any HTTP call for
+    // a text-only HTTP provider. No server needed — UnsupportedFeature is returned
+    // from validate_request() before reqwest touches the network.
+    #[cfg(feature = "minimax")]
+    #[tokio::test]
+    async fn dispatch_chat_rejects_image_for_minimax() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Minimax)
+            .api_key("fake-key")
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.chat_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
+
+    #[cfg(feature = "minimax")]
+    #[tokio::test]
+    async fn dispatch_chat_rejects_document_for_minimax() {
+        let client = Client::builder()
+            .provider(crate::providers::Provider::Minimax)
+            .api_key("fake-key")
+            .build()
+            .expect("client build");
+        let msg = Message::user_with_pdf_base64("summarize", "abc123");
+        let req = ChatRequest::builder().messages(vec![msg]).build();
+        let result = client.chat_with(req).await;
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
 }

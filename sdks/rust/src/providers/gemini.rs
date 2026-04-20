@@ -109,7 +109,7 @@ impl GeminiProvider {
                                     parts.push(json!({"fileData": {"fileUri": url}}));
                                 }
                             },
-                            ContentBlock::Document { .. } => {}
+                            ContentBlock::Document { .. } => unreachable!("document block reached Gemini serializer; caller skipped validate_request"),
                         }
                     }
                     if parts.is_empty() {

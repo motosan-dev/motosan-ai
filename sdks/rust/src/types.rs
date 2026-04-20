@@ -814,7 +814,7 @@ impl StreamEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProviderCapabilities {
     pub supports_image: bool,
     pub supports_document: bool,

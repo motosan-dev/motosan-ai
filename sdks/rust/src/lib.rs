@@ -43,6 +43,6 @@ pub use stream::collect_stream;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{
     ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, DocumentSource, ImageSource,
-    McpServerConfig, McpServerType, McpToolConfig, Message, Role, StopReason, StreamEventType,
-    SystemBlock, ThinkingConfig, Tool, ToolCall, ToolChoice, Usage,
+    McpServerConfig, McpServerType, McpToolConfig, Message, ProviderCapabilities, Role, StopReason,
+    StreamEventType, SystemBlock, ThinkingConfig, Tool, ToolCall, ToolChoice, Usage,
 };
