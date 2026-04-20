@@ -9,9 +9,7 @@ use crate::error::MotosanError;
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
-#[cfg(any(feature = "openai", feature = "minimax", feature = "ollama_native"))]
-use crate::types::ContentBlock;
-use crate::types::{ChatRequest, ChatResponse};
+use crate::types::{ChatRequest, ChatResponse, ContentBlock, ProviderCapabilities};
 #[cfg(any(
     feature = "anthropic",
     feature = "openai",
@@ -71,6 +69,32 @@ pub enum Provider {
 
 #[async_trait]
 pub trait ProviderImpl: Send + Sync {
+    fn capabilities(&self) -> ProviderCapabilities {
+        ProviderCapabilities::text_only()
+    }
+
+    fn validate_request(&self, req: &ChatRequest) -> Result<(), MotosanError> {
+        let caps = self.capabilities();
+        for msg in &req.messages {
+            for block in &msg.content_blocks {
+                match block {
+                    ContentBlock::Image { .. } if !caps.supports_image => {
+                        return Err(MotosanError::UnsupportedFeature(
+                            "provider does not support image input".into(),
+                        ));
+                    }
+                    ContentBlock::Document { .. } if !caps.supports_document => {
+                        return Err(MotosanError::UnsupportedFeature(
+                            "provider does not support document input".into(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     async fn chat(&self, _req: ChatRequest) -> Result<ChatResponse, MotosanError>;
     async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError>;
 }
@@ -313,3 +337,84 @@ pub mod gemini;
 
 #[cfg(feature = "gemini-code-assist")]
 pub mod gemini_code_assist;
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+    use crate::types::{ContentBlock, ImageSource, Message, ProviderCapabilities};
+
+    struct TextOnlyProvider;
+
+    #[async_trait]
+    impl ProviderImpl for TextOnlyProvider {
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+            unimplemented!()
+        }
+        async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError> {
+            unimplemented!()
+        }
+    }
+
+    struct FullProvider;
+
+    #[async_trait]
+    impl ProviderImpl for FullProvider {
+        fn capabilities(&self) -> ProviderCapabilities {
+            ProviderCapabilities::full()
+        }
+        async fn chat(&self, _req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+            unimplemented!()
+        }
+        async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError> {
+            unimplemented!()
+        }
+    }
+
+    fn req_with_image() -> ChatRequest {
+        let msg = Message::user_with_image("look", "abc123", "image/png");
+        ChatRequest::builder().messages(vec![msg]).build()
+    }
+
+    fn req_with_document() -> ChatRequest {
+        let msg = Message::user_with_pdf_base64("read this", "abc123");
+        ChatRequest::builder().messages(vec![msg]).build()
+    }
+
+    fn req_text_only() -> ChatRequest {
+        ChatRequest::builder()
+            .messages(vec![Message::user("hello")])
+            .build()
+    }
+
+    #[test]
+    fn text_only_provider_rejects_image() {
+        let p = TextOnlyProvider;
+        let result = p.validate_request(&req_with_image());
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
+
+    #[test]
+    fn text_only_provider_rejects_document() {
+        let p = TextOnlyProvider;
+        let result = p.validate_request(&req_with_document());
+        assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
+    }
+
+    #[test]
+    fn full_provider_accepts_image() {
+        let p = FullProvider;
+        assert!(p.validate_request(&req_with_image()).is_ok());
+    }
+
+    #[test]
+    fn full_provider_accepts_document() {
+        let p = FullProvider;
+        assert!(p.validate_request(&req_with_document()).is_ok());
+    }
+
+    #[test]
+    fn any_provider_accepts_plain_text() {
+        let p = TextOnlyProvider;
+        assert!(p.validate_request(&req_text_only()).is_ok());
+    }
+}
