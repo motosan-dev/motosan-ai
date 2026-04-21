@@ -1,5 +1,7 @@
 # motosan-ai-oauth Implementation Plan
 
+> ⚠️ **Archive note:** This is a historical implementation plan. API snippets here may not match current released interfaces. Use `README.md`, `sdks/rust/README.md`, `sdks/python/README.md`, and `specs/types.md` as source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Generalize `codex-oauth` into `motosan-ai-oauth` — a provider-agnostic PKCE OAuth crate with built-in Gemini and Codex configs behind feature flags, leaving `codex-oauth` as a backward-compatible thin wrapper.

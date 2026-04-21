@@ -1,5 +1,7 @@
 # Provider Capabilities Implementation Plan
 
+> ⚠️ **Archive note:** This is a historical implementation plan. API snippets here may not match current released interfaces. Use `README.md`, `sdks/rust/README.md`, `sdks/python/README.md`, and `specs/types.md` as source of truth.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a `capabilities()` method to `ProviderImpl` so providers declare what content types they support, with automatic pre-flight validation in `LlmClient` that returns `Err(UnsupportedFeature)` before sending unsupported content to an API.
