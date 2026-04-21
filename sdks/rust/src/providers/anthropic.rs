@@ -9,8 +9,8 @@ use crate::providers::{
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, McpToolConfig, Role,
-    StopReason, StreamEvent, SystemBlock, ToolCall, ToolChoice,
+    ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, McpToolConfig,
+    ProviderCapabilities, Role, StopReason, StreamEvent, SystemBlock, ToolCall, ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -26,6 +26,7 @@ pub struct AnthropicProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    capabilities: ProviderCapabilities,
 }
 
 impl AnthropicProvider {
@@ -40,11 +41,17 @@ impl AnthropicProvider {
             model: model.unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             retry_policy: RetryPolicy::default(),
+            capabilities: ProviderCapabilities::full(),
         }
     }
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    pub fn with_capabilities(mut self, capabilities: ProviderCapabilities) -> Self {
+        self.capabilities = capabilities;
         self
     }
 
@@ -405,7 +412,7 @@ impl AnthropicRequestBuilder {
 #[async_trait]
 impl ProviderImpl for AnthropicProvider {
     fn capabilities(&self) -> crate::types::ProviderCapabilities {
-        crate::types::ProviderCapabilities::full()
+        self.capabilities
     }
 
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -1010,10 +1017,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_are_full() {
+    fn capabilities_are_full_by_default() {
         let p = AnthropicProvider::new("key", None, None);
         let caps = p.capabilities();
         assert!(caps.supports_image);
         assert!(caps.supports_document);
+    }
+
+    #[test]
+    fn with_capabilities_overrides_default() {
+        let p = AnthropicProvider::new("key", None, None)
+            .with_capabilities(ProviderCapabilities::text_only());
+        let caps = p.capabilities();
+        assert!(!caps.supports_image);
+        assert!(!caps.supports_document);
     }
 }

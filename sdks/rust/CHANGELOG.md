@@ -2,6 +2,53 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.14.0] - 2026-04-21
+
+### Breaking
+- **`Provider::Minimax` now routes via Anthropic-compatible messages API** (`/anthropic/v1/messages`) using `AnthropicProvider` under the hood.
+- **Removed `providers::minimax::MinimaxProvider`** and its legacy OpenAI-compatible `/chat/completions` path.
+- **Removed `ClientBuilder::minimax_expose_reasoning(bool)`**.
+- **Removed `DEFAULT_MINIMAX_MODEL`** export.
+
+### Added
+- **`ClientBuilder::minimax_base_url(...)`** for endpoint override (default: `https://api.minimax.io/anthropic`, CN: `https://api.minimaxi.com/anthropic`).
+- **`AnthropicProvider::with_capabilities(...)`** for instance-level capability override.
+
+### Changed
+- MiniMax default model updated to `MiniMax-M2.7` (`MiniMax-M2.7-highspeed` also supported).
+- `minimax` Cargo feature is now an alias to `anthropic` (`minimax = ["anthropic"]`).
+
+### Tests
+- Added `tests/anthropic_minimax_routing.rs` covering `/anthropic/v1/messages` routing and text-only capability validation.
+- Updated builder/error/tool-use tests to remove legacy `MinimaxProvider` assumptions.
+
+## [0.13.1] - 2026-04-20
+
+### Added
+- **`ProviderCapabilities`** type + constructors (`text_only()`, `with_image()`, `full()`).
+- **`ProviderImpl::capabilities()`** default method (default: `text_only()`).
+- **`ProviderImpl::validate_request()`** default method, now called before dispatch in `dispatch_chat` / `dispatch_stream_inner`.
+
+### Changed
+- **Framework-level multimodal validation**: unsupported image/document blocks now return `MotosanError::UnsupportedFeature(...)` before any network call, based on per-provider `capabilities()` declarations.
+
+### Removed
+- Internal `reject_document_blocks()` helper from provider modules (superseded by `validate_request()`).
+
+### Tests
+- Added Gemini vision mock tests (`tests/vision_gemini.rs`) and live image test (`tests/gemini_vision_live.rs`).
+
+## [0.13.0] - 2026-04-20
+
+### Added
+- **`Provider::Gemini`** (feature `gemini`): native Google Generative AI HTTP provider (`generativelanguage.googleapis.com`) with chat/stream, tools, system blocks, image input, and retry integration.
+- **`Provider::GeminiCodeAssist`** (feature `gemini-code-assist`, depends on `gemini`): native Google Cloud Code Assist provider (`cloudcode-pa.googleapis.com/v1internal`) using OAuth Bearer tokens and required GCP project ID (`ClientBuilder::gemini_code_assist_project_id(...)`).
+- **Gemini OAuth config** in `motosan-ai-oauth` for PKCE token retrieval used by Gemini Code Assist.
+
+### Notes
+- `GeminiCodeAssist` is stream-only upstream; `chat()` is implemented as stream+collect.
+- Gemini tool results require function name as `tool_call_id` (`functionResponse.name`).
+
 ## [0.12.1] - 2026-04-19
 
 ### Added

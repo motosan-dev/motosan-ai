@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -26,12 +26,7 @@ openai = [
   "dep:tokio-stream",
   "dep:tokio",
 ]
-minimax = [
-  "dep:reqwest",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
+minimax = ["anthropic"]
 ollama = ["openai"]
 ollama_native = [
   "ollama",

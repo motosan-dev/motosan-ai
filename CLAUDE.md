@@ -14,7 +14,7 @@ test-live     # Anthropic integration tests (auto-resolves API key)
 
 ## Rules That Prevent Mistakes
 
-Provider logic goes in `providers/` only — never in `client.rs`/`client.py`. This includes both HTTP providers (Anthropic / OpenAI / MiniMax / Ollama) and CLI backends (`providers/claude_code/`, `providers/codex_cli/` in Rust). All implement `ProviderImpl` and are interchangeable via `Box<dyn ProviderImpl>`.
+Provider logic goes in `providers/` only — never in `client.rs`/`client.py`. This includes HTTP providers (Anthropic / OpenAI / Ollama / Gemini families) and CLI backends (`providers/claude_code/`, `providers/codex_cli/` in Rust). All implement `ProviderImpl` and are interchangeable via `Box<dyn ProviderImpl>`. `Provider::Minimax` is routed via `AnthropicProvider` (Anthropic-compatible endpoint).
 
 Tool call field is `input`, not `args` or `params`. Everywhere, both SDKs.
 
@@ -22,7 +22,7 @@ Tool call field is `input`, not `args` or `params`. Everywhere, both SDKs.
 
 Anthropic and OpenAI serialize tool calls differently. Read `@specs/types.md` and the provider files before touching serialization. Mixing them up is the #1 source of bugs.
 
-Anthropic system prompt goes in top-level `"system"` field. OpenAI/MiniMax system prompt goes in messages array as `role: system`. Getting this wrong = silent failures.
+Anthropic system prompt goes in top-level `"system"` field. OpenAI system prompt goes in messages array as `role: system`. MiniMax (Rust v0.14+) follows Anthropic-compatible wire format.
 
 Anthropic `tool_call_id` only appears in `content_block_start`, never in deltas. The stream adapter must track `current_tool_id` in state.
 

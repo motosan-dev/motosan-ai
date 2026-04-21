@@ -119,12 +119,16 @@ async fn openai_maps_401_429_500() {
 #[tokio::test]
 async fn minimax_maps_401_429_500() {
     let mut server = mockito::Server::new_async().await;
-    let provider =
-        motosan_ai::providers::minimax::MinimaxProvider::new("test-key", None, Some(server.url()))
-            .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
+    let provider = motosan_ai::providers::anthropic::AnthropicProvider::new(
+        "test-key",
+        Some("MiniMax-M2.7".to_string()),
+        Some(format!("{}/anthropic", server.url())),
+    )
+    .with_capabilities(motosan_ai::ProviderCapabilities::text_only())
+    .with_retry_policy(RetryPolicy::new().max_retries(0).jitter(false));
 
     let unauthorized = server
-        .mock("POST", "/chat/completions")
+        .mock("POST", "/anthropic/v1/messages")
         .with_status(401)
         .with_body(json!({"error": {"message": "bad key"}}).to_string())
         .create_async()
@@ -138,7 +142,7 @@ async fn minimax_maps_401_429_500() {
 
     server.reset();
     let rate_limited = server
-        .mock("POST", "/chat/completions")
+        .mock("POST", "/anthropic/v1/messages")
         .with_status(429)
         .with_body(json!({"error": {"message": "too many"}}).to_string())
         .create_async()
@@ -152,7 +156,7 @@ async fn minimax_maps_401_429_500() {
 
     server.reset();
     let provider_error = server
-        .mock("POST", "/chat/completions")
+        .mock("POST", "/anthropic/v1/messages")
         .with_status(500)
         .with_body(json!({"error": {"message": "boom"}}).to_string())
         .create_async()

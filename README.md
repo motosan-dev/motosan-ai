@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.13.1 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.14.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.5.0 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.13.1", features = ["anthropic"] }
+motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
@@ -51,9 +51,9 @@ pip install "motosan-ai[full]"   # all providers
 |----------|---------------|-------------|-------------|
 | Anthropic | `claude-sonnet-4-6` | `anthropic` | `[anthropic]` |
 | OpenAI | `gpt-5.3-codex` | `openai` | `[openai]` |
-| MiniMax | `MiniMax-M2.5-highspeed` | `minimax` | `[minimax]` |
+| MiniMax | `MiniMax-M2.7` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
-| Gemini | `gemini-2.5-flash` | `gemini` | — |
+| Gemini | `gemini-2.0-flash` | `gemini` | — |
 | Gemini Code Assist | `gemini-2.5-flash` | `gemini-code-assist` | — |
 | Claude Code CLI | (CLI default) | `claude-code` | — |
 | Codex CLI | (CLI default) | `codex-cli` | — |
@@ -196,7 +196,7 @@ while let Some(event) = stream.next().await {
 from motosan_ai import Client, Message
 
 client = Client.anthropic()
-async for event in await client.stream([Message.user("Hello")]):
+async for event in client.stream([Message.user("Hello")]):
     if event.done:
         break
     print(event.content, end="", flush=True)

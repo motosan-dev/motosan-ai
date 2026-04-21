@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.14.0] — 2026-04-21
+
+### Breaking (Rust only)
+
+- **MiniMax provider path switched to Anthropic-compatible API**: `Provider::Minimax` now routes through `AnthropicProvider` and sends requests to `/anthropic/v1/messages`.
+- **Removed legacy `MinimaxProvider`** (`sdks/rust/src/providers/minimax.rs`).
+- **Removed `ClientBuilder::minimax_expose_reasoning(bool)`**.
+- **Removed `DEFAULT_MINIMAX_MODEL`** export.
+
+### Added (Rust only)
+
+- **`ClientBuilder::minimax_base_url(...)`** for MiniMax endpoint override. Defaults to `https://api.minimax.io/anthropic`; CN users can set `https://api.minimaxi.com/anthropic`.
+- **`AnthropicProvider::with_capabilities(...)`** for instance-level capability overrides (used by MiniMax routing as text-only).
+
+### Changed (Rust only)
+
+- MiniMax default model is now `MiniMax-M2.7`.
+- `minimax` Cargo feature now aliases `anthropic` (`minimax = ["anthropic"]`).
+
+### Tests
+
+- Added `sdks/rust/tests/anthropic_minimax_routing.rs`.
+- Updated existing Rust tests to remove assumptions about the deleted OpenAI-compatible MiniMax path.
+
 ## [rust-0.13.1] — 2026-04-20
 
 ### Added (Rust only)

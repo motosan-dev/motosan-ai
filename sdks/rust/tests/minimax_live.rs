@@ -7,7 +7,8 @@
 
 #![cfg(feature = "minimax")]
 
-use motosan_ai::{ChatRequest, Client, Message, Provider, StopReason};
+use motosan_ai::{ChatRequest, Client, Message, Provider, StopReason, Tool, ToolChoice};
+use serde_json::json;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
@@ -31,6 +32,124 @@ fn client() -> Option<Client> {
 
 async fn cooldown() {
     tokio::time::sleep(Duration::from_secs(2)).await;
+}
+
+#[tokio::test]
+async fn live_minimax_chat_basic_returns_text() {
+    let Some(client) = client() else {
+        eprintln!("MINIMAX_API_KEY not set, skipping");
+        return;
+    };
+
+    let response = client
+        .chat(vec![Message::user("Reply with exactly: pong")])
+        .await
+        .expect("chat failed");
+
+    assert!(
+        !response.content.trim().is_empty(),
+        "expected non-empty content from basic minimax chat"
+    );
+
+    cooldown().await;
+}
+
+#[tokio::test]
+async fn live_minimax_tool_use_roundtrip() {
+    let Some(client) = client() else {
+        eprintln!("MINIMAX_API_KEY not set, skipping");
+        return;
+    };
+
+    let tools = vec![Tool {
+        name: "add".to_string(),
+        description: Some("Add two integers".to_string()),
+        input_schema: Some(json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "integer"},
+                "b": {"type": "integer"}
+            },
+            "required": ["a", "b"]
+        })),
+        cache: false,
+    }];
+
+    let turn1 = client
+        .chat_with(
+            ChatRequest::builder()
+                .message(Message::user("Use the add tool to compute 2 + 3."))
+                .tools(tools.clone())
+                .tool_choice(ToolChoice::Required)
+                .build(),
+        )
+        .await
+        .expect("turn1 failed");
+
+    assert!(
+        !turn1.tool_calls.is_empty(),
+        "expected tool call in turn1, got stop_reason={:?}, content={:?}",
+        turn1.stop_reason,
+        turn1.content
+    );
+
+    let tc = &turn1.tool_calls[0];
+    let a = tc.input.get("a").and_then(|v| v.as_i64()).unwrap_or(0);
+    let b = tc.input.get("b").and_then(|v| v.as_i64()).unwrap_or(0);
+    let result = (a + b).to_string();
+
+    let turn2_messages = vec![
+        Message::user("Use the add tool to compute 2 + 3."),
+        Message::assistant_with_tool_calls(turn1.content.clone(), turn1.tool_calls.clone()),
+        Message::tool_result(tc.id.clone(), result),
+    ];
+
+    let turn2 = client
+        .chat_with(
+            ChatRequest::builder()
+                .messages(turn2_messages)
+                .tools(tools)
+                .build(),
+        )
+        .await
+        .expect("turn2 failed");
+
+    assert!(
+        turn2.content.contains('5') || turn2.content.to_lowercase().contains("five"),
+        "expected final answer mentioning 5, got: {:?}",
+        turn2.content
+    );
+
+    cooldown().await;
+}
+
+#[tokio::test]
+async fn live_minimax_thinking_blocks_exposed() {
+    let Some(client) = client() else {
+        eprintln!("MINIMAX_API_KEY not set, skipping");
+        return;
+    };
+
+    let response = client
+        .chat_with(
+            ChatRequest::builder()
+                .message(Message::user(
+                    "Solve 23*47 step by step, then give only the final number on the last line.",
+                ))
+                .thinking(256)
+                .build(),
+        )
+        .await
+        .expect("thinking chat failed");
+
+    assert!(
+        response.thinking.as_deref().is_some_and(|s| !s.trim().is_empty()),
+        "expected non-empty thinking content when thinking is enabled; got thinking={:?}, content={:?}",
+        response.thinking,
+        response.content
+    );
+
+    cooldown().await;
 }
 
 #[tokio::test]

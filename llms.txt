@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.13.1
+- Python 0.5.0 · Rust 0.14.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -18,7 +18,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.13.1", features = ["anthropic"] }
+motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust only, shell out to a local binary):
@@ -42,8 +42,10 @@ motosan-ai = { version = "0.13.1", features = ["anthropic"] }
 |-----------|---------------------------|
 | Anthropic | `claude-sonnet-4-6`       |
 | OpenAI    | `gpt-5.3-codex`          |
-| MiniMax   | `MiniMax-M2.5-highspeed` |
+| MiniMax   | `MiniMax-M2.7` |
 | Ollama    | `llama3.2`               |
+| Gemini    | `gemini-2.0-flash`       |
+| GeminiCodeAssist | `gemini-2.5-flash` |
 
 Override per client or per request.
 
@@ -73,40 +75,37 @@ print(resp.usage)          # Usage: input_tokens, output_tokens
 print(resp.tool_calls)     # list[ToolCall] — empty if no tool use
 ```
 
-### chat_with() — full control
+### chat() — full control via keyword args
 
 ```python
-from motosan_ai import ChatRequest
-
-resp = await client.chat_with(ChatRequest(
-    messages=[Message.user("Hello")],
-    model="claude-sonnet-4-6",            # optional override
-    system="You are a helpful assistant.",  # optional system prompt
-    temperature=0.7,                       # optional
-    max_tokens=1024,                       # optional
-    tools=[...],                           # optional — see Tool Use
-    provider_options={"key": "val"},       # optional — provider escape hatch
-))
+resp = await client.chat(
+    [Message.user("Hello")],
+    system="You are a helpful assistant.",
+    temperature=0.7,
+    max_tokens=1024,
+    tools=[...],
+    provider_options={"key": "val"},
+)
 ```
 
 ### stream() — streaming text
 
 ```python
-async for event in await client.stream([Message.user("Tell me a story")]):
+async for event in client.stream([Message.user("Tell me a story")]):
     if event.event_type == "text":
         print(event.content, end="", flush=True)
     if event.done:
         break
 ```
 
-### stream_with() — streaming + tools
+### stream() — with tools
 
 ```python
-async for event in await client.stream_with(ChatRequest(
-    messages=messages,
+async for event in client.stream(
+    messages,
     tools=tools,
     system="You are helpful.",
-)):
+):
     # handle events (see Streaming section)
 ```
 
@@ -120,19 +119,14 @@ Message.assistant_with_tool_calls("Let me check", tool_calls=[...])
 Message.tool_result(tool_call_id="call_123", content='{"result": 42}')
 ```
 
-### RetryPolicy
+### Retry
 
 ```python
-from motosan_ai import RetryPolicy
+# default retries = 3
+client = Client.anthropic(api_key="...", max_retries=3)
 
-client = Client.anthropic(
-    retry_policy=RetryPolicy(
-        max_retries=3,        # default 3
-        base_delay_ms=500,    # default 100
-        max_delay_ms=10000,   # default 2000
-        jitter=True,          # default True
-    )
-)
+# disable retries
+client = Client.anthropic(api_key="...", max_retries=0)
 ```
 
 ### Error Handling
@@ -172,7 +166,7 @@ let client = Client::builder()
 
 Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `GeminiCodeAssist` | `ClaudeCode` | `CodexCli` | `GeminiCli`
 
-`Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.5-flash` (note: `gemini-2.0-flash` is deprecated for new users). **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
+`Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
 
 `GeminiCodeAssist` (v0.13.0, feature `gemini-code-assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` PKCE flow). Requires GCP project ID via `.gemini_code_assist_project_id("...")`. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
 
@@ -338,14 +332,14 @@ let tools = vec![Tool {
 ### Multi-turn Tool Loop (Python)
 
 ```python
-from motosan_ai import Client, Message, ChatRequest
+from motosan_ai import Client, Message, StopReason
 import json
 
 async def agent_loop(client, user_input: str, tools):
     messages = [Message.user(user_input)]
     while True:
-        resp = await client.chat_with(ChatRequest(messages=messages, tools=tools))
-        if resp.stop_reason != "tool_use" or not resp.tool_calls:
+        resp = await client.chat(messages, tools=tools)
+        if resp.stop_reason != StopReason.tool_use or not resp.tool_calls:
             return resp.content
 
         messages.append(Message.assistant_with_tool_calls(resp.content, resp.tool_calls))
@@ -402,8 +396,8 @@ event.tool_call_name       — tool name, on tool_call_start (Optional)
 event.tool_call_args_delta — incremental JSON args, on tool_call_args (Optional)
 event.usage                — token tally on usage events (Optional)
 event.stop_reason          — StopReason on the terminal `done` event (Optional)
-                             • Anthropic: from message_delta.delta.stop_reason
-                             • OpenAI / MiniMax: from choices[0].finish_reason
+                             • Anthropic / MiniMax: from message_delta.delta.stop_reason
+                             • OpenAI: from choices[0].finish_reason
                              • None on intermediate events
                              • None on done events for providers that don't report a reason
 ```
@@ -430,7 +424,11 @@ Buffer `tool_call_args_delta` until `tool_call_end`, then JSON parse.
 
 ```python
 pending = {}  # tool_call_id → {"name": str, "args": str}
-async for event in await client.stream_with(request):
+async for event in client.stream(
+    request.messages,
+    tools=request.tools,
+    system=request.system,
+):
     match event.event_type:
         case "text":
             print(event.content, end="", flush=True)
@@ -506,7 +504,7 @@ fn capabilities(&self) -> ProviderCapabilities {
 let client = Client::builder()
     .provider(Provider::Gemini)
     .api_key("AIzaSy...")               // Google AI Studio API key
-    .model("gemini-2.5-flash")          // optional, this is the default
+    .model("gemini-2.0-flash")          // optional, this is the default
     .build()?;
 
 // tool use multi-turn: pass function name (not call ID) as tool_call_id
@@ -515,7 +513,7 @@ let tc = &resp.tool_calls[0];
 let result = Message::tool_result(&tc.name, tool_output); // ← tc.name, NOT tc.id
 ```
 
-Billing: pay-per-token. Free tier available but rate-limited. Default model `gemini-2.5-flash`; note `gemini-2.0-flash` is deprecated for new users.
+Billing: pay-per-token. Free tier available but rate-limited. Default model `gemini-2.0-flash`.
 
 ### GeminiCodeAssist (HTTP — cloudcode-pa.googleapis.com)
 
@@ -571,9 +569,12 @@ Defaults: `https://api.openai.com/v1/chat/completions` + `https://api.openai.com
 
 ### MiniMax
 
-- System prompts merged into first user message (not sent as `role: system`)
-- Reasoning blocks (`<think>...</think>`) stripped by default
-- Expose reasoning: `.minimax_expose_reasoning(true)` or `provider_options={"minimax_expose_reasoning": true}`
+- Routed via Anthropic-compatible `/anthropic/v1/messages`
+- Default model: `MiniMax-M2.7` (`MiniMax-M2.7-highspeed` also supported)
+- Default base URL: `https://api.minimax.io/anthropic`
+- CN base URL override: `.minimax_base_url("https://api.minimaxi.com/anthropic")`
+- Uses Anthropic serialization (`tool_use` / `tool_result` content blocks)
+- Declares text-only capabilities (`ProviderCapabilities::text_only()`)
 
 ### Ollama
 

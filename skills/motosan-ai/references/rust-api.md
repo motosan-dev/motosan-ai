@@ -4,8 +4,9 @@
 
 ```toml
 [dependencies]
-motosan-ai = { version = "0.5.4", features = ["anthropic"] }
+motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
+#           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
 
 ## Public Exports
@@ -47,7 +48,7 @@ Provider variants: `Provider::Anthropic` | `Provider::OpenAI` | `Provider::Minim
 .openai_responses_fallback(true)           // fallback to /v1/responses on 404
 
 // MiniMax
-.minimax_expose_reasoning(true)  // show <think> blocks instead of stripping
+.minimax_base_url("https://api.minimaxi.com/anthropic")  // optional CN endpoint override
 
 // Ollama
 .ollama_base_url("http://localhost:11434")  // default

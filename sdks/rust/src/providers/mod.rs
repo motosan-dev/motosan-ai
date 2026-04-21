@@ -298,9 +298,6 @@ pub mod anthropic;
 #[cfg(feature = "openai")]
 pub mod openai;
 
-#[cfg(feature = "minimax")]
-pub mod minimax;
-
 #[cfg(feature = "ollama_native")]
 pub mod ollama;
 

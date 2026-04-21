@@ -15,7 +15,7 @@ pub struct Client {
     openai_responses_fallback: bool,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
-    minimax_expose_reasoning: bool,
+    minimax_base_url: Option<String>,
     ollama_base_url: String,
     ollama_native: bool,
     ollama_think: Option<String>,
@@ -72,10 +72,6 @@ impl Client {
 
     pub fn stream_read_timeout(&self) -> Option<Duration> {
         self.stream_read_timeout
-    }
-
-    pub fn minimax_expose_reasoning(&self) -> bool {
-        self.minimax_expose_reasoning
     }
 
     pub fn openai_auth_header(&self) -> Option<&str> {
@@ -521,13 +517,24 @@ impl Client {
     }
 
     #[cfg(feature = "minimax")]
-    fn build_minimax_provider(&self) -> crate::providers::minimax::MinimaxProvider {
-        crate::providers::minimax::MinimaxProvider::new(
+    fn build_minimax_provider(&self) -> crate::providers::anthropic::AnthropicProvider {
+        use crate::types::ProviderCapabilities;
+
+        let model = self
+            .model
+            .clone()
+            .unwrap_or_else(|| "MiniMax-M2.7".to_string());
+        let base_url = self
+            .minimax_base_url
+            .clone()
+            .unwrap_or_else(|| "https://api.minimax.io/anthropic".to_string());
+
+        crate::providers::anthropic::AnthropicProvider::new(
             self.api_key.clone(),
-            self.model.clone(),
-            None,
+            Some(model),
+            Some(base_url),
         )
-        .with_expose_reasoning(self.minimax_expose_reasoning)
+        .with_capabilities(ProviderCapabilities::text_only())
         .with_retry_policy(self.retry_policy.clone())
     }
 
@@ -650,7 +657,7 @@ pub struct ClientBuilder {
     openai_responses_fallback: Option<bool>,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
-    minimax_expose_reasoning: Option<bool>,
+    minimax_base_url: Option<String>,
     ollama_base_url: Option<String>,
     ollama_native: Option<bool>,
     ollama_think: Option<String>,
@@ -726,8 +733,8 @@ impl ClientBuilder {
         self
     }
 
-    pub fn minimax_expose_reasoning(mut self, minimax_expose_reasoning: bool) -> Self {
-        self.minimax_expose_reasoning = Some(minimax_expose_reasoning);
+    pub fn minimax_base_url(mut self, minimax_base_url: impl Into<String>) -> Self {
+        self.minimax_base_url = Some(minimax_base_url.into());
         self
     }
 
@@ -853,7 +860,7 @@ impl ClientBuilder {
             openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
             openai_chat_url: self.openai_chat_url,
             openai_responses_url: self.openai_responses_url,
-            minimax_expose_reasoning: self.minimax_expose_reasoning.unwrap_or(false),
+            minimax_base_url: self.minimax_base_url,
             ollama_base_url: self
                 .ollama_base_url
                 .unwrap_or_else(|| "http://localhost:11434".to_string()),

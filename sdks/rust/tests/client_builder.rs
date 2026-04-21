@@ -51,22 +51,22 @@ fn builder_uses_default_retry_policy_and_allows_override() {
     );
 }
 
-#[test]
-fn builder_defaults_minimax_expose_reasoning_to_false_and_allows_override() {
-    let default_client = Client::builder()
+#[cfg(feature = "minimax")]
+#[tokio::test]
+async fn builder_accepts_minimax_base_url_override() {
+    let client = Client::builder()
         .provider(Provider::Minimax)
         .api_key("k")
+        .minimax_base_url("https://api.minimaxi.com/anthropic")
         .build()
         .expect("build client");
-    assert!(!default_client.minimax_expose_reasoning());
 
-    let custom_client = Client::builder()
-        .provider(Provider::Minimax)
-        .api_key("k")
-        .minimax_expose_reasoning(true)
-        .build()
-        .expect("build client");
-    assert!(custom_client.minimax_expose_reasoning());
+    // Validation should fire before any network call for text-only minimax.
+    let req = motosan_ai::ChatRequest::builder()
+        .message(Message::user_with_image("look", "abc123", "image/png"))
+        .build();
+    let result = client.chat_with(req).await;
+    assert!(matches!(result, Err(MotosanError::UnsupportedFeature(_))));
 }
 
 #[test]

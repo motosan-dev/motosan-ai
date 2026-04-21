@@ -1,6 +1,5 @@
 pub const DEFAULT_ANTHROPIC_MODEL: &str = "claude-sonnet-4-6";
 pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.3-codex";
-pub const DEFAULT_MINIMAX_MODEL: &str = "MiniMax-M2.5-highspeed";
 pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
 
 pub const ANTHROPIC_MODELS: &[&str] = &[
@@ -17,14 +16,7 @@ pub const ANTHROPIC_MODELS: &[&str] = &[
 
 pub const OPENAI_MODELS: &[&str] = &["gpt-5.3-codex", "gpt-4o"];
 
-pub const MINIMAX_MODELS: &[&str] = &[
-    "MiniMax-M2.5-highspeed",
-    "MiniMax-M2.5",
-    "MiniMax-M2.1-highspeed",
-    "MiniMax-M2.1",
-    "MiniMax-M2",
-    "MiniMax-Text-01",
-];
+pub const MINIMAX_MODELS: &[&str] = &["MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
 
 pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
 

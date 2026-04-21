@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.13.1
+Multi-provider LLM SDK — Python 0.5.0 / Rust 0.14.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist
 
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.13.1", features = ["anthropic"] }
+motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
@@ -43,8 +43,10 @@ codex-oauth = "0.1"
 |-----------|---------------------------|
 | Anthropic | `claude-sonnet-4-6`       |
 | OpenAI    | `gpt-5.3-codex`          |
-| MiniMax   | `MiniMax-M2.5-highspeed` |
+| MiniMax   | `MiniMax-M2.7` |
 | Ollama    | `llama3.2`               |
+| Gemini    | `gemini-2.0-flash`       |
+| Gemini Code Assist | `gemini-2.5-flash` |
 
 ## Minimal Example
 
@@ -114,7 +116,7 @@ if token.is_expired() { /* refresh */ }
 ## Key Design Decisions
 
 - **`BoxStream` (Rust)**: `Pin<Box<dyn Stream<Item = StreamEvent> + Send>>` — items are `StreamEvent` directly, NOT `Result<StreamEvent>`
-- **Stream `done` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with `done == true`, even when the upstream provider closes without `[DONE]` and without any `finish_reason` chunk. Callers can rely on `if event.done { break; }` to terminate cleanly. The terminal event carries `stop_reason: Option<StopReason>` when the provider reports one (Anthropic `message_delta.stop_reason`, OpenAI/MiniMax `choices[0].finish_reason`); `None` otherwise. `collect_stream` honors the explicit reason and only falls back to a tool-calls heuristic when none was reported.
+- **Stream `done` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with `done == true`, even when the upstream provider closes without `[DONE]` and without any `finish_reason` chunk. Callers can rely on `if event.done { break; }` to terminate cleanly. The terminal event carries `stop_reason: Option<StopReason>` when the provider reports one (Anthropic/MiniMax `message_delta.stop_reason`, OpenAI `choices[0].finish_reason`); `None` otherwise. `collect_stream` honors the explicit reason and only falls back to a tool-calls heuristic when none was reported.
 - **`ChatRequest`**: Use builder pattern in Rust (`ChatRequest::builder().messages(...).build()`), dataclass in Python
 - **ThinkStripper**: Applied automatically in all `stream()` / `stream_with()` calls — no manual setup needed
 - **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens

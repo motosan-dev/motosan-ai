@@ -1,6 +1,6 @@
 # motosan-ai (Rust SDK)
 
-Feature-flagged Rust SDK for Anthropic, OpenAI, MiniMax, Ollama, and the Claude Code / Codex / Gemini CLIs.
+Feature-flagged Rust SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini (HTTP + Code Assist), and the Claude Code / Codex / Gemini CLIs.
 
 ## Quickstart
 
@@ -90,7 +90,7 @@ let msg = Message::user_with_blocks(vec![
 ]);
 ```
 
-Works with both Anthropic and OpenAI providers. The SDK automatically converts to each provider's native format.
+Works with Anthropic, OpenAI, and Gemini HTTP providers. The SDK automatically converts to each provider's native format.
 
 ## Build
 
@@ -106,14 +106,21 @@ cargo build -p motosan-ai --all-features
 - `minimax`
 - `ollama` (OpenAI-compatible mode)
 - `ollama_native` (native `/api/chat` endpoint with NDJSON streaming)
-- `full` (enables all providers)
+- `gemini` (Google Generative AI HTTP API)
+- `gemini-code-assist` (Google Cloud Code Assist HTTP API; depends on `gemini`)
+- `claude-code` (local Claude Code CLI backend)
+- `codex-cli` (local Codex CLI backend)
+- `gemini-cli` (local Gemini CLI backend)
+- `full` (enables HTTP providers: `anthropic`, `openai`, `minimax`, `ollama`, `ollama_native`, `gemini`, `gemini-code-assist`)
 
 ## Model Defaults
 
 - Anthropic: `claude-sonnet-4-6`
 - OpenAI: `gpt-5.3-codex`
-- MiniMax: `MiniMax-M2.5-highspeed`
+- MiniMax: `MiniMax-M2.7`
 - Ollama: `llama3.2`
+- Gemini: `gemini-2.0-flash`
+- Gemini Code Assist: `gemini-2.5-flash`
 
 Override per client:
 
@@ -270,37 +277,37 @@ ANTHROPIC_API_KEY=... cargo test --features full --test anthropic_live -- --test
 
 ## MiniMax Compatibility
 
-MiniMax provider uses OpenAI-compatible chat completions path (`/chat/completions`) with `Authorization: Bearer` authentication.
-The SDK also maps MiniMax payload-level `base_resp` errors (e.g. invalid API key) into SDK error variants.
-For compatibility, MiniMax system prompts are merged into the first user message (instead of sending `role: system`).
+MiniMax routing uses Anthropic-compatible `/anthropic/v1/messages` via `Provider::Minimax`.
+No dedicated `MinimaxProvider` type is required on the client path.
 
-For `MiniMax-M2.5-highspeed`, responses can include `<think>...</think>` reasoning blocks.
-By default, the SDK strips these blocks and returns only the final answer text.
-If `message.content` is empty (or only contains `<think>` blocks), the SDK falls back to
-`message.reasoning_content` for chat and stream parsing.
+- Default model: `MiniMax-M2.7` (also supports `MiniMax-M2.7-highspeed`)
+- Default base URL: `https://api.minimax.io/anthropic`
+- CN base URL override: `.minimax_base_url("https://api.minimaxi.com/anthropic")`
+- Serialization follows Anthropic wire format (`tool_use` / `tool_result` blocks)
+- Capabilities are text-only (`ProviderCapabilities::text_only()`)
 
-To expose raw reasoning content:
+Example:
 
 ```rust
-use motosan_ai::{Client, Provider};
+use motosan_ai::{Client, Message, Provider};
 
 let client = Client::builder()
     .provider(Provider::Minimax)
     .api_key("...")
-    .minimax_expose_reasoning(true)
+    .model("MiniMax-M2.7")
     .build()?;
+
+let resp = client.chat(vec![Message::user("hello")]).await?;
 ```
 
-Or per request:
+CN endpoint:
 
 ```rust
-use motosan_ai::{ChatRequest, Message};
-use serde_json::json;
-
-let request = ChatRequest::builder()
-    .message(Message::user("hello"))
-    .provider_options(json!({"minimax_expose_reasoning": true}))
-    .build();
+let client = Client::builder()
+    .provider(Provider::Minimax)
+    .api_key("...")
+    .minimax_base_url("https://api.minimaxi.com/anthropic")
+    .build()?;
 ```
 
 Error handling policy reference: `docs/error-handling-policy.md`.
@@ -310,7 +317,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.12.1", features = ["claude-code"] }
+motosan-ai = { version = "0.14.0", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -419,7 +426,7 @@ Notes:
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.12.1", features = ["codex-cli"] }
+motosan-ai = { version = "0.14.0", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -482,7 +489,7 @@ Notes:
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
 ```toml
-motosan-ai = { version = "0.12.1", features = ["gemini-cli"] }
+motosan-ai = { version = "0.14.0", features = ["gemini-cli"] }
 ```
 
 **Option A — via `Client::builder()`**:

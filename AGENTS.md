@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.13.1 (crates.io) · Python v0.5.0 (PyPI)
+Rust v0.14.0 (crates.io) · Python v0.5.0 (PyPI)
 
 ## Where To Find Things
 
@@ -31,10 +31,14 @@ Anthropic and OpenAI use completely different wire formats. Mixing them up cause
 - Tool result: `role:"user", content:[{"type":"tool_result","tool_use_id":...,"content":...}]`
 - System: top-level `"system"` field — NOT in messages
 
-**OpenAI / MiniMax:**
+**OpenAI:**
 - Tool calls: `"tool_calls":[{"id":...,"type":"function","function":{"name":...,"arguments":"<JSON string>"}}]`
 - `arguments` is a **JSON string**, not an object
 - Tool result: `role:"tool", tool_call_id:..., content:...`
+
+**MiniMax (Rust v0.14+):**
+- Routed through Anthropic-compatible `/anthropic/v1/messages`
+- Uses Anthropic wire format (same shape as above Anthropic section)
 
 ## Cross-SDK Consistency
 

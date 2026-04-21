@@ -134,7 +134,7 @@ Passing unsupported content returns `Err(UnsupportedFeature)` before any network
 |----------|---------|
 | Anthropic | `claude-sonnet-4-6` |
 | OpenAI | `gpt-5.3-codex` |
-| MiniMax | `MiniMax-M2.5-highspeed` |
+| MiniMax | `MiniMax-M2.7` |
 | Ollama | `llama3.2` |
-| Gemini | `gemini-2.5-flash` |
+| Gemini | `gemini-2.0-flash` |
 | GeminiCodeAssist | `gemini-2.5-flash` |
