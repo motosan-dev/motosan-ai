@@ -1,7 +1,8 @@
 # motosan-ai (Python SDK)
 
 Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, and Ollama.
-All providers use `httpx` directly — no official provider SDKs required.
+All HTTP providers use `httpx` directly — no official provider SDKs required.
+Also includes a `ClaudeCodeClient` backend that shells out to local `claude` CLI.
 
 ## Installation
 
@@ -161,8 +162,34 @@ from motosan_ai import Client
 client = Client.ollama(model="llama3.2")
 
 # Native Ollama API mode (supports think/keep_alive/num_ctx)
-client = Client.ollama(model="llama3.2", ollama_native=True, ollama_think=True)
+client = Client.ollama(model="llama3.2", native=True, think=True)
 ```
+
+## Claude Code CLI Backend
+
+```python
+from motosan_ai import ChatRequest, ClaudeCodeClient, Message
+
+client = ClaudeCodeClient().model("sonnet")
+
+response = await client.chat(
+    ChatRequest(messages=[Message.user("Hello from claude CLI")])
+)
+print(response.content)
+
+async for event in client.stream(
+    ChatRequest(messages=[Message.user("Stream a short poem")])
+):
+    if event.content:
+        print(event.content, end="")
+    if event.done:
+        break
+```
+
+Notes:
+- Uses `CLAUDE_CODE_PATH` env var or `claude` in `PATH`
+- `tool_calls` is always empty (tools run inside CLI)
+- `agent_mode(True)` enables `--dangerously-skip-permissions` + JSON output parsing
 
 ## Anthropic Auth Matrix
 

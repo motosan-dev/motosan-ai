@@ -16,3 +16,4 @@ sdks/python/**/.pytest_cache/
 sdks/typescript/node_modules/
 sdks/typescript/dist/
 .worktrees/
+.env

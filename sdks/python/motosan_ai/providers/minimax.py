@@ -235,6 +235,6 @@ class MinimaxProvider:
                     if finish_reason == "tool_calls":
                         yield StreamEvent(content="", done=False, event_type="tool_call_end")
         except Exception as exc:
-            if isinstance(exc, (AuthError, RateLimitError, InvalidRequestError, ProviderError)):
+            if isinstance(exc, AuthError | RateLimitError | InvalidRequestError | ProviderError):
                 raise
             raise NetworkError(str(exc)) from exc

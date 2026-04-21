@@ -6,10 +6,9 @@
 from motosan_ai import Client, Message
 
 client = Client.anthropic()
-stream = await client.stream([Message.user("Tell me a story")])
 
 full_text = ""
-async for event in stream:
+async for event in client.stream([Message.user("Tell me a story")]):
     if event.event_type == "text" and event.content:
         print(event.content, end="", flush=True)
         full_text += event.content
@@ -56,7 +55,11 @@ import json
 
 pending = {}  # tool_call_id -> {"name": str, "args": str}
 
-async for event in await client.stream_with(request):
+async for event in client.stream(
+    request.messages,
+    tools=request.tools,
+    system=request.system,
+):
     match event.event_type:
         case "text":
             print(event.content, end="", flush=True)

@@ -48,40 +48,37 @@ resp.tool_calls      # list[ToolCall] — empty if no tool use
 resp.model           # str — model used
 ```
 
-### `chat_with()` — full control
+### `chat()` — full control via keyword args
 
 ```python
-from motosan_ai import ChatRequest, Message
-
-resp = await client.chat_with(ChatRequest(
-    messages=[Message.user("Hello")],
-    model="claude-sonnet-4-6",             # optional override
-    system="You are a helpful assistant.",   # optional
-    temperature=0.7,                        # optional
-    max_tokens=1024,                        # optional
-    tools=[...],                            # optional — see tool-use.md
-    provider_options={"key": "val"},        # optional escape hatch
-))
+resp = await client.chat(
+    [Message.user("Hello")],
+    system="You are a helpful assistant.",
+    temperature=0.7,
+    max_tokens=1024,
+    tools=[...],
+    provider_options={"key": "val"},
+)
 ```
 
 ### `stream()` — streaming text
 
 ```python
-async for event in await client.stream([Message.user("Tell me a story")]):
+async for event in client.stream([Message.user("Tell me a story")]):
     if event.event_type == "text":
         print(event.content, end="", flush=True)
     if event.done:
         break
 ```
 
-### `stream_with()` — streaming + tools + full control
+### `stream()` with tools
 
 ```python
-async for event in await client.stream_with(ChatRequest(
-    messages=messages,
+async for event in client.stream(
+    messages,
     tools=tools,
     system="You are helpful",
-)):
+):
     # handle events — see streaming.md
 ```
 
@@ -112,19 +109,14 @@ event.tool_call_name       # str | None (on tool_call_start)
 event.tool_call_args_delta # str | None (on tool_call_args)
 ```
 
-## RetryPolicy
+## Retry
 
 ```python
-from motosan_ai import RetryPolicy
+# default retries = 3
+client = Client.anthropic(api_key="...", max_retries=3)
 
-client = Client.anthropic(
-    retry_policy=RetryPolicy(
-        max_retries=3,        # default 3
-        base_delay_ms=500,    # default 100
-        max_delay_ms=10000,   # default 2000
-        jitter=True,          # default True
-    )
-)
+# disable retries
+client = Client.anthropic(api_key="...", max_retries=0)
 ```
 
 Retries on: 429, 5xx, timeout/connect errors. Exponential backoff with jitter.
@@ -149,7 +141,7 @@ Subclasses: `AuthError`, `RateLimitError`, `InvalidRequestError`, `ConfigError`,
 
 ## ThinkStripper
 
-Applied automatically in `stream()` / `stream_with()`. Manual use:
+Applied automatically in `stream()`. Manual use:
 
 ```python
 from motosan_ai import ThinkStripper

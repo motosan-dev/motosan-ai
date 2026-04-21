@@ -44,19 +44,16 @@ tool_call.input — parsed arguments (Python: dict, Rust: serde_json::Value)
 ## Multi-turn Tool Loop (Python)
 
 ```python
-from motosan_ai import Client, Message, ChatRequest
+from motosan_ai import Client, Message, StopReason
 import json
 
 async def agent_loop(client, user_input: str, tools):
     messages = [Message.user(user_input)]
 
     while True:
-        resp = await client.chat_with(ChatRequest(
-            messages=messages,
-            tools=tools,
-        ))
+        resp = await client.chat(messages, tools=tools)
 
-        if resp.stop_reason != "tool_use" or not resp.tool_calls:
+        if resp.stop_reason != StopReason.tool_use or not resp.tool_calls:
             return resp.content  # done — final text response
 
         # Append assistant message with tool calls
@@ -137,7 +134,11 @@ import json
 
 pending = {}  # tool_call_id -> {"name": str, "args": str}
 
-async for event in await client.stream_with(request):
+async for event in client.stream(
+    request.messages,
+    tools=request.tools,
+    system=request.system,
+):
     match event.event_type:
         case "text":
             print(event.content, end="", flush=True)
