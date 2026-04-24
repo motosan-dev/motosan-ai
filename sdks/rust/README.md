@@ -119,7 +119,7 @@ cargo build -p motosan-ai --all-features
 - OpenAI: `gpt-5.3-codex`
 - MiniMax: `MiniMax-M2.7`
 - Ollama: `llama3.2`
-- Gemini: `gemini-2.0-flash`
+- Gemini: `gemini-2.5-flash`
 - Gemini Code Assist: `gemini-2.5-flash`
 
 Override per client:

@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.14.1] - 2026-04-25
+
+### Fixed
+- **Gemini default model** — `DEFAULT_GEMINI_MODEL` was `gemini-2.0-flash`, which Google deprecated for new users (returns HTTP 404: "This model models/gemini-2.0-flash is no longer available to new users"). Default bumped to `gemini-2.5-flash`. `GEMINI_MODELS` list reordered — 2.5 family first, 2.0 kept for back-compat with existing pinned callers. `tests/gemini_live.rs` no longer pins the deprecated model so it picks up the new default. README updated.
+
+### Notes
+- Verified against live API: all 7 `gemini_live.rs` tests pass with `GEMINI_API_KEY` set.
+- Python SDK v0.8.2 carries the equivalent fix.
+
 ## [0.14.0] - 2026-04-21
 
 ### Breaking

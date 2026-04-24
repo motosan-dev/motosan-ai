@@ -661,7 +661,7 @@ mod tests {
                 "finishReason": "STOP"
             }],
             "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
-            "modelVersion": "gemini-2.0-flash"
+            "modelVersion": "gemini-2.5-flash"
         });
         let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
         assert_eq!(resp.content, "Hello world");
@@ -669,7 +669,7 @@ mod tests {
         assert_eq!(resp.stop_reason, StopReason::EndTurn);
         assert_eq!(resp.usage.input_tokens, 10);
         assert_eq!(resp.usage.output_tokens, 5);
-        assert_eq!(resp.model, "gemini-2.0-flash");
+        assert_eq!(resp.model, "gemini-2.5-flash");
     }
 
     #[test]
@@ -683,7 +683,7 @@ mod tests {
                 "finishReason": "STOP"
             }],
             "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 3},
-            "modelVersion": "gemini-2.0-flash"
+            "modelVersion": "gemini-2.5-flash"
         });
         let resp = GeminiProvider::parse_response(&raw, DEFAULT_GEMINI_MODEL);
         assert_eq!(resp.tool_calls.len(), 1);
@@ -1055,7 +1055,7 @@ mod tests {
                     r#"{
                         "candidates":[{"content":{"parts":[{"text":"Hi!"}],"role":"model"},"finishReason":"STOP"}],
                         "usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":2},
-                        "modelVersion":"gemini-2.0-flash"
+                        "modelVersion":"gemini-2.5-flash"
                     }"#,
                 )
                 .create_async()

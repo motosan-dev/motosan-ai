@@ -41,7 +41,7 @@ fn ok_body(text: &str) -> String {
             "finishReason": "STOP"
         }],
         "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
-        "modelVersion": "gemini-2.0-flash"
+        "modelVersion": "gemini-2.5-flash"
     })
     .to_string()
 }
@@ -56,7 +56,7 @@ fn tool_body(fn_name: &str, args: serde_json::Value) -> String {
             "finishReason": "STOP"
         }],
         "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 3},
-        "modelVersion": "gemini-2.0-flash"
+        "modelVersion": "gemini-2.5-flash"
     })
     .to_string()
 }

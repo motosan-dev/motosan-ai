@@ -18,13 +18,15 @@ pub const OPENAI_MODELS: &[&str] = &["gpt-5.3-codex", "gpt-4o"];
 
 pub const MINIMAX_MODELS: &[&str] = &["MiniMax-M2.7", "MiniMax-M2.7-highspeed"];
 
-pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.0-flash";
+pub const DEFAULT_GEMINI_MODEL: &str = "gemini-2.5-flash";
 
 pub const GEMINI_MODELS: &[&str] = &[
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-pro",
+    "gemini-flash-latest",
     "gemini-2.0-flash",
     "gemini-2.0-flash-lite",
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
     "gemini-1.5-pro",
     "gemini-1.5-flash",
 ];

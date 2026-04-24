@@ -27,7 +27,6 @@ fn client() -> Option<Client> {
         Client::builder()
             .provider(Provider::Gemini)
             .api_key(key)
-            .model("gemini-2.0-flash")
             .build()
             .expect("client build"),
     )
