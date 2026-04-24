@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -24,6 +25,8 @@ _CLAUDE_CODE_PREFIX = "You are Claude Code, Anthropic's official CLI for Claude.
 
 
 class AnthropicProvider:
+    capabilities: ProviderCapabilities = ProviderCapabilities.full()
+
     def __init__(
         self,
         api_key: str,

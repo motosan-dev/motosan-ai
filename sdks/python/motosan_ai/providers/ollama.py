@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from motosan_ai.error import NetworkError, ProviderError
+from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -21,6 +22,8 @@ from motosan_ai.types import (
 
 
 class OllamaProvider:
+    capabilities: ProviderCapabilities = ProviderCapabilities.text_only()
+
     def __init__(
         self,
         model: str = "llama3.2",

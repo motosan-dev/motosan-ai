@@ -7,6 +7,7 @@ import os
 from collections.abc import AsyncIterator
 
 from motosan_ai.error import ProviderError
+from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -110,6 +111,8 @@ def _parse_ndjson_line(line: str) -> StreamEvent | None:
 
 class ClaudeCodeClient:
     """Client that shells out to the ``claude`` CLI binary."""
+
+    capabilities: ProviderCapabilities = ProviderCapabilities.text_only()
 
     def __init__(self, binary_path: str | None = None) -> None:
         if binary_path is None:

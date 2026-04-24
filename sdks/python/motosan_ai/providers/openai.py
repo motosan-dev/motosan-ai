@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -22,6 +23,8 @@ _DEFAULT_BASE_URL = "https://api.openai.com"
 
 
 class OpenAIProvider:
+    capabilities: ProviderCapabilities = ProviderCapabilities.with_image()
+
     def __init__(self, api_key: str, model: str | None = None, base_url: str | None = None) -> None:
         self.api_key = api_key
         self.model = model or "gpt-4o"

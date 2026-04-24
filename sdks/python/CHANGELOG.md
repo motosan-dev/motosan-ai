@@ -2,6 +2,35 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.6.0] - 2026-04-24
+
+### Added
+- **Type foundation for Rust SDK parity** — additive-only. No wire-format changes yet.
+- `ContentBlock` discriminated union (`TextBlock` / `ImageBlock` / `DocumentBlock`).
+- `ImageSource` (`ImageSourceBase64` / `ImageSourceUrl`) and `DocumentSource` (`DocumentSourceBase64` / `DocumentSourceUrl`).
+- `Message.user_with_image()`, `Message.user_with_blocks()`, `Message.user_with_pdf_base64()`, `Message.user_with_pdf_url()`, `Message.user_with_pdf_bytes()`.
+- `Message.cache` field + `Message.user_with_cache()` + `Message.with_cache()`.
+- `SystemBlock` with `SystemBlock.new()` / `SystemBlock.cached()` factories.
+- `Tool.cache` field.
+- `ToolChoice` with `auto()` / `required()` / `none()` / `tool(name)` factories.
+- `ThinkingConfig` (budget_tokens) for extended thinking.
+- `McpServerConfig` and `McpToolConfig*` (All / Allowed / Denied) for server-side MCP.
+- `ChatRequest` fields: `system_blocks`, `system_cache`, `tool_choice`, `mcp_servers`, `mcp_tool_configs`, `thinking`, `stop_sequences`.
+- `ChatRequest.builder()` returning `ChatRequestBuilder` (fluent API parity with Rust SDK).
+- `ChatResponse.thinking` field.
+- `Usage.cache_creation_input_tokens` and `Usage.cache_read_input_tokens`.
+- `StopReason.stop_sequence` variant.
+- `StreamEventType` enum; `StreamEvent.usage` and `StreamEvent.stop_reason` fields.
+- `ProviderCapabilities` (`text_only` / `with_image` / `full`) declared on each provider.
+- `BaseProvider` ABC with default `validate_request()` enforcing capabilities.
+
+### Changed
+- Capability declarations per provider: `Anthropic` = `full`, `OpenAI` = `with_image`, `Minimax` = `with_image`, `Ollama` = `text_only`, `ClaudeCodeClient` = `text_only`.
+
+### Notes
+- **No new wire-format behavior in 0.6.0.** Providers still serialize request bodies as before. Phase 2 (v0.7.0+) will wire `content_blocks`, `system_blocks`, `tool_choice`, `thinking`, and MCP config into the Anthropic and Gemini providers.
+- See `docs/superpowers/plans/2026-04-24-python-sdk-catchup-roadmap.md` for the full catch-up roadmap.
+
 ## [0.5.0] - 2026-04-05
 
 ### Added
