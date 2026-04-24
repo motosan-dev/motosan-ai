@@ -1,0 +1,20 @@
+{
+  "messages": [
+    {
+      "content": [
+        {
+          "text": "describe",
+          "type": "text"
+        },
+        {
+          "image_url": {
+            "url": "data:image/png;base64,JVBER"
+          },
+          "type": "image_url"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4o"
+}

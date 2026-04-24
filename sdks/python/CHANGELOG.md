@@ -2,6 +2,68 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.8.2] - 2026-04-25
+
+### Fixed
+- **Anthropic extended thinking via OAuth** — the streaming SSE adapter silently dropped `thinking_delta` events, so `ChatResponse.thinking` was always `None` on OAuth tokens (which route through stream+collect). Now emits `StreamEvent(event_type="thinking")`; the OAuth `chat()` collector accumulates into `ChatResponse.thinking`.
+- **Gemini default model** — `gemini-2.0-flash` was deprecated for new users (returns HTTP 404). Default bumped to `gemini-2.5-flash`. All mock-URL references, live tests, and parity conftest updated.
+- **Live vision fixtures** — replaced 1×1 transparent PNG (~67 bytes) with a 64×64 solid-red PNG (187 bytes). Anthropic and Gemini both reject sub-minimum images; the old fixture returned `HTTP 400: Could not process image` / `Unable to process input image`.
+
+### Added
+- `test_stream_emits_thinking_deltas_as_thinking_event` + `test_oauth_chat_collects_thinking_from_stream` regression tests.
+
+## [0.8.1] - 2026-04-24
+
+### Added
+- **Test infrastructure — drift detection**
+  - `tests/_snapshots.py` helper: JSON-file snapshots with `UPDATE_SNAPSHOTS=1` regenerate mode.
+  - `tests/parity/` cross-provider matrix tests for simple chat, `ToolChoice`, vision, and stream event contracts.
+  - `tests/test_client_integration.py` provider dispatch matrix, env-var fallback, and retry end-to-end coverage.
+  - Nightly CI workflow (`.github/workflows/ci-python-nightly.yml`) runs live integration tests against real provider APIs.
+
+### Fixed
+- **OpenAI vision serialization** — `OpenAIProvider._serialize_messages` now emits `content_blocks` as `image_url` parts (base64 → data URI, URL → raw URL). Previously, `Message.user_with_image(...)` silently dropped the image.
+
+### Notes
+- Snapshots are code-review artifacts. Any diff in `tests/snapshots/*.json` is a deliberate wire-format change and should be reviewed like a schema migration.
+- Nightly live-test secrets must be configured in GitHub repo settings (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `MINIMAX_API_KEY`).
+
+## [0.8.0] - 2026-04-24
+
+### Added
+- **`GeminiProvider`** — native HTTP client for Google's Generative Language REST API (`generativelanguage.googleapis.com/v1beta`).
+  - `Provider.gemini` registered in `Client` dispatch.
+  - `Client.gemini(api_key=..., model=..., base_url=...)` classmethod.
+  - `GEMINI_API_KEY` env var loaded automatically.
+  - Default model: `gemini-2.0-flash`.
+  - Full feature coverage: text, vision (base64 + URL), tools (`functionDeclarations`), tool choice (AUTO / ANY / allowedFunctionNames), streaming (`streamGenerateContent?alt=sse`), system prompts (`systemInstruction`), stop sequences (`stopSequences`), usage reporting (`promptTokenCount` / `candidatesTokenCount`).
+  - Capabilities: `with_image()` — document blocks raise `InvalidRequestError` before any HTTP call.
+  - Tool call IDs are generated client-side. By convention, `Message.tool_result(tool_call_id=<function_name>, ...)` uses the function name as the ID for Gemini round-trips.
+- **Live integration tests** (`tests/integration/test_gemini_live.py`): simple chat, vision, tool use, streaming.
+
+### Notes
+- Gemini does not support document (PDF) input; calls with `ContentBlock::Document` fail at validation time.
+- No cache token accounting on Gemini — `Usage.cache_creation_input_tokens` / `cache_read_input_tokens` always `None`.
+- See `docs/superpowers/plans/2026-04-24-python-sdk-catchup-roadmap.md` for the full catch-up roadmap.
+
+## [0.7.0] - 2026-04-24
+
+### Added — Anthropic wire-format parity with Rust SDK
+- **Vision & PDF input** — user messages with `content_blocks` now serialize as Anthropic content-block arrays, including image/document base64 and URL sources.
+- **Prompt caching** — `Message.cache`, `SystemBlock[]`, `system_cache=True`, and `Tool.cache` now emit Anthropic `cache_control`; cache creation/read usage tokens are parsed.
+- **ToolChoice** — `auto`, `required` (Anthropic `any`), `none` (removes tools), and `tool(name)` are supported.
+- **Extended thinking** — `ThinkingConfig` serializes as enabled thinking, forces `temperature=1.0`, and non-stream responses parse thinking blocks into `ChatResponse.thinking`.
+- **MCP server-side tools** — `mcp_servers` and `mcp_tool_configs` serialize for Anthropic; `anthropic-beta: mcp-client-2025-11-20` is attached when needed.
+- **Stop sequences** — `stop_sequences` serialize and `StopReason.stop_sequence` is parsed.
+- **Stream enhancements** — `StreamEvent.usage` is emitted from Anthropic `message_start` / `message_delta`, and terminal done events carry `stop_reason` when provided.
+
+### Changed
+- `AnthropicProvider` now inherits `BaseProvider`; `validate_request()` runs before HTTP work in `chat()` and `stream()`.
+- Anthropic request building now uses one unified serializer for OAuth and standard-key paths.
+
+### Notes
+- Only Anthropic gained Phase 2a wire-format support in this release. Other providers remain scheduled in later roadmap phases.
+
 ## [0.6.0] - 2026-04-24
 
 ### Added

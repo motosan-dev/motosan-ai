@@ -16,7 +16,8 @@ import os
 
 import pytest
 
-from motosan_ai import Client, Message, Provider, Tool
+from motosan_ai import ChatRequest, Client, Message, Provider, SystemBlock, ThinkingConfig, Tool
+from motosan_ai.providers.anthropic import AnthropicProvider
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 MODEL = "claude-sonnet-4-6"
@@ -200,3 +201,63 @@ async def test_stream_tool_use(client):
     args_parts = [e.tool_call_args_delta for e in events if e.event_type == "tool_call_args"]
     parsed = json.loads("".join(args_parts))
     assert "expression" in parsed
+
+
+@pytest.fixture
+def anthropic_provider():
+    return AnthropicProvider(api_key=API_KEY, model=MODEL)
+
+
+async def _provider_chat(provider: AnthropicProvider, request: ChatRequest):
+    from motosan_ai.retry import with_retry
+
+    return await with_retry(lambda: provider.chat(request), max_retries=3)
+
+
+async def test_live_vision(anthropic_provider):
+    """Requires a real key + live network. Verifies vision roundtrip.
+
+    Uses a 64x64 solid-red PNG — Anthropic's image validator rejects very small
+    images, so a 1x1 pixel doesn't work.
+    """
+    red_square_png = "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAf0lEQVR4nNXOQREAIAzAsFI1868HMYjgsWsU5NwZyiRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4iRO4twO/HrNmAGs/GAznAAAAABJRU5ErkJggg=="
+    req = ChatRequest(
+        messages=[Message.user_with_image("What color is this?", red_square_png, "image/png")],
+        max_tokens=64,
+    )
+    resp = await _provider_chat(anthropic_provider, req)
+    assert resp.content
+    await _cooldown()
+
+
+async def test_live_thinking(anthropic_provider):
+    req = ChatRequest(
+        messages=[Message.user("What is 13 * 17? Think step by step.")],
+        thinking=ThinkingConfig(budget_tokens=1024),
+        max_tokens=2048,
+        model=MODEL,
+    )
+    resp = await _provider_chat(anthropic_provider, req)
+    assert resp.thinking is not None
+    assert "221" in resp.content or "221" in (resp.thinking or "")
+    await _cooldown()
+
+
+@pytest.mark.skipif(
+    os.environ.get("ANTHROPIC_LIVE_CACHE") != "1",
+    reason="prompt-cache live assertion is opt-in; set ANTHROPIC_LIVE_CACHE=1",
+)
+async def test_live_prompt_caching_reports_cache_tokens(anthropic_provider):
+    big_system = "You are a helpful assistant.\n" * 600
+    req = ChatRequest(
+        messages=[Message.user("Say hi.")],
+        system_blocks=[SystemBlock.cached(big_system)],
+        max_tokens=32,
+    )
+    first = await _provider_chat(anthropic_provider, req)
+    await _cooldown()
+    second = await _provider_chat(anthropic_provider, req)
+
+    assert (first.usage.cache_creation_input_tokens or 0) > 0
+    assert (second.usage.cache_read_input_tokens or 0) > 0
+    await _cooldown()

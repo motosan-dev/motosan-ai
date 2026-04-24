@@ -1,0 +1,20 @@
+{
+  "max_tokens": 100,
+  "messages": [
+    {
+      "content": "q1",
+      "role": "user"
+    },
+    {
+      "content": "a1",
+      "role": "assistant"
+    },
+    {
+      "content": "q2",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-6",
+  "system": "Be concise.",
+  "temperature": 0.2
+}

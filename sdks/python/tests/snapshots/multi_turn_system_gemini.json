@@ -1,0 +1,39 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "q1"
+        }
+      ],
+      "role": "user"
+    },
+    {
+      "parts": [
+        {
+          "text": "a1"
+        }
+      ],
+      "role": "model"
+    },
+    {
+      "parts": [
+        {
+          "text": "q2"
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 100,
+    "temperature": 0.2
+  },
+  "systemInstruction": {
+    "parts": [
+      {
+        "text": "Be concise."
+      }
+    ]
+  }
+}

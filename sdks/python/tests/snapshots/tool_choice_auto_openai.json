@@ -1,0 +1,30 @@
+{
+  "messages": [
+    {
+      "content": "what is the weather?",
+      "role": "user"
+    }
+  ],
+  "model": "gpt-4o",
+  "tool_choice": "auto",
+  "tools": [
+    {
+      "function": {
+        "description": "Get weather for a city",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

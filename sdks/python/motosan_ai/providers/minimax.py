@@ -82,6 +82,20 @@ class MinimaxProvider:
         return outgoing
 
     @staticmethod
+    def _apply_tool_choice(body: dict[str, Any], request: ChatRequest) -> None:
+        if request.tool_choice is None:
+            return
+        choice = request.tool_choice
+        if choice.type == "auto":
+            body["tool_choice"] = "auto"
+        elif choice.type == "required":
+            body["tool_choice"] = "required"
+        elif choice.type == "none":
+            body.pop("tools", None)
+        elif choice.type == "tool":
+            body["tool_choice"] = {"type": "function", "function": {"name": choice.name}}
+
+    @staticmethod
     def _raise_for_status(status_code: int, message: str) -> None:
         if status_code == 401:
             raise AuthError(message)
@@ -112,6 +126,7 @@ class MinimaxProvider:
                 }
                 for t in request.tools
             ]
+        self._apply_tool_choice(body, request)
         if request.provider_options:
             body.update(request.provider_options)
 
@@ -181,6 +196,7 @@ class MinimaxProvider:
                 }
                 for t in request.tools
             ]
+        self._apply_tool_choice(body, request)
         if request.provider_options:
             body.update(request.provider_options)
 

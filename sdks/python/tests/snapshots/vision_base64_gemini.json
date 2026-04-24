@@ -1,0 +1,24 @@
+{
+  "contents": [
+    {
+      "parts": [
+        {
+          "text": "describe"
+        },
+        {
+          "text": "describe"
+        },
+        {
+          "inlineData": {
+            "data": "JVBER",
+            "mimeType": "image/png"
+          }
+        }
+      ],
+      "role": "user"
+    }
+  ],
+  "generationConfig": {
+    "maxOutputTokens": 8192
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "messages": [
+    {
+      "content": "what is the weather?",
+      "role": "user"
+    }
+  ],
+  "model": "MiniMax-Text-01",
+  "tool_choice": {
+    "function": {
+      "name": "get_weather"
+    },
+    "type": "function"
+  },
+  "tools": [
+    {
+      "function": {
+        "description": "Get weather for a city",
+        "name": "get_weather",
+        "parameters": {
+          "properties": {
+            "city": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "city"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    }
+  ]
+}

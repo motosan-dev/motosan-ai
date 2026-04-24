@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import Any
 
 from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
-from motosan_ai.providers import AnthropicProvider, MinimaxProvider, OpenAIProvider
+from motosan_ai.providers import AnthropicProvider, GeminiProvider, MinimaxProvider, OpenAIProvider
 from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
@@ -20,6 +20,7 @@ class Provider(StrEnum):
     openai = "openai"
     minimax = "minimax"
     ollama = "ollama"
+    gemini = "gemini"
 
 
 def _normalize_message(item: Message | dict[str, Any]) -> Message:
@@ -87,6 +88,10 @@ class Client:
                 self._provider = OpenAIProvider(
                     api_key=self.api_key, model=model, base_url=base_url
                 )
+            elif provider_value == Provider.gemini:
+                self._provider = GeminiProvider(
+                    api_key=self.api_key, model=model, base_url=base_url
+                )
             else:
                 self._provider = MinimaxProvider(
                     api_key=self.api_key, model=model, base_url=base_url
@@ -111,6 +116,22 @@ class Client:
         max_retries: int = 3,
     ) -> Client:
         return cls(provider=Provider.openai, api_key=api_key, model=model, max_retries=max_retries)
+
+    @classmethod
+    def gemini(
+        cls,
+        api_key: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        max_retries: int = 3,
+    ) -> Client:
+        return cls(
+            provider=Provider.gemini,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+            max_retries=max_retries,
+        )
 
     @classmethod
     def minimax(
@@ -157,6 +178,7 @@ class Client:
             Provider.anthropic: "ANTHROPIC_API_KEY",
             Provider.openai: "OPENAI_API_KEY",
             Provider.minimax: "MINIMAX_API_KEY",
+            Provider.gemini: "GEMINI_API_KEY",
         }
         return os.getenv(env_map[provider])
 

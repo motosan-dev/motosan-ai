@@ -1,0 +1,31 @@
+{
+  "max_tokens": 4096,
+  "messages": [
+    {
+      "content": "what is the weather?",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-6",
+  "tool_choice": {
+    "name": "get_weather",
+    "type": "tool"
+  },
+  "tools": [
+    {
+      "description": "Get weather for a city",
+      "input_schema": {
+        "properties": {
+          "city": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "city"
+        ],
+        "type": "object"
+      },
+      "name": "get_weather"
+    }
+  ]
+}

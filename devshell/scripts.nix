@@ -59,7 +59,7 @@
     echo "[2/3] ruff format --check"
     ruff format --check "$PYTHON_DIR/motosan_ai/" "$PYTHON_DIR/tests/"
 
-    echo "[3/3] pytest (unit)"
+    echo "[3/3] pytest (unit + parity + snapshots)"
     uv run pytest "$PYTHON_DIR/tests/" -q --ignore="$PYTHON_DIR/tests/integration/"
 
     echo "✅ Python checks passed."

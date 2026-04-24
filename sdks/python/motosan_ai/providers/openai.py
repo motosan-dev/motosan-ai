@@ -11,10 +11,14 @@ from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
+    ImageBlock,
+    ImageSourceBase64,
+    ImageSourceUrl,
     Message,
     Role,
     StopReason,
     StreamEvent,
+    TextBlock,
     ToolCall,
     Usage,
 )
@@ -51,7 +55,27 @@ class OpenAIProvider:
             if message.role == Role.system:
                 outgoing.append({"role": "system", "content": message.content})
             elif message.role == Role.user:
-                outgoing.append({"role": "user", "content": message.content})
+                if message.content_blocks:
+                    blocks: list[dict[str, Any]] = []
+                    for block in message.content_blocks:
+                        if isinstance(block, TextBlock):
+                            blocks.append({"type": "text", "text": block.text})
+                        elif isinstance(block, ImageBlock):
+                            src = block.source
+                            if isinstance(src, ImageSourceBase64):
+                                blocks.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {
+                                            "url": f"data:{src.media_type};base64,{src.data}"
+                                        },
+                                    }
+                                )
+                            elif isinstance(src, ImageSourceUrl):
+                                blocks.append({"type": "image_url", "image_url": {"url": src.url}})
+                    outgoing.append({"role": "user", "content": blocks})
+                else:
+                    outgoing.append({"role": "user", "content": message.content})
             elif message.role == Role.assistant:
                 if message.tool_calls:
                     outgoing.append(
@@ -106,6 +130,19 @@ class OpenAIProvider:
                 }
                 for t in request.tools
             ]
+            if request.tool_choice is not None:
+                choice = request.tool_choice
+                if choice.type == "auto":
+                    body["tool_choice"] = "auto"
+                elif choice.type == "required":
+                    body["tool_choice"] = "required"
+                elif choice.type == "none":
+                    body.pop("tools", None)
+                elif choice.type == "tool":
+                    body["tool_choice"] = {
+                        "type": "function",
+                        "function": {"name": choice.name},
+                    }
         if request.provider_options:
             body.update(request.provider_options)
         return body

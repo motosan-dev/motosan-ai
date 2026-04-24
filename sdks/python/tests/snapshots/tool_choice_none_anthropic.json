@@ -1,0 +1,10 @@
+{
+  "max_tokens": 4096,
+  "messages": [
+    {
+      "content": "what is the weather?",
+      "role": "user"
+    }
+  ],
+  "model": "claude-sonnet-4-6"
+}

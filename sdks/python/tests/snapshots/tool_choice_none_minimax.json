@@ -1,0 +1,9 @@
+{
+  "messages": [
+    {
+      "content": "what is the weather?",
+      "role": "user"
+    }
+  ],
+  "model": "MiniMax-Text-01"
+}

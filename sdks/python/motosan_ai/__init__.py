@@ -10,7 +10,7 @@ from motosan_ai.error import (
     StreamError,
 )
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
-from motosan_ai.providers.claude_code import ClaudeCodeClient
+from motosan_ai.providers import ClaudeCodeClient, GeminiProvider
 from motosan_ai.types import (
     ChatRequest,
     ChatRequestBuilder,
@@ -57,6 +57,7 @@ __all__ = [
     "DocumentSource",
     "DocumentSourceBase64",
     "DocumentSourceUrl",
+    "GeminiProvider",
     "ImageBlock",
     "ImageSource",
     "ImageSourceBase64",
