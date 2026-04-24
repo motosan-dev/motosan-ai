@@ -2,7 +2,11 @@
 
 > **Status:** Master roadmap. Each phase ships an independently-releasable Python SDK version. Phase 1 has a detailed plan (see sibling file). Phases 2–4 will get their own detailed plans when the prior phase lands.
 >
-> **Progress:** Phase 1 ✅ complete (2026-04-24) — v0.6.0 landed, 168 tests pass, lint/format green. Phase 2 next.
+> **Progress:**
+> - Phase 1 ✅ complete (2026-04-24) — v0.6.0, 168 tests.
+> - Phase 2 ✅ complete (2026-04-24) — v0.7.0 (Anthropic wire) + v0.8.0 (Gemini HTTP).
+> - Testing infra ✅ complete (2026-04-24) — v0.8.1, 311 tests, snapshot-based parity matrix, OpenAI vision fix, `Retry-After` parsing, nightly live CI. See `2026-04-24-python-sdk-testing-strategy.md`.
+> - Phase 3 (CLI backends + OAuth) next.
 
 **Goal:** Bring `motosan-ai` Python SDK (v0.5.0) to feature parity with Rust SDK (v0.14.0).
 
@@ -72,6 +76,8 @@ See detailed plan: `2026-04-24-python-sdk-phase1-types.md`.
 - Wire retry to respect `Retry-After`, stream per-chunk timeout.
 - Live-test suite: vision, thinking, prompt-caching (input/read tokens verified), MCP roundtrip, stop_sequences.
 
+See detailed plan: `2026-04-24-python-sdk-phase2a-anthropic.md`.
+
 **2b — Gemini HTTP (v0.8.0)**
 - New `GeminiProvider` under `motosan_ai/providers/gemini.py`.
 - API key header `x-goog-api-key`; default model `gemini-2.0-flash`.
@@ -82,6 +88,8 @@ See detailed plan: `2026-04-24-python-sdk-phase1-types.md`.
 - Capabilities: `with_image()`.
 - Full mock test suite mirroring Anthropic's; live-test gate.
 - Register `Provider.gemini` in `Client` dispatch.
+
+See detailed plan: `2026-04-24-python-sdk-phase2b-gemini.md`.
 
 ### Phase 3 — CLI backends + OAuth (v0.9.0) — ~2 weeks
 
