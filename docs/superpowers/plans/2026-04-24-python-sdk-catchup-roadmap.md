@@ -8,9 +8,12 @@
 > - Testing infra ✅ complete (2026-04-24) — v0.8.1, 311 tests, snapshot-based parity matrix, OpenAI vision fix, `Retry-After` parsing, nightly live CI. See `2026-04-24-python-sdk-testing-strategy.md`.
 > - Patch fixes ✅ complete (2026-04-25) — v0.8.2, Anthropic OAuth thinking deltas, Gemini default `gemini-2.5-flash`, live vision fixtures.
 > - Phase 3a ✅ complete (2026-04-25) — v0.9.0, Claude Code CLI full flag surface + stream usage events.
-> - Phase 3b (Codex CLI provider) next.
+> - Phase 3b ✅ complete (2026-04-25) — v0.9.1, Codex CLI provider + Client dispatch.
+> - Phase 3c ✅ complete (2026-04-25) — v0.9.2, Gemini CLI provider + Client dispatch.
+> - Phase 3d ✅ complete (2026-04-25) — v0.9.3, Gemini Code Assist HTTP + Google OAuth PKCE.
+> - Phase 4 (Client API parity polish) next.
 
-**Goal:** Bring `motosan-ai` Python SDK from its original v0.5.0 baseline toward feature parity with Rust SDK (v0.14.0). Current Python release: v0.9.0.
+**Goal:** Bring `motosan-ai` Python SDK from its original v0.5.0 baseline toward feature parity with Rust SDK (v0.14.0). Current Python release: v0.9.3.
 
 **Ship target:** Python v0.10.0+ in 4 successive releases (~8 weeks).
 
@@ -104,21 +107,21 @@ Split into 4 sub-phases, each ships an independent 0.9.x release.
 
 See detailed plan: `2026-04-25-python-sdk-phase3a-claude-code-cli.md`.
 
-**3b — Codex CLI provider (v0.9.1)**
+**3b — Codex CLI provider (v0.9.1) — ✅ COMPLETE (2026-04-25)**
 - New `CodexCliClient` subprocess backend mirroring Rust `codex_cli` module structure.
 - Builder methods: `sandbox`, `profile`, `ephemeral`, `config_override`, `add_dir`, `enable_feature`, `disable_feature`, `dangerously_bypass_approvals_and_sandbox`, `oss`, `local_provider`.
 - JSONL event parsing for text/tool-call/result/usage.
-- Register `Provider.codex_cli` in Client dispatch; env-var `CODEX_CLI_PATH`.
+- Register `Provider.codex_cli` in Client dispatch; env-var `CODEX_PATH`.
 
-**3c — Gemini CLI provider (v0.9.2)**
+**3c — Gemini CLI provider (v0.9.2) — ✅ COMPLETE (2026-04-25)**
 - New `GeminiCliClient` subprocess backend mirroring Rust `gemini_cli`.
 - Builder methods: `yolo`, `sandbox`, `approval_mode`, `include_dir(s)`, `extension(s)`, `allowed_mcp_server(s)`, `resume`.
 - Register `Provider.gemini_cli`; env-var `GEMINI_CLI_PATH`.
 
-**3d — Gemini Code Assist OAuth + HTTP provider (v0.9.3)**
+**3d — Gemini Code Assist OAuth + HTTP provider (v0.9.3) — ✅ COMPLETE (2026-04-25)**
 - New `motosan_ai/oauth/google.py` module — PKCE flow, token refresh, `cloud-platform` scope, token cache at `~/.config/motosan-ai/google-tokens.json`.
 - New `GeminiCodeAssistProvider` targeting `cloudcode-pa.googleapis.com/v1internal` with the project-ID-wrapped request format (model in body, not URL).
-- Register `Provider.gemini_code_assist`; env-vars `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_PROJECT_ID`.
+- Register `Provider.gemini_code_assist`; live env-var `GOOGLE_PROJECT_ID`; OAuth uses embedded public Gemini CLI client credentials.
 
 ### Phase 4 — Client API parity (v0.10.0) — ~1 week
 
