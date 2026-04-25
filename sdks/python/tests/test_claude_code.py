@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import patch
 
 import pytest
@@ -123,8 +124,9 @@ class TestParseNdjsonLine:
                 },
             }
         )
-        event = _parse_ndjson_line(line)
-        assert event is not None
+        events = _parse_ndjson_line(line)
+        assert len(events) == 1
+        event = events[0]
         assert event.content == "Hello"
         assert not event.done
 
@@ -140,8 +142,9 @@ class TestParseNdjsonLine:
                 },
             }
         )
-        event = _parse_ndjson_line(line)
-        assert event is not None
+        events = _parse_ndjson_line(line)
+        assert len(events) == 1
+        event = events[0]
         assert event.content == "Hello world"
         assert not event.done
 
@@ -154,7 +157,7 @@ class TestParseNdjsonLine:
                 },
             }
         )
-        assert _parse_ndjson_line(line) is None
+        assert _parse_ndjson_line(line) == []
 
     def test_assistant_empty_content(self):
         line = json.dumps(
@@ -163,7 +166,7 @@ class TestParseNdjsonLine:
                 "message": {"content": []},
             }
         )
-        assert _parse_ndjson_line(line) is None
+        assert _parse_ndjson_line(line) == []
 
     def test_assistant_empty_text_ignored(self):
         line = json.dumps(
@@ -174,20 +177,20 @@ class TestParseNdjsonLine:
                 },
             }
         )
-        assert _parse_ndjson_line(line) is None
+        assert _parse_ndjson_line(line) == []
 
     def test_result_event(self):
-        event = _parse_ndjson_line('{"type":"result","subtype":"success","result":"done"}')
-        assert event is not None
-        assert event.done
+        events = _parse_ndjson_line('{"type":"result","subtype":"success","result":"done"}')
+        assert len(events) == 1
+        assert events[0].done
 
     def test_unknown_type_ignored(self):
-        assert _parse_ndjson_line('{"type":"system","subtype":"init"}') is None
+        assert _parse_ndjson_line('{"type":"system","subtype":"init"}') == []
 
     def test_malformed_json(self):
-        assert _parse_ndjson_line("not json") is None
-        assert _parse_ndjson_line("{") is None
-        assert _parse_ndjson_line("") is None
+        assert _parse_ndjson_line("not json") == []
+        assert _parse_ndjson_line("{") == []
+        assert _parse_ndjson_line("") == []
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +223,34 @@ class TestClaudeCodeClientConstruction:
 
     def test_chaining(self):
         client = ClaudeCodeClient().model("opus").agent_mode(True)
+        assert client._model == "opus"
+        assert client._agent_mode is True
+
+    def test_config_dataclass_holds_existing_state(self):
+        client = ClaudeCodeClient(binary_path="/tmp/fake").model("sonnet").agent_mode(True)
+        assert client._config.binary_path == "/tmp/fake"
+        assert client._config.model == "sonnet"
+        assert client._config.agent_mode is True
+
+    def test_config_defaults_sane(self):
+        client = ClaudeCodeClient()
+        assert client._config.binary_path in (
+            "claude",
+            os.environ.get("CLAUDE_CODE_PATH", "claude"),
+        )
+        assert client._config.model is None
+        assert client._config.agent_mode is False
+
+    def test_private_attribute_shims_remain_mutable(self):
+        client = ClaudeCodeClient()
+        client._binary_path = "/tmp/claude"
+        client._model = "opus"
+        client._agent_mode = True
+
+        assert client._config.binary_path == "/tmp/claude"
+        assert client._config.model == "opus"
+        assert client._config.agent_mode is True
+        assert client._binary_path == "/tmp/claude"
         assert client._model == "opus"
         assert client._agent_mode is True
 

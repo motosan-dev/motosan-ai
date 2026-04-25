@@ -27,7 +27,7 @@ response = await client.chat([Message.user("Hello")])
 | Language | Package | Version |
 |----------|---------|---------|
 | Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.14.0 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.8.2 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.9.0 |
 
 ## Install
 
@@ -56,7 +56,7 @@ pip install "motosan-ai[full]"   # all Python HTTP providers
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
 | Gemini | Rust: `gemini-2.0-flash` · Python: `gemini-2.5-flash` | `gemini` | `[gemini]` |
 | Gemini Code Assist | `gemini-2.5-flash` | `gemini-code-assist` | — |
-| Claude Code CLI | (CLI default) | `claude-code` | — |
+| Claude Code CLI | (CLI default) | `claude-code` | built-in (`ClaudeCodeClient`) |
 | Codex CLI | (CLI default) | `codex-cli` | — |
 | Gemini CLI | (CLI default) | `gemini-cli` | — |
 
@@ -164,7 +164,7 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 - **Extended Thinking** — first-class support for Anthropic thinking mode
 - **MCP** — server-side MCP support in `ChatRequest`
 - **Python Gemini HTTP** — native `GeminiProvider` via `Client.gemini()` / `Provider.gemini` with text, vision, tools, streaming, and `GEMINI_API_KEY` support
-- **Claude Code Backend** — shell out to `claude` CLI via `ClaudeCodeProvider` with full flag coverage: `--model`, `--system-prompt`, `--permission-mode`, `--effort`, `--fallback-model`, `--add-dir`, `--allowed-tools` / `--disallowed-tools`, `--mcp-config` / `--strict-mcp-config`, `--settings` / `--setting-sources`, `--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`, `--plugin-dir`, `--agent`, `--max-budget-usd` (`--features claude-code`)
+- **Claude Code Backend** — Rust shells out via `ClaudeCodeProvider` (`--features claude-code`); Python uses built-in `ClaudeCodeClient`. Both expose full Claude Code flag coverage: `--model`, `--system-prompt`, `--permission-mode`, `--effort`, `--fallback-model`, `--add-dir`, variadic `--allowed-tools` / `--disallowed-tools`, variadic `--mcp-config` / `--strict-mcp-config`, `--settings` / `--setting-sources`, `--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`, `--plugin-dir`, `--agent`, `--max-budget-usd`. Python v0.9.0 also emits stream `usage` events from Claude Code NDJSON `result` events.
 - **Codex CLI Backend** — shell out to `codex exec --json` via `CodexCliProvider` with sandbox / profile / config-override support (`--features codex-cli`)
 - **Gemini CLI Backend** — shell out to `gemini -p -o stream-json` via `GeminiCliProvider` with `--yolo` / `--sandbox` / `--approval-mode` support (`--features gemini-cli`)
 

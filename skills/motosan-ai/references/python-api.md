@@ -33,6 +33,10 @@ client = Client.openai(model="gpt-4o")                # OPENAI_API_KEY
 client = Client.minimax()                              # MINIMAX_API_KEY
 client = Client.ollama(model="llama3.2")               # local, no key needed
 client = Client.ollama(model="qwq", base_url="http://localhost:11434")
+
+# Claude Code CLI backend (local binary, no API key)
+from motosan_ai import ClaudeCodeClient
+claude = ClaudeCodeClient().model("sonnet").permission_mode("plan")
 ```
 
 ## Core Methods
@@ -101,13 +105,41 @@ Message(role=Role.user, content="Hello")
 ## StreamEvent Fields
 
 ```python
-event.event_type           # "text" | "tool_call_start" | "tool_call_args" | "tool_call_end"
+event.event_type           # "text" | "usage" | "thinking" | "tool_call_start" | "tool_call_args" | "tool_call_end"
 event.content              # str — text delta or empty
 event.done                 # bool — True on last event
 event.tool_call_id         # str | None
 event.tool_call_name       # str | None (on tool_call_start)
 event.tool_call_args_delta # str | None (on tool_call_args)
+event.usage                # Usage | None — emitted by Anthropic/Gemini and Claude Code stream result events
+event.stop_reason          # StopReason | None
 ```
+
+## Claude Code CLI Backend
+
+```python
+from motosan_ai import ChatRequest, ClaudeCodeClient, Message
+
+client = (
+    ClaudeCodeClient()
+    .model("sonnet")
+    .system_prompt("Be concise.")
+    .permission_mode("plan")
+    .effort("low")
+    .allow_tool("Read")
+    .max_budget_usd(2.5)
+)
+
+resp = await client.chat(ChatRequest(messages=[Message.user("Hi")]))
+
+async for event in client.stream(ChatRequest(messages=[Message.user("Count to 3")])):
+    if event.event_type == "usage":
+        print(event.usage)
+```
+
+Builder methods added in Python v0.9.0: `bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool` / `allowed_tools`, `disallow_tool` / `disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, and `max_budget_usd`.
+
+Wire notes: `system_prompt(...)` maps to `--system-prompt`; request/system messages map to `--append-system-prompt`. Tool allow/deny lists and MCP configs are variadic CLI arguments, not comma-joined. Streams emit a `usage` event before terminal `done` when Claude Code reports usage.
 
 ## Retry
 

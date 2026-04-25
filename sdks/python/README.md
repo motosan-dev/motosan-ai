@@ -1,6 +1,6 @@
 # motosan-ai (Python SDK)
 
-Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, and Ollama.
+Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, and Claude Code CLI.
 All HTTP providers use `httpx` directly — no official provider SDKs required.
 Also includes a `ClaudeCodeClient` backend that shells out to local `claude` CLI.
 
@@ -12,6 +12,7 @@ pip install "motosan-ai[anthropic]"
 pip install "motosan-ai[openai]"
 pip install "motosan-ai[minimax]"
 pip install "motosan-ai[ollama]"
+pip install "motosan-ai[gemini]"
 pip install "motosan-ai[full]"
 ```
 
@@ -170,7 +171,15 @@ client = Client.ollama(model="llama3.2", native=True, think=True)
 ```python
 from motosan_ai import ChatRequest, ClaudeCodeClient, Message
 
-client = ClaudeCodeClient().model("sonnet")
+client = (
+    ClaudeCodeClient()
+    .model("sonnet")
+    .system_prompt("Be concise.")          # --system-prompt
+    .permission_mode("plan")               # --permission-mode plan
+    .effort("low")                         # --effort low
+    .allow_tool("Read")                    # --allowed-tools Read
+    .max_budget_usd(2.5)                   # --max-budget-usd 2.5
+)
 
 response = await client.chat(
     ChatRequest(messages=[Message.user("Hello from claude CLI")])
@@ -180,16 +189,22 @@ print(response.content)
 async for event in client.stream(
     ChatRequest(messages=[Message.user("Stream a short poem")])
 ):
-    if event.content:
+    if event.event_type == "usage":
+        print(f"\nusage={event.usage}")
+    elif event.content:
         print(event.content, end="")
     if event.done:
         break
 ```
 
 Notes:
-- Uses `CLAUDE_CODE_PATH` env var or `claude` in `PATH`
-- `tool_calls` is always empty (tools run inside CLI)
-- `agent_mode(True)` enables `--dangerously-skip-permissions` + JSON output parsing
+- Uses `CLAUDE_CODE_PATH` env var or `claude` in `PATH`.
+- `tool_calls` is always empty (tools run inside CLI).
+- `agent_mode(True)` enables `--dangerously-skip-permissions` + JSON output parsing.
+- Python v0.9.0 adds full Rust-compatible Claude Code flag coverage: `bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool` / `allowed_tools`, `disallow_tool` / `disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, and `max_budget_usd`.
+- `system_prompt(...)` maps to `--system-prompt`; system messages / `ChatRequest.system` are appended with `--append-system-prompt`.
+- `allowed_tools`, `disallowed_tools`, and `mcp_configs` are variadic CLI arguments, matching Rust (`--allowed-tools Read Bash`, not comma-joined).
+- Streaming emits `StreamEvent(event_type="usage")` before the terminal `done` event when Claude Code includes token usage in the NDJSON `result` event.
 
 ## Anthropic Auth Matrix
 

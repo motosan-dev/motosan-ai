@@ -2,6 +2,18 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.9.0] - 2026-04-25
+
+### Added — ClaudeCodeClient full flag surface parity with Rust v0.12.0+
+- **Builder state consolidated** into internal `_ClaudeCodeConfig` dataclass; backward-compatible property shims preserve `_binary_path` / `_model` / `_agent_mode` access.
+- **26 new fluent builder methods** covering string flags, list flags, MCP config, setting sources, sessions, plugin dirs, named agents, and budget controls.
+- **Stream usage events** — Claude Code NDJSON `result` events with `usage` now emit `StreamEvent(event_type="usage")` before terminal `done`, matching Rust.
+
+### Notes
+- No breaking changes to `ClaudeCodeClient()` / `.model()` / `.agent_mode()`.
+- Subprocess argv composition is aligned with the Rust `ClaudeCodeProvider` flag wiring for equivalent configs.
+- Covers Phase 3a of the Python SDK catch-up roadmap; Codex CLI, Gemini CLI, and Gemini Code Assist OAuth remain in later 0.9.x phases.
+
 ## [0.8.2] - 2026-04-25
 
 ### Fixed

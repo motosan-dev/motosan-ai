@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.8.2 · Rust 0.14.0
+- Python 0.9.0 · Rust 0.14.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -22,7 +22,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
-# CLI backends (Rust only, shell out to a local binary):
+# CLI backends (Rust features; Python has built-in ClaudeCodeClient):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
 #   codex-cli    → CodexCliProvider   → `codex exec --json -`
 #   gemini-cli   → GeminiCliProvider  → `gemini -p "" -o stream-json`
@@ -597,11 +597,11 @@ Client::builder()
     .ollama_num_ctx(4096)
 ```
 
-### CLI Backends (Rust only)
+### CLI Backends
 
-Three opt-in backends shell out to a local CLI binary instead of calling an HTTP API. All return the same `ChatResponse` / `StreamEvent` types as HTTP providers and live alongside them in `providers/{claude_code,codex_cli,gemini_cli}/`. All three implement `ProviderImpl`. They are dispatchable through `Client::builder()` as first-class `Provider::ClaudeCode` / `Provider::CodexCli` / `Provider::GeminiCli` variants, and `api_key` is optional on the builder for CLI paths.
+Rust has three opt-in CLI backends (`ClaudeCodeProvider`, `CodexCliProvider`, `GeminiCliProvider`) that shell out to local binaries instead of calling HTTP APIs. Python v0.9.0 currently has `ClaudeCodeClient` with full Rust-compatible Claude Code flag coverage; Codex CLI and Gemini CLI are planned for later 0.9.x releases. All CLI paths return the same `ChatResponse` / `StreamEvent` types as HTTP providers.
 
-**Unified `Client::builder()` dispatch** (v0.11.0+):
+**Rust unified `Client::builder()` dispatch** (v0.11.0+):
 
 ```rust
 use motosan_ai::claude_code::{EffortLevel, PermissionMode};
@@ -675,6 +675,27 @@ let response = provider.chat(request).await?;
 let stream = provider.stream(request).await?;
 ```
 
+**Python Claude Code direct use** (v0.9.0+):
+
+```python
+from motosan_ai import ChatRequest, ClaudeCodeClient, Message
+
+client = (
+    ClaudeCodeClient()
+    .model("sonnet")
+    .system_prompt("Be terse.")      # --system-prompt (full replacement)
+    .permission_mode("plan")         # --permission-mode plan
+    .effort("low")                   # --effort low
+    .allow_tool("Edit")              # --allowed-tools Edit (variadic)
+    .max_budget_usd(2.5)              # --max-budget-usd
+)
+resp = await client.chat(ChatRequest(messages=[Message.user("hi")]))
+
+async for event in client.stream(ChatRequest(messages=[Message.user("hi")])):
+    if event.event_type == "usage":
+        print(event.usage)
+```
+
 Key notes:
 - Runs `claude --print --output-format stream-json` / `codex exec --json --skip-git-repo-check -` / `gemini -p "" -o stream-json` with the prompt on stdin.
 - Authentication: `claude` uses your existing login state; `codex` uses `CODEX_API_KEY` env var or `~/.codex/auth.json` (**not** `OPENAI_API_KEY`); `gemini` uses its own local auth (`gemini auth` once — personal Google account or API key).
@@ -688,6 +709,7 @@ Key notes:
 - `EffortLevel` variants (Claude Code): `Low` / `Medium` / `High` / `Max`. Maps to `--effort`.
 - Claude Code isolation: `.bare(true)` forwards `--bare`, so the spawned `claude` skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery. Recommended for daemons / servers that must not inherit the operator's interactive state; leave `false` for workflows that should pick up `~/.claude/`. Emitted before `--dangerously-skip-permissions`.
 - Claude Code system prompts: `.system_prompt(...)` forwards `--system-prompt` (full replacement); message-extracted system prompts flow through `--append-system-prompt`. Both can coexist — Claude applies append on top of replace.
+- Claude Code stream usage: Python v0.9.0 and Rust both emit a `StreamEvent` with `event_type == "usage"` before terminal `done` when Claude Code's NDJSON `result` event includes usage.
 - Claude Code budget: `.max_budget_usd(amount)` drops non-finite and negative values at argv-build time so the CLI never receives an invalid number. Only meaningful under `--print`.
 - Claude Code session flags (`--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`) all live on the same `ClaudeCodeProvider` builder; blank string inputs are skipped so `.resume("")` is a no-op.
 - Claude Code argv order is stable and locked by `common_args_full_loadout_order_is_stable`. Don't grep-reorder it.
