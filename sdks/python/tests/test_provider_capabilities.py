@@ -8,6 +8,9 @@ from motosan_ai.error import MotosanError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers.anthropic import AnthropicProvider
 from motosan_ai.providers.claude_code import ClaudeCodeClient
+from motosan_ai.providers.codex_cli import CodexCliClient
+from motosan_ai.providers.gemini_cli import GeminiCliClient
+from motosan_ai.providers.gemini_code_assist import GeminiCodeAssistProvider
 from motosan_ai.providers.minimax import MinimaxProvider
 from motosan_ai.providers.ollama import OllamaProvider
 from motosan_ai.providers.openai import OpenAIProvider
@@ -106,3 +109,18 @@ def test_ollama_native_is_text_only():
 def test_claude_code_is_text_only():
     p = ClaudeCodeClient()
     assert p.capabilities == ProviderCapabilities.text_only()
+
+
+def test_codex_cli_is_text_only():
+    p = CodexCliClient()
+    assert p.capabilities == ProviderCapabilities.text_only()
+
+
+def test_gemini_cli_is_text_only():
+    p = GeminiCliClient()
+    assert p.capabilities == ProviderCapabilities.text_only()
+
+
+def test_gemini_code_assist_is_with_image():
+    p = GeminiCodeAssistProvider(access_token="ya29.fake", project_id="project")
+    assert p.capabilities == ProviderCapabilities.with_image()

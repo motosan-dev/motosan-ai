@@ -1,8 +1,8 @@
 # motosan-ai (Python SDK)
 
-Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, and Claude Code CLI.
+Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, Gemini Code Assist, and CLI backends.
 All HTTP providers use `httpx` directly — no official provider SDKs required.
-Also includes a `ClaudeCodeClient` backend that shells out to local `claude` CLI.
+Also includes `ClaudeCodeClient`, `CodexCliClient`, and `GeminiCliClient` backends that shell out to local CLI binaries.
 
 ## Installation
 
@@ -199,12 +199,105 @@ async for event in client.stream(
 
 Notes:
 - Uses `CLAUDE_CODE_PATH` env var or `claude` in `PATH`.
+- Live tests are opt-in: set `MOTOSAN_RUN_CLAUDE_CODE_LIVE=1`.
 - `tool_calls` is always empty (tools run inside CLI).
 - `agent_mode(True)` enables `--dangerously-skip-permissions` + JSON output parsing.
 - Python v0.9.0 adds full Rust-compatible Claude Code flag coverage: `bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool` / `allowed_tools`, `disallow_tool` / `disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, and `max_budget_usd`.
 - `system_prompt(...)` maps to `--system-prompt`; system messages / `ChatRequest.system` are appended with `--append-system-prompt`.
 - `allowed_tools`, `disallowed_tools`, and `mcp_configs` are variadic CLI arguments, matching Rust (`--allowed-tools Read Bash`, not comma-joined).
 - Streaming emits `StreamEvent(event_type="usage")` before the terminal `done` event when Claude Code includes token usage in the NDJSON `result` event.
+
+## Codex CLI Backend
+
+```python
+from motosan_ai import ChatRequest, CodexCliClient, Message, SandboxMode
+
+client = (
+    CodexCliClient()
+    .sandbox(SandboxMode.workspace_write)
+    .model("gpt-5.1-codex")
+    .profile("work")
+    .config_override("approval_policy", "never")
+)
+
+response = await client.chat(ChatRequest(messages=[Message.user("Hello from codex CLI")]))
+print(response.content)
+
+async for event in client.stream(ChatRequest(messages=[Message.user("Stream a short answer")])):
+    if event.event_type == "usage":
+        print(event.usage)
+    elif event.content:
+        print(event.content, end="")
+```
+
+Notes:
+- Uses `CODEX_PATH` env var or `codex` in `PATH`.
+- No API key is required by the SDK; the `codex` binary handles its own auth.
+- Live tests are opt-in: set `MOTOSAN_RUN_CODEX_LIVE=1`; override the live-test model with `MOTOSAN_CODEX_MODEL` (default `gpt-5.1-codex`).
+- Available through both direct `CodexCliClient()` and unified `Client.codex_cli()` / `Provider.codex_cli` dispatch.
+- Python v0.9.1 adds Rust-compatible flag coverage: `agent_mode`, `dangerously_bypass_approvals_and_sandbox`, `oss`, `ephemeral`, `sandbox`, `local_provider`, `model`, `profile`, `cd`, `add_dir`, `enable_feature`, `disable_feature`, and `config_override`.
+- Streaming emits `StreamEvent(event_type="usage")` before terminal `done` when Codex includes token usage in `turn.completed`; `cached_input_tokens` maps to `Usage.cache_read_input_tokens`.
+
+## Gemini CLI Backend
+
+```python
+from motosan_ai import ApprovalMode, ChatRequest, GeminiCliClient, Message
+
+client = (
+    GeminiCliClient()
+    .model("gemini-2.5-pro")
+    .approval_mode(ApprovalMode.plan)
+    .include_dir("/tmp/workspace")
+)
+
+response = await client.chat(ChatRequest(messages=[Message.user("Hello from gemini CLI")]))
+print(response.content)
+
+async for event in client.stream(ChatRequest(messages=[Message.user("Stream a short answer")])):
+    if event.event_type == "usage":
+        print(event.usage)
+    elif event.content:
+        print(event.content, end="")
+```
+
+Notes:
+- Uses `GEMINI_CLI_PATH` env var or `gemini` in `PATH`.
+- No API key is required by the SDK; the `gemini` binary handles its own auth.
+- Available through both direct `GeminiCliClient()` and unified `Client.gemini_cli()` / `Provider.gemini_cli` dispatch.
+- Python v0.9.2 adds Rust-compatible flag coverage: `model`, `yolo`, `sandbox`, `approval_mode`, `include_dir(s)`, `extension(s)`, `allowed_mcp_server(s)`, and `resume`.
+- Gemini CLI takes prompt input via stdin with no trailing `-` argv marker; system prompts are prepended to stdin with a blank line.
+- Live tests are opt-in: set `MOTOSAN_RUN_GEMINI_CLI_LIVE=1`.
+
+## Gemini Code Assist + Google OAuth
+
+```python
+from motosan_ai import ChatRequest, Client, Message
+
+client = Client.gemini_code_assist(
+    access_token="ya29...",
+    project_id="my-gcp-project",
+)
+resp = await client.chat([Message.user("Hello from Code Assist")])
+```
+
+OAuth helpers are available under `motosan_ai.oauth`:
+
+```python
+import asyncio
+from motosan_ai.oauth import google_gemini_config, login, save_token
+
+async def main():
+    token = await login(google_gemini_config())
+    save_token(token)
+
+asyncio.run(main())
+```
+
+Notes:
+- `GeminiCodeAssistProvider` targets `cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`.
+- The provider takes an access token + `project_id`; OAuth helpers are separate and reusable.
+- Token cache path: `~/.config/motosan-ai/google-tokens.json`, written with `0600` permissions.
+- Live tests are opt-in: set `MOTOSAN_RUN_CODE_ASSIST_LIVE=1` and `GOOGLE_PROJECT_ID`, with a cached token present.
 
 ## Anthropic Auth Matrix
 

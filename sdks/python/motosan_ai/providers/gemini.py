@@ -62,6 +62,100 @@ def _usage_from_metadata(meta: dict[str, Any] | None) -> Usage:
     )
 
 
+def build_gemini_body(request: ChatRequest) -> dict[str, Any]:
+    contents: list[dict[str, Any]] = []
+    extracted_system: str | None = None
+
+    for msg in request.messages:
+        if msg.role == Role.system:
+            if msg.content.strip():
+                extracted_system = msg.content
+            continue
+
+        if msg.role == Role.user:
+            parts: list[dict[str, Any]] = []
+            if msg.content:
+                parts.append({"text": msg.content})
+            for block in msg.content_blocks:
+                parts.extend(_part_for_block(block))
+            if not parts:
+                parts.append({"text": ""})
+            contents.append({"role": "user", "parts": parts})
+            continue
+
+        if msg.role == Role.assistant:
+            parts = []
+            if msg.content:
+                parts.append({"text": msg.content})
+            for tc in msg.tool_calls:
+                parts.append({"functionCall": {"name": tc.name, "args": tc.input}})
+            if not parts:
+                parts.append({"text": ""})
+            contents.append({"role": "model", "parts": parts})
+            continue
+
+        if msg.role == Role.tool:
+            name = msg.tool_call_id or ""
+            try:
+                response = json.loads(msg.content)
+            except (json.JSONDecodeError, TypeError):
+                response = {"result": msg.content}
+            if not isinstance(response, dict):
+                response = {"result": response}
+            contents.append(
+                {
+                    "role": "user",
+                    "parts": [{"functionResponse": {"name": name, "response": response}}],
+                }
+            )
+            continue
+
+    system_text = ""
+    if request.system_blocks:
+        system_text = "\n".join(block.text for block in request.system_blocks if block.text)
+    if not system_text and request.system:
+        system_text = request.system
+    if not system_text and extracted_system:
+        system_text = extracted_system
+
+    body: dict[str, Any] = {"contents": contents}
+    if system_text:
+        body["systemInstruction"] = {"parts": [{"text": system_text}]}
+
+    gen_config: dict[str, Any] = {"maxOutputTokens": request.max_tokens or _DEFAULT_MAX_TOKENS}
+    if request.temperature is not None:
+        gen_config["temperature"] = request.temperature
+    if request.stop_sequences:
+        gen_config["stopSequences"] = list(request.stop_sequences)
+    body["generationConfig"] = gen_config
+
+    if request.tools:
+        declarations: list[dict[str, Any]] = []
+        for tool in request.tools:
+            decl: dict[str, Any] = {"name": tool.name, "description": tool.description or ""}
+            if tool.input_schema:
+                decl["parameters"] = tool.input_schema
+            declarations.append(decl)
+        body["tools"] = [{"functionDeclarations": declarations}]
+
+        choice = request.tool_choice
+        if choice is not None and choice.type == "none":
+            body.pop("tools", None)
+        else:
+            mode = "AUTO"
+            if choice is not None and choice.type in {"required", "tool"}:
+                mode = "ANY"
+            config: dict[str, Any] = {"mode": mode}
+            if choice is not None and choice.type == "tool":
+                config["allowedFunctionNames"] = [choice.name]
+            body["toolConfig"] = {"functionCallingConfig": config}
+
+    if request.provider_options:
+        body.update(request.provider_options)
+
+    return body
+
+
 class GeminiProvider(BaseProvider):
     capabilities: ProviderCapabilities = ProviderCapabilities.with_image()
 
@@ -89,96 +183,7 @@ class GeminiProvider(BaseProvider):
         return {"x-goog-api-key": self.api_key, "content-type": "application/json"}
 
     def _build_body(self, request: ChatRequest) -> dict[str, Any]:
-        contents: list[dict[str, Any]] = []
-        extracted_system: str | None = None
-
-        for msg in request.messages:
-            if msg.role == Role.system:
-                if msg.content.strip():
-                    extracted_system = msg.content
-                continue
-
-            if msg.role == Role.user:
-                parts: list[dict[str, Any]] = []
-                if msg.content:
-                    parts.append({"text": msg.content})
-                for block in msg.content_blocks:
-                    parts.extend(_part_for_block(block))
-                if not parts:
-                    parts.append({"text": ""})
-                contents.append({"role": "user", "parts": parts})
-                continue
-
-            if msg.role == Role.assistant:
-                parts = []
-                if msg.content:
-                    parts.append({"text": msg.content})
-                for tc in msg.tool_calls:
-                    parts.append({"functionCall": {"name": tc.name, "args": tc.input}})
-                if not parts:
-                    parts.append({"text": ""})
-                contents.append({"role": "model", "parts": parts})
-                continue
-
-            if msg.role == Role.tool:
-                name = msg.tool_call_id or ""
-                try:
-                    response = json.loads(msg.content)
-                except (json.JSONDecodeError, TypeError):
-                    response = {"result": msg.content}
-                if not isinstance(response, dict):
-                    response = {"result": response}
-                contents.append(
-                    {
-                        "role": "user",
-                        "parts": [{"functionResponse": {"name": name, "response": response}}],
-                    }
-                )
-                continue
-
-        system_text = ""
-        if request.system_blocks:
-            system_text = "\n".join(block.text for block in request.system_blocks if block.text)
-        if not system_text and request.system:
-            system_text = request.system
-        if not system_text and extracted_system:
-            system_text = extracted_system
-
-        body: dict[str, Any] = {"contents": contents}
-        if system_text:
-            body["systemInstruction"] = {"parts": [{"text": system_text}]}
-
-        gen_config: dict[str, Any] = {"maxOutputTokens": request.max_tokens or _DEFAULT_MAX_TOKENS}
-        if request.temperature is not None:
-            gen_config["temperature"] = request.temperature
-        if request.stop_sequences:
-            gen_config["stopSequences"] = list(request.stop_sequences)
-        body["generationConfig"] = gen_config
-
-        if request.tools:
-            declarations: list[dict[str, Any]] = []
-            for tool in request.tools:
-                decl: dict[str, Any] = {"name": tool.name, "description": tool.description or ""}
-                if tool.input_schema:
-                    decl["parameters"] = tool.input_schema
-                declarations.append(decl)
-            body["tools"] = [{"functionDeclarations": declarations}]
-
-            choice = request.tool_choice
-            if choice is not None and choice.type == "none":
-                body.pop("tools", None)
-            else:
-                mode = "AUTO"
-                if choice is not None and choice.type in {"required", "tool"}:
-                    mode = "ANY"
-                config: dict[str, Any] = {"mode": mode}
-                if choice is not None and choice.type == "tool":
-                    config["allowedFunctionNames"] = [choice.name]
-                body["toolConfig"] = {"functionCallingConfig": config}
-
-        if request.provider_options:
-            body.update(request.provider_options)
-        return body
+        return build_gemini_body(request)
 
     def _response_error_message(self, status: int, headers: httpx.Headers, text: str) -> str:
         try:

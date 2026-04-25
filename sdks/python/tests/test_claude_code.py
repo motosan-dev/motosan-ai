@@ -291,6 +291,11 @@ class TestBuildArgs:
         idx = args.index("--model")
         assert args[idx + 1] == "sonnet"
 
+    def test_request_empty_model_overrides_client_and_skips(self):
+        client = ClaudeCodeClient().model("opus")
+        args = client._build_args(model="", system_prompt=None)
+        assert "--model" not in args
+
     def test_agent_mode(self):
         client = ClaudeCodeClient().agent_mode(True)
         args = client._build_args(model=None, system_prompt=None)

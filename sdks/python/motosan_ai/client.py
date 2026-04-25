@@ -8,7 +8,15 @@ from enum import StrEnum
 from typing import Any
 
 from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
-from motosan_ai.providers import AnthropicProvider, GeminiProvider, MinimaxProvider, OpenAIProvider
+from motosan_ai.providers import (
+    AnthropicProvider,
+    CodexCliClient,
+    GeminiCliClient,
+    GeminiCodeAssistProvider,
+    GeminiProvider,
+    MinimaxProvider,
+    OpenAIProvider,
+)
 from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
@@ -21,6 +29,9 @@ class Provider(StrEnum):
     minimax = "minimax"
     ollama = "ollama"
     gemini = "gemini"
+    codex_cli = "codex_cli"
+    gemini_cli = "gemini_cli"
+    gemini_code_assist = "gemini_code_assist"
 
 
 def _normalize_message(item: Message | dict[str, Any]) -> Message:
@@ -47,6 +58,9 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
+        binary_path: str | None = None,
+        access_token: str | None = None,
+        project_id: str | None = None,
         *,
         ollama_native: bool = False,
         ollama_think: bool = False,
@@ -59,7 +73,25 @@ class Client:
         self.model = model
         self._max_retries = max_retries
 
-        if provider_value == Provider.ollama:
+        if provider_value == Provider.gemini_code_assist:
+            if not access_token:
+                raise ConfigError("gemini_code_assist requires access_token")
+            if not project_id:
+                raise ConfigError("gemini_code_assist requires project_id")
+            self.api_key = ""
+            self._provider = GeminiCodeAssistProvider(
+                access_token=access_token,
+                project_id=project_id,
+                model=model,
+                base_url=base_url,
+            )
+        elif provider_value == Provider.codex_cli:
+            self.api_key = ""
+            self._provider = CodexCliClient(binary_path=binary_path)
+        elif provider_value == Provider.gemini_cli:
+            self.api_key = ""
+            self._provider = GeminiCliClient(binary_path=binary_path)
+        elif provider_value == Provider.ollama:
             self.api_key = api_key or ""
             if ollama_native:
                 from motosan_ai.providers.ollama import OllamaProvider as NativeOllamaProvider
@@ -134,6 +166,24 @@ class Client:
         )
 
     @classmethod
+    def gemini_code_assist(
+        cls,
+        access_token: str | None = None,
+        project_id: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        max_retries: int = 3,
+    ) -> Client:
+        return cls(
+            provider=Provider.gemini_code_assist,
+            access_token=access_token,
+            project_id=project_id,
+            model=model,
+            base_url=base_url,
+            max_retries=max_retries,
+        )
+
+    @classmethod
     def minimax(
         cls,
         api_key: str | None = None,
@@ -146,6 +196,34 @@ class Client:
             api_key=api_key,
             model=model,
             base_url=base_url,
+            max_retries=max_retries,
+        )
+
+    @classmethod
+    def codex_cli(
+        cls,
+        binary_path: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+    ) -> Client:
+        return cls(
+            provider=Provider.codex_cli,
+            binary_path=binary_path,
+            model=model,
+            max_retries=max_retries,
+        )
+
+    @classmethod
+    def gemini_cli(
+        cls,
+        binary_path: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+    ) -> Client:
+        return cls(
+            provider=Provider.gemini_cli,
+            binary_path=binary_path,
+            model=model,
             max_retries=max_retries,
         )
 

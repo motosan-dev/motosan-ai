@@ -12,6 +12,8 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax]"
 ```python
 from motosan_ai import (
     Client, Provider,
+    ApprovalMode, CodexCliClient, ClaudeCodeClient, GeminiCliClient,
+    SandboxMode, LocalProvider,
     Message, Role, Tool, ToolCall,
     ChatRequest, ChatResponse,
     Usage, StopReason, StreamEvent,
@@ -33,10 +35,13 @@ client = Client.openai(model="gpt-4o")                # OPENAI_API_KEY
 client = Client.minimax()                              # MINIMAX_API_KEY
 client = Client.ollama(model="llama3.2")               # local, no key needed
 client = Client.ollama(model="qwq", base_url="http://localhost:11434")
+client = Client.gemini_code_assist(access_token="ya29...", project_id="gcp-project")
 
-# Claude Code CLI backend (local binary, no API key)
-from motosan_ai import ClaudeCodeClient
+# CLI backends (local binary, no API key)
+from motosan_ai import ApprovalMode, ClaudeCodeClient, CodexCliClient, GeminiCliClient, SandboxMode
 claude = ClaudeCodeClient().model("sonnet").permission_mode("plan")
+codex = CodexCliClient().sandbox(SandboxMode.workspace_write).model("gpt-5.1-codex")
+gemini_cli = GeminiCliClient().approval_mode(ApprovalMode.plan).model("gemini-2.5-pro")
 ```
 
 ## Core Methods
@@ -111,7 +116,7 @@ event.done                 # bool — True on last event
 event.tool_call_id         # str | None
 event.tool_call_name       # str | None (on tool_call_start)
 event.tool_call_args_delta # str | None (on tool_call_args)
-event.usage                # Usage | None — emitted by Anthropic/Gemini and Claude Code stream result events
+event.usage                # Usage | None — emitted by HTTP providers and CLI terminal result events
 event.stop_reason          # StopReason | None
 ```
 
@@ -140,6 +145,72 @@ async for event in client.stream(ChatRequest(messages=[Message.user("Count to 3"
 Builder methods added in Python v0.9.0: `bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool` / `allowed_tools`, `disallow_tool` / `disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, and `max_budget_usd`.
 
 Wire notes: `system_prompt(...)` maps to `--system-prompt`; request/system messages map to `--append-system-prompt`. Tool allow/deny lists and MCP configs are variadic CLI arguments, not comma-joined. Streams emit a `usage` event before terminal `done` when Claude Code reports usage.
+
+## Codex CLI Backend
+
+```python
+from motosan_ai import ChatRequest, CodexCliClient, Message, SandboxMode
+
+client = (
+    CodexCliClient()
+    .sandbox(SandboxMode.workspace_write)
+    .model("gpt-5.1-codex")
+    .profile("work")
+    .config_override("approval_policy", "never")
+)
+
+resp = await client.chat(ChatRequest(messages=[Message.user("Hi")]))
+
+async for event in client.stream(ChatRequest(messages=[Message.user("Count to 3")])):
+    if event.event_type == "usage":
+        print(event.usage)
+```
+
+Builder methods added in Python v0.9.1: `agent_mode`, `dangerously_bypass_approvals_and_sandbox`, `oss`, `ephemeral`, `sandbox`, `local_provider`, `model`, `profile`, `cd`, `add_dir`, `enable_feature`, `disable_feature`, and `config_override`.
+
+Wire notes: `CodexCliClient` runs `codex exec --json --skip-git-repo-check ... -`, uses `CODEX_PATH` for binary resolution, does not require an SDK API key, and maps `turn.completed.usage.cached_input_tokens` to `Usage.cache_read_input_tokens`.
+
+## Gemini CLI Backend
+
+```python
+from motosan_ai import ApprovalMode, ChatRequest, GeminiCliClient, Message
+
+client = (
+    GeminiCliClient()
+    .model("gemini-2.5-pro")
+    .approval_mode(ApprovalMode.plan)
+    .include_dir("/tmp/workspace")
+)
+
+resp = await client.chat(ChatRequest(messages=[Message.user("Hi")]))
+
+async for event in client.stream(ChatRequest(messages=[Message.user("Count to 3")])):
+    if event.event_type == "usage":
+        print(event.usage)
+```
+
+Builder methods added in Python v0.9.2: `model`, `yolo`, `sandbox`, `approval_mode`, `include_dir(s)`, `extension(s)`, `allowed_mcp_server(s)`, and `resume`.
+
+Wire notes: `GeminiCliClient` runs `gemini -p "" -o stream-json ...` with no trailing `-`; uses `GEMINI_CLI_PATH`; merges system prompts into stdin via `\n\n`; and maps `result.stats.cached` to `Usage.cache_read_input_tokens`.
+
+## Gemini Code Assist + OAuth
+
+```python
+from motosan_ai import ChatRequest, Client, Message
+from motosan_ai.oauth import google_gemini_config, login, save_token
+
+# One-time browser login; cache is written 0600.
+token = await login(google_gemini_config())
+save_token(token)
+
+client = Client.gemini_code_assist(
+    access_token=token.access_token,
+    project_id="my-gcp-project",
+)
+resp = await client.chat([Message.user("Hi")])
+```
+
+`GeminiCodeAssistProvider` wraps the normal Gemini request body in the Code Assist envelope and maps `cachedContentTokenCount` to `Usage.cache_read_input_tokens` after subtracting it from `input_tokens`.
 
 ## Retry
 

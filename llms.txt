@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.9.0 · Rust 0.14.0
+- Python 0.9.3 · Rust 0.14.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -22,7 +22,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
-# CLI backends (Rust features; Python has built-in ClaudeCodeClient):
+# CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
 #   claude-code  → ClaudeCodeProvider → `claude --print --output-format stream-json`
 #   codex-cli    → CodexCliProvider   → `codex exec --json -`
 #   gemini-cli   → GeminiCliProvider  → `gemini -p "" -o stream-json`
@@ -173,7 +173,7 @@ Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `G
 
 `Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
 
-`GeminiCodeAssist` (v0.13.0, feature `gemini-code-assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` PKCE flow). Requires GCP project ID via `.gemini_code_assist_project_id("...")`. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
+`GeminiCodeAssist` (Rust v0.13.0 feature `gemini-code-assist`; Python v0.9.3 `GeminiCodeAssistProvider` / `Provider.gemini_code_assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` in Rust or `motosan_ai.oauth` PKCE flow in Python). Requires GCP project ID. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
 
 CLI backends (`ClaudeCode` / `CodexCli` / `GeminiCli`) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` via `.claude_code(...)` / `.codex_cli(...)` / `.gemini_cli(...)`. `ClaudeCode` and `CodexCli` landed in v0.11.0; `GeminiCli` followed in the same generation. See the CLI Backends section under Provider-Specific Notes for a full example.
 
@@ -599,7 +599,7 @@ Client::builder()
 
 ### CLI Backends
 
-Rust has three opt-in CLI backends (`ClaudeCodeProvider`, `CodexCliProvider`, `GeminiCliProvider`) that shell out to local binaries instead of calling HTTP APIs. Python v0.9.0 currently has `ClaudeCodeClient` with full Rust-compatible Claude Code flag coverage; Codex CLI and Gemini CLI are planned for later 0.9.x releases. All CLI paths return the same `ChatResponse` / `StreamEvent` types as HTTP providers.
+Rust has three opt-in CLI backends (`ClaudeCodeProvider`, `CodexCliProvider`, `GeminiCliProvider`) that shell out to local binaries instead of calling HTTP APIs. Python v0.9.2+ has `ClaudeCodeClient`, `CodexCliClient`, and `GeminiCliClient` with Rust-compatible flag coverage. All CLI paths return the same `ChatResponse` / `StreamEvent` types as HTTP providers.
 
 **Rust unified `Client::builder()` dispatch** (v0.11.0+):
 
@@ -696,6 +696,35 @@ async for event in client.stream(ChatRequest(messages=[Message.user("hi")])):
         print(event.usage)
 ```
 
+**Python Codex CLI direct use** (v0.9.1+):
+
+```python
+from motosan_ai import ChatRequest, CodexCliClient, Message, SandboxMode
+
+client = (
+    CodexCliClient()
+    .sandbox(SandboxMode.workspace_write)      # --sandbox workspace-write
+    .model("gpt-5.1-codex")                   # --model
+    .profile("work")                          # --profile
+    .config_override("approval_policy", "never")  # -c approval_policy=never
+)
+resp = await client.chat(ChatRequest(messages=[Message.user("hi")]))
+```
+
+**Python Gemini CLI direct use** (v0.9.2+):
+
+```python
+from motosan_ai import ApprovalMode, ChatRequest, GeminiCliClient, Message
+
+client = (
+    GeminiCliClient()
+    .model("gemini-2.5-pro")
+    .approval_mode(ApprovalMode.plan)       # --approval-mode plan
+    .include_dir("/tmp/workspace")          # --include-directories
+)
+resp = await client.chat(ChatRequest(messages=[Message.user("hi")]))
+```
+
 Key notes:
 - Runs `claude --print --output-format stream-json` / `codex exec --json --skip-git-repo-check -` / `gemini -p "" -o stream-json` with the prompt on stdin.
 - Authentication: `claude` uses your existing login state; `codex` uses `CODEX_API_KEY` env var or `~/.codex/auth.json` (**not** `OPENAI_API_KEY`); `gemini` uses its own local auth (`gemini auth` once — personal Google account or API key).
@@ -709,7 +738,9 @@ Key notes:
 - `EffortLevel` variants (Claude Code): `Low` / `Medium` / `High` / `Max`. Maps to `--effort`.
 - Claude Code isolation: `.bare(true)` forwards `--bare`, so the spawned `claude` skips hooks, plugins, auto-memory, keychain reads, and user/project settings discovery. Recommended for daemons / servers that must not inherit the operator's interactive state; leave `false` for workflows that should pick up `~/.claude/`. Emitted before `--dangerously-skip-permissions`.
 - Claude Code system prompts: `.system_prompt(...)` forwards `--system-prompt` (full replacement); message-extracted system prompts flow through `--append-system-prompt`. Both can coexist — Claude applies append on top of replace.
-- Claude Code stream usage: Python v0.9.0 and Rust both emit a `StreamEvent` with `event_type == "usage"` before terminal `done` when Claude Code's NDJSON `result` event includes usage.
+- Claude Code stream usage: Python v0.9.0+ and Rust both emit a `StreamEvent` with `event_type == "usage"` before terminal `done` when Claude Code's NDJSON `result` event includes usage.
+- Codex CLI stream usage: Python v0.9.1+ and Rust both map `turn.completed.usage.cached_input_tokens` to `Usage.cache_read_input_tokens` and emit usage before terminal `done`.
+- Gemini CLI stream usage: Python v0.9.2 and Rust both map `result.stats.cached` to `Usage.cache_read_input_tokens` and emit usage before terminal `done`. Gemini CLI has no trailing `-` stdin marker; system prompts are prepended to stdin with `\n\n`.
 - Claude Code budget: `.max_budget_usd(amount)` drops non-finite and negative values at argv-build time so the CLI never receives an invalid number. Only meaningful under `--print`.
 - Claude Code session flags (`--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`) all live on the same `ClaudeCodeProvider` builder; blank string inputs are skipped so `.resume("")` is a no-op.
 - Claude Code argv order is stable and locked by `common_args_full_loadout_order_is_stable`. Don't grep-reorder it.

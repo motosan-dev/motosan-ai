@@ -27,7 +27,7 @@ response = await client.chat([Message.user("Hello")])
 | Language | Package | Version |
 |----------|---------|---------|
 | Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.14.0 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.9.0 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.9.3 |
 
 ## Install
 
@@ -55,10 +55,10 @@ pip install "motosan-ai[full]"   # all Python HTTP providers
 | MiniMax | Rust: `MiniMax-M2.7` · Python: `MiniMax-Text-01` | `minimax` | `[minimax]` |
 | Ollama | `llama3.2` | `ollama` / `ollama_native` | `[ollama]` |
 | Gemini | Rust: `gemini-2.0-flash` · Python: `gemini-2.5-flash` | `gemini` | `[gemini]` |
-| Gemini Code Assist | `gemini-2.5-flash` | `gemini-code-assist` | — |
+| Gemini Code Assist | `gemini-2.5-flash` | `gemini-code-assist` | built-in (`GeminiCodeAssistProvider`) |
 | Claude Code CLI | (CLI default) | `claude-code` | built-in (`ClaudeCodeClient`) |
-| Codex CLI | (CLI default) | `codex-cli` | — |
-| Gemini CLI | (CLI default) | `gemini-cli` | — |
+| Codex CLI | (CLI default) | `codex-cli` | built-in (`CodexCliClient`) |
+| Gemini CLI | (CLI default) | `gemini-cli` | built-in (`GeminiCliClient`) |
 
 > **OpenAI-compatible providers** (Groq, DeepSeek, Together, self-hosted proxies, etc.) work via the `openai` feature with a custom chat URL — pass the full endpoint you want POSTed:
 >
@@ -150,7 +150,7 @@ let client = Client::builder()
 let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
-> **CLI backend limitations (Claude Code / Codex CLI / Gemini CLI):** Tool calls run internally by the CLI and are **not** surfaced on `ChatResponse.tool_calls` (always empty). All three require the corresponding binary installed and authenticated. Enable with `--features claude-code`, `--features codex-cli`, or `--features gemini-cli`. You can also hold a raw `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` directly if you don't need the `Client` abstraction.
+> **CLI backend limitations (Claude Code / Codex CLI / Gemini CLI):** Tool calls run internally by the CLI and are **not** surfaced on `ChatResponse.tool_calls` (always empty). All CLI backends require the corresponding binary installed and authenticated. In Rust, enable with `--features claude-code`, `--features codex-cli`, or `--features gemini-cli`. Python currently includes `ClaudeCodeClient` and `CodexCliClient` as built-in subprocess backends.
 
 ## Features
 
@@ -164,9 +164,10 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 - **Extended Thinking** — first-class support for Anthropic thinking mode
 - **MCP** — server-side MCP support in `ChatRequest`
 - **Python Gemini HTTP** — native `GeminiProvider` via `Client.gemini()` / `Provider.gemini` with text, vision, tools, streaming, and `GEMINI_API_KEY` support
-- **Claude Code Backend** — Rust shells out via `ClaudeCodeProvider` (`--features claude-code`); Python uses built-in `ClaudeCodeClient`. Both expose full Claude Code flag coverage: `--model`, `--system-prompt`, `--permission-mode`, `--effort`, `--fallback-model`, `--add-dir`, variadic `--allowed-tools` / `--disallowed-tools`, variadic `--mcp-config` / `--strict-mcp-config`, `--settings` / `--setting-sources`, `--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`, `--plugin-dir`, `--agent`, `--max-budget-usd`. Python v0.9.0 also emits stream `usage` events from Claude Code NDJSON `result` events.
-- **Codex CLI Backend** — shell out to `codex exec --json` via `CodexCliProvider` with sandbox / profile / config-override support (`--features codex-cli`)
-- **Gemini CLI Backend** — shell out to `gemini -p -o stream-json` via `GeminiCliProvider` with `--yolo` / `--sandbox` / `--approval-mode` support (`--features gemini-cli`)
+- **Python Gemini Code Assist** — `GeminiCodeAssistProvider` / `Provider.gemini_code_assist` targets `cloudcode-pa.googleapis.com` with OAuth bearer tokens, Code Assist envelope wrapping, stream usage caching accounting, and `motosan_ai.oauth` PKCE helpers.
+- **Claude Code Backend** — Rust shells out via `ClaudeCodeProvider` (`--features claude-code`); Python uses built-in `ClaudeCodeClient`. Both expose full Claude Code flag coverage: `--model`, `--system-prompt`, `--permission-mode`, `--effort`, `--fallback-model`, `--add-dir`, variadic `--allowed-tools` / `--disallowed-tools`, variadic `--mcp-config` / `--strict-mcp-config`, `--settings` / `--setting-sources`, `--session-id` / `--resume` / `--continue` / `--fork-session` / `--no-session-persistence`, `--plugin-dir`, `--agent`, `--max-budget-usd`. Python v0.9.0+ also emits stream `usage` events from Claude Code NDJSON `result` events.
+- **Codex CLI Backend** — Rust shells out via `CodexCliProvider` (`--features codex-cli`); Python uses built-in `CodexCliClient` / `Provider.codex_cli`. Both run `codex exec --json --skip-git-repo-check`, support sandbox / profile / config overrides, and emit stream `usage` events from `turn.completed` JSONL events.
+- **Gemini CLI Backend** — Rust shells out via `GeminiCliProvider` (`--features gemini-cli`); Python uses built-in `GeminiCliClient` / `Provider.gemini_cli`. Both run `gemini -p "" -o stream-json`, support `--yolo` / `--sandbox` / `--approval-mode`, merge system prompts into stdin, and emit stream `usage` events from terminal `result.stats`.
 
 ## Quick Example
 

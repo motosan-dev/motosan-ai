@@ -1,3 +1,4 @@
+from motosan_ai import oauth
 from motosan_ai.client import Client, Provider
 from motosan_ai.error import (
     AuthError,
@@ -10,7 +11,16 @@ from motosan_ai.error import (
     StreamError,
 )
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
-from motosan_ai.providers import ClaudeCodeClient, GeminiProvider
+from motosan_ai.providers import (
+    ApprovalMode,
+    ClaudeCodeClient,
+    CodexCliClient,
+    GeminiCliClient,
+    GeminiCodeAssistProvider,
+    GeminiProvider,
+    LocalProvider,
+    SandboxMode,
+)
 from motosan_ai.types import (
     ChatRequest,
     ChatRequestBuilder,
@@ -44,6 +54,7 @@ from motosan_ai.types import (
 )
 
 __all__ = [
+    "ApprovalMode",
     "AuthError",
     "BaseProvider",
     "ChatRequest",
@@ -51,18 +62,22 @@ __all__ = [
     "ChatResponse",
     "ClaudeCodeClient",
     "Client",
+    "CodexCliClient",
     "ConfigError",
     "ContentBlock",
     "DocumentBlock",
     "DocumentSource",
     "DocumentSourceBase64",
     "DocumentSourceUrl",
+    "GeminiCliClient",
+    "GeminiCodeAssistProvider",
     "GeminiProvider",
     "ImageBlock",
     "ImageSource",
     "ImageSourceBase64",
     "ImageSourceUrl",
     "InvalidRequestError",
+    "LocalProvider",
     "McpServerConfig",
     "McpToolConfig",
     "McpToolConfigAll",
@@ -76,6 +91,7 @@ __all__ = [
     "ProviderError",
     "RateLimitError",
     "Role",
+    "SandboxMode",
     "StopReason",
     "StreamError",
     "StreamEvent",
@@ -87,4 +103,5 @@ __all__ = [
     "ToolCall",
     "ToolChoice",
     "Usage",
+    "oauth",
 ]

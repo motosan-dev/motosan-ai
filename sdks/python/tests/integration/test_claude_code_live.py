@@ -1,7 +1,7 @@
 """
 Live ClaudeCodeClient integration tests -- shells out to real ``claude`` CLI.
 
-Requires ``claude`` binary in PATH or CLAUDE_CODE_PATH env var.
+Set MOTOSAN_RUN_CLAUDE_CODE_LIVE=1 to run. Requires ``claude`` binary in PATH or CLAUDE_CODE_PATH env var.
 Skips automatically if the binary is not found.
 
 Run manually:
@@ -19,8 +19,10 @@ from motosan_ai import ClaudeCodeClient, Message
 from motosan_ai.types import ChatRequest
 
 _HAS_CLAUDE = shutil.which(os.environ.get("CLAUDE_CODE_PATH", "claude")) is not None
+_RUN_LIVE = os.environ.get("MOTOSAN_RUN_CLAUDE_CODE_LIVE") == "1"
 
 pytestmark = [
+    pytest.mark.skipif(not _RUN_LIVE, reason="set MOTOSAN_RUN_CLAUDE_CODE_LIVE=1 to run"),
     pytest.mark.skipif(not _HAS_CLAUDE, reason="claude CLI not found in PATH"),
     pytest.mark.asyncio,
 ]

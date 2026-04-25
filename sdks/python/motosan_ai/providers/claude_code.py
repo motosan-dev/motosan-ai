@@ -328,7 +328,7 @@ class ClaudeCodeClient:
         if self._config.permission_mode:
             args.extend(["--permission-mode", self._config.permission_mode])
 
-        effective_model = model or self._config.model
+        effective_model = self._config.model if model is None else model
         if effective_model:
             forwarded = _model_to_forward(effective_model)
             if forwarded:

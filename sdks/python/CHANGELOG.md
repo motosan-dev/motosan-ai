@@ -2,6 +2,77 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.9.3] - 2026-04-25
+
+### Added — `GeminiCodeAssistProvider` + Google OAuth (Phase 3d)
+- **`GeminiCodeAssistProvider`** — new HTTP provider targeting `cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`.
+  - Wraps the existing Phase 2b `GeminiProvider._build_body` output in the Code Assist envelope (`{project, model, request, userAgent, requestId}`).
+  - Auth: `Authorization: Bearer <token>` plus the `user-agent` / `x-goog-api-client` / `client-metadata` header trio Google's IDE plugins use.
+  - Tool-call IDs: prefer `functionCall.id` from the API; regenerate via `{name}_{ts_ms}_{counter}` on missing/empty/duplicate.
+  - Usage: `promptTokenCount - cachedContentTokenCount → input_tokens`; `cachedContentTokenCount → cache_read_input_tokens` (None when 0).
+  - Capabilities: `with_image()` (matches vanilla Gemini).
+- **`motosan_ai.oauth` package** — Google PKCE OAuth flow:
+  - Internal `Pkce.generate()` — 64-byte verifier + S256 challenge used by `login()` (not exported from `motosan_ai.oauth`; import from `_pkce` only for custom low-level flows).
+  - `OAuthConfig` + `google_gemini_config()` — public Gemini-CLI client_id/secret per Google's installed-app docs.
+  - `Token.is_expired()` — 60s pre-expiry buffer.
+  - `_callback_server.bind()` / `wait_for_callback()` — single-shot loopback HTTP server using stdlib `http.server`.
+  - `login(config, _open_browser=...)` — full PKCE flow with state validation; 120s callback timeout.
+  - `exchange_code(...)` / `refresh_token(...)` — token endpoint HTTP with `AuthError` on 4xx.
+  - `save_token(...)` / `load_cached_token(...)` — JSON cache at `~/.config/motosan-ai/google-tokens.json` with `0600` mode.
+  - `ensure_fresh_token(...)` — load cache, refresh-if-expired, persist, return.
+- **`Provider.gemini_code_assist`** + `Client.gemini_code_assist(access_token=, project_id=, ...)` classmethod. Constructor params `access_token` and `project_id` added to `Client.__init__`.
+
+### Notes
+- No new prod dependencies. PKCE uses stdlib `secrets` + `hashlib`; loopback server uses stdlib `http.server`.
+- Token cache file is created and refreshed with `0600` permissions to protect the refresh token.
+- The Gemini-CLI client_id/secret are public (Google's installed-app convention) — embedded in source like Rust does.
+- If Code Assist returns `401` mid-stream, the provider raises `AuthError`; callers should refresh via `ensure_fresh_token()` and retry. Automatic provider-side 401 refresh is intentionally out of scope because the HTTP provider only owns a bearer token, not OAuth config.
+- Only `google_gemini_config()` ships in this phase. A Codex OAuth config helper exists in the Rust OAuth crate but is future Python work; Python Codex CLI currently delegates auth to the local `codex` binary.
+- Live tests require `MOTOSAN_RUN_CODE_ASSIST_LIVE=1`, a cached token (run `login()` once), and `GOOGLE_PROJECT_ID`.
+
+## [0.9.2] - 2026-04-25
+
+### Added — `GeminiCliClient` (Phase 3c)
+- New subprocess provider mirroring Rust's `GeminiCliProvider`. Spawns `gemini -p "" -o stream-json [...args]` and parses NDJSON events (`init`, `message`, `result`).
+- 11 fluent builder methods cover the full Rust flag surface:
+  - Booleans: `yolo` (`--yolo`), `sandbox` (`--sandbox`)
+  - Single-value: `model` (`-m`), `approval_mode(ApprovalMode)` (`--approval-mode`), `resume` (`--resume`)
+  - Repeating singular: `include_dir` (`--include-directories`), `extension` (`-e`), `allowed_mcp_server` (`--allowed-mcp-server-names`)
+  - Repeating plural (replace): `include_dirs`, `extensions`, `allowed_mcp_servers`
+- `ApprovalMode` `StrEnum` (`default` / `auto_edit` / `yolo` / `plan`) — values are wire flags.
+- `Provider.gemini_cli` registered in `Client` dispatch; new `Client.gemini_cli()` classmethod. Reuses the `binary_path=` parameter on `Client.__init__` introduced in v0.9.1.
+- `GEMINI_CLI_PATH` env var resolves the binary location (matches Rust default).
+- Stream emits `StreamEvent(usage)` before terminal `done` when `result` carries `stats`; `stats.cached` maps to `Usage.cache_read_input_tokens`.
+- System prompt merged into stdin payload via `\n\n` separator (matches Rust `merge_system_into_prompt`).
+- Live integration tests under `tests/integration/test_gemini_cli_live.py` (two-tier gate: binary on PATH plus `MOTOSAN_RUN_GEMINI_CLI_LIVE=1`).
+
+### Notes
+- No API key required — `Provider.gemini_cli` is purely subprocess-based; the `gemini` binary handles its own auth.
+- Argv composition order matches Rust `spawn.rs::common_args` byte-for-byte; pinned by `test_full_config_argv_order_matches_rust_common_args`.
+- Distinct from Codex CLI: Gemini CLI takes the prompt purely via stdin with no trailing `-` argv marker.
+- Phase 3d (Gemini Code Assist OAuth + HTTP) ships in v0.9.3.
+
+## [0.9.1] - 2026-04-25
+
+### Added — `CodexCliClient` (Phase 3b)
+- New subprocess provider mirroring Rust's `CodexCliProvider`. Spawns `codex exec --json --skip-git-repo-check` and parses JSONL events (`item.completed`, `turn.completed`, `turn.failed`, `error`).
+- 13 fluent builder methods cover the full Rust flag surface:
+  - Booleans: `agent_mode` (`--full-auto`), `dangerously_bypass_approvals_and_sandbox`, `oss`, `ephemeral`
+  - Single-value: `sandbox(SandboxMode)`, `local_provider(LocalProvider)`, `model`, `profile`, `cd`
+  - Repeating: `add_dir`, `enable_feature`, `disable_feature`, `config_override(key, value)` → `-c key=value`
+- `SandboxMode` (`read_only` / `workspace_write` / `danger_full_access`) and `LocalProvider` (`lmstudio` / `ollama`) `StrEnum`s — values are the wire flags.
+- `Provider.codex_cli` registered in `Client` dispatch; new `Client.codex_cli()` classmethod and `binary_path=` parameter on `Client.__init__`.
+- `CODEX_PATH` env var resolves the binary location (matches Rust default).
+- Stream emits `StreamEvent(usage)` before terminal `done` when `turn.completed` carries usage; `cached_input_tokens` maps to `Usage.cache_read_input_tokens`.
+- Live integration tests added under `tests/integration/test_codex_cli_live.py`; they are opt-in via `MOTOSAN_RUN_CODEX_LIVE=1`, use `MOTOSAN_CODEX_MODEL` (default `gpt-5.1-codex`), and skip with a preflight auth/model error when the local Codex setup is not usable.
+
+### Notes
+- No API key required — `Provider.codex_cli` is purely subprocess-based; the `codex` binary handles its own auth.
+- Live Codex tests can override the default model with `MOTOSAN_CODEX_MODEL` for accounts that cannot use `gpt-5.1-codex`.
+- Patch note: Codex CLI stdin prompt assembly now matches Rust wire format: `request.system` takes precedence over `Message.system(...)`, and system prompts are wrapped as `[system instructions]` blocks before the user prompt.
+- Argv composition order matches Rust `spawn.rs::common_args` byte-for-byte; pinned by `test_full_config_argv_order_matches_rust_common_args`.
+- Phase 3c (Gemini CLI) and 3d (Gemini Code Assist OAuth) ship in subsequent 0.9.x releases.
+
 ## [0.9.0] - 2026-04-25
 
 ### Added — ClaudeCodeClient full flag surface parity with Rust v0.12.0+
@@ -11,6 +82,7 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 
 ### Notes
 - No breaking changes to `ClaudeCodeClient()` / `.model()` / `.agent_mode()`.
+- Live Claude Code tests are opt-in via `MOTOSAN_RUN_CLAUDE_CODE_LIVE=1`, matching the later CLI provider live-test gates.
 - Subprocess argv composition is aligned with the Rust `ClaudeCodeProvider` flag wiring for equivalent configs.
 - Covers Phase 3a of the Python SDK catch-up roadmap; Codex CLI, Gemini CLI, and Gemini Code Assist OAuth remain in later 0.9.x phases.
 
