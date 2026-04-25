@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.5.0 / Rust 0.14.0
+Multi-provider LLM SDK — Python 0.8.2 / Rust 0.14.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist
 
@@ -14,7 +14,8 @@ Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, sel
 ```bash
 # Python
 pip install "motosan-ai[anthropic]"          # single provider
-pip install "motosan-ai[anthropic,openai]"   # multiple providers
+pip install "motosan-ai[gemini]"             # Gemini HTTP provider
+pip install "motosan-ai[anthropic,openai,gemini]"   # multiple providers
 ```
 
 ```toml
@@ -35,6 +36,7 @@ codex-oauth = "0.1"
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI    | `OPENAI_API_KEY`    |
 | MiniMax   | `MINIMAX_API_KEY`   |
+| Gemini    | `GEMINI_API_KEY`    |
 | Ollama    | (none — local)      |
 
 ## Model Defaults
@@ -42,10 +44,10 @@ codex-oauth = "0.1"
 | Provider  | Default model             |
 |-----------|---------------------------|
 | Anthropic | `claude-sonnet-4-6`       |
-| OpenAI    | `gpt-5.3-codex`          |
-| MiniMax   | `MiniMax-M2.7` |
+| OpenAI    | Python: `gpt-4o` · Rust: `gpt-5.3-codex` |
+| MiniMax   | Python: `MiniMax-Text-01` · Rust: `MiniMax-M2.7` |
 | Ollama    | `llama3.2`               |
-| Gemini    | `gemini-2.0-flash`       |
+| Gemini    | `gemini-2.5-flash`       |
 | Gemini Code Assist | `gemini-2.5-flash` |
 
 ## Minimal Example
@@ -121,8 +123,8 @@ if token.is_expired() { /* refresh */ }
 - **ThinkStripper**: Applied automatically in all `stream()` / `stream_with()` calls — no manual setup needed
 - **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens
 - **Retry**: Enabled by default (3 retries, exponential backoff, jitter) for 429/5xx/timeout
-- **`ProviderCapabilities`** (Rust only, v0.13.1): `ProviderImpl` has two provided methods: `capabilities()` (default `text_only()`) and `validate_request()`. Providers that support images/documents override `capabilities()`. `LlmClient` calls `validate_request()` before every dispatch — returns `Err(UnsupportedFeature)` if `ContentBlock::Image` or `ContentBlock::Document` is present and the provider doesn't declare support. Capability table: Anthropic → `full()` (image + doc), OpenAI/Gemini/GeminiCodeAssist → `with_image()`, all others → `text_only()`.
-- **Gemini HTTP providers** (Rust only, v0.13.0): `GeminiProvider` (feature `gemini`) — `generativelanguage.googleapis.com`, API key auth, pay-per-token. `GeminiCodeAssistProvider` (feature `gemini-code-assist`) — `cloudcode-pa.googleapis.com/v1internal`, OAuth Bearer token (`ya29.*`), requires GCP project ID via `.gemini_code_assist_project_id(...)`, subscription billing. **Critical**: For `GeminiProvider`, `Message::tool_result` must use the function name (not opaque call ID) as `tool_call_id` — Gemini API requires `functionResponse.name` = function name.
+- **`ProviderCapabilities`**: Rust `ProviderImpl` and Python `BaseProvider` expose `capabilities` / `validate_request()` guardrails. Providers that support images/documents declare capabilities; clients/providers validate before HTTP. Capability table: Anthropic → `full()` (image + doc), OpenAI/Gemini/GeminiCodeAssist → `with_image()`, all others → `text_only()`.
+- **Gemini HTTP providers**: `GeminiProvider` is available in Rust (feature `gemini`) and Python (`Client.gemini()`, `Provider.gemini`, `GEMINI_API_KEY`) for `generativelanguage.googleapis.com`, API key auth, pay-per-token. Python default model is `gemini-2.5-flash`. `GeminiCodeAssistProvider` remains Rust-only (feature `gemini-code-assist`) for `cloudcode-pa.googleapis.com/v1internal`, OAuth Bearer token (`ya29.*`), requires GCP project ID via `.gemini_code_assist_project_id(...)`, subscription billing. **Critical**: For `GeminiProvider`, `Message.tool_result` / `Message::tool_result` must use the function name (not opaque call ID) as `tool_call_id` — Gemini API requires `functionResponse.name` = function name.
 - **CLI backends** (Rust only): `ClaudeCodeProvider` (feature `claude-code`, shells out to `claude`), `CodexCliProvider` (feature `codex-cli`, shells out to `codex exec --json`), and `GeminiCliProvider` (feature `gemini-cli`, shells out to `gemini -p "" -o stream-json`). Live in `providers/{claude_code,codex_cli,gemini_cli}/` alongside HTTP providers. All three implement `ProviderImpl`. All three report empty `tool_calls` — tools run inside the CLI. `CodexCliProvider.chat()` splits multi-message turns into `content` (last `agent_message`) + `thinking` (preamble). `GeminiCliProvider` merges the system prompt into the stdin payload because Gemini CLI has no `--system-prompt` flag. `ClaudeCodeProvider` (since v0.12.0) covers the full SDK-relevant flag surface: `.bare` (daemon-safe `--bare`; skips hooks/plugins/auto-memory/keychain/user+project settings) / `.model` / `.system_prompt` / `.permission_mode(PermissionMode::*)` / `.effort(EffortLevel::*)` / `.fallback_model` / `.add_dir` / `.allow_tool` / `.disallow_tool` / `.mcp_config` / `.strict_mcp_config` / `.settings` / `.setting_source` / `.session_id` / `.resume` / `.continue_latest` / `.fork_session` / `.no_session_persistence` / `.plugin_dir` / `.agent` / `.max_budget_usd`.
 - **Unified `Client::builder()` dispatch** (Rust, since v0.11.0): `Provider::ClaudeCode`, `Provider::CodexCli`, `Provider::GeminiCli`, `Provider::Gemini`, and `Provider::GeminiCodeAssist` are all first-class `Provider` variants. CLI backends are reachable through `Client::builder().provider(Provider::GeminiCli).gemini_cli(GeminiCliProvider::new().model("gemini-2.5-pro")).build()?` — no `api_key` required for CLI paths. Downstream consumers can hold a single `Client` and dispatch to any backend through `chat()` / `stream()` without provider-specific branching. The v0.10.0 `ClaudeCodeClient` / `CodexCliClient` type aliases were removed in v0.11.0.
 - **OpenAI-compatible endpoints** (Rust): `OpenAIProvider` takes **full URLs** via `.with_chat_url(url)` / `.with_responses_url(url)` (or `.openai_chat_url(url)` on `ClientBuilder`). No `/v1` auto-injection, no `base_url` heuristics — what you pass is what gets POSTed. Works for Groq (`https://api.groq.com/openai/v1/chat/completions`), DeepSeek, Together, self-hosted proxies, etc. Defaults to `https://api.openai.com/v1/chat/completions`.

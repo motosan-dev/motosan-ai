@@ -1,8 +1,8 @@
 # motosan-ai
 
-> Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, and MiniMax — with streaming, tool use, retry, and ThinkStripper built in.
+> Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.5.0 · Rust 0.14.0
+- Python 0.8.2 · Rust 0.14.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -12,7 +12,8 @@
 ```bash
 # Python — pick providers via extras
 pip install "motosan-ai[anthropic]"
-pip install "motosan-ai[anthropic,openai,ollama,minimax]"
+pip install "motosan-ai[gemini]"
+pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```
 
 ```toml
@@ -34,6 +35,7 @@ motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 | Anthropic | `ANTHROPIC_API_KEY` |
 | OpenAI    | `OPENAI_API_KEY`    |
 | MiniMax   | `MINIMAX_API_KEY`   |
+| Gemini    | `GEMINI_API_KEY`    |
 | Ollama    | (none — local)      |
 
 ## Model Defaults
@@ -41,10 +43,10 @@ motosan-ai = { version = "0.14.0", features = ["anthropic"] }
 | Provider  | Default model             |
 |-----------|---------------------------|
 | Anthropic | `claude-sonnet-4-6`       |
-| OpenAI    | `gpt-5.3-codex`          |
-| MiniMax   | `MiniMax-M2.7` |
+| OpenAI    | Python: `gpt-4o` · Rust: `gpt-5.3-codex` |
+| MiniMax   | Python: `MiniMax-Text-01` · Rust: `MiniMax-M2.7` |
 | Ollama    | `llama3.2`               |
-| Gemini    | `gemini-2.0-flash`       |
+| Gemini    | Python: `gemini-2.5-flash` · Rust: `gemini-2.0-flash` |
 | GeminiCodeAssist | `gemini-2.5-flash` |
 
 Override per client or per request.
@@ -62,8 +64,11 @@ from motosan_ai import Client, Message
 client = Client.anthropic()
 client = Client.openai(model="gpt-4o")
 client = Client.minimax()
+client = Client.gemini()
 client = Client.ollama(model="llama3.2", base_url="http://localhost:11434")
 ```
+
+Python HTTP providers: Anthropic, OpenAI, MiniMax, Gemini, Ollama. Gemini uses `GEMINI_API_KEY`, default model `gemini-2.5-flash`, supports text, images, tools/tool choice, streaming, stop sequences, and usage tokens. Document/PDF blocks are rejected before HTTP.
 
 ### chat() — single turn
 
@@ -745,10 +750,10 @@ Python and Rust SDKs are versioned and released **independently**.
 
 ```bash
 # 1. Bump version
-#    sdks/python/pyproject.toml → version = "0.5.0"
+#    sdks/python/pyproject.toml → version = "X.Y.Z"
 
 # 2. Update CHANGELOG
-#    sdks/python/CHANGELOG.md → ## [0.5.0] - YYYY-MM-DD
+#    sdks/python/CHANGELOG.md → ## [X.Y.Z] - YYYY-MM-DD
 
 # 3. Update version references in:
 #    - README.md (root) — Languages table, provider table
@@ -758,11 +763,11 @@ Python and Rust SDKs are versioned and released **independently**.
 
 # 4. Commit
 git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
-git commit -m "chore: release python-v0.5.0"
+git commit -m "chore: release python-vX.Y.Z"
 
 # 5. Tag + push (triggers publish-python.yml → PyPI)
-git tag -a python-v0.5.0 -m "python-v0.5.0 — summary"
-git push origin main python-v0.5.0
+git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
+git push origin main python-vX.Y.Z
 ```
 
 ### Release Steps (Rust)

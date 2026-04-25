@@ -283,7 +283,7 @@ _OK_GEMINI = {
         {"content": {"parts": [{"text": "ok"}]}, "finishReason": "STOP"}
     ],
     "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1},
-    "modelVersion": "gemini-2.0-flash",
+    "modelVersion": "gemini-2.5-flash",
 }
 
 _OK_MINIMAX = {
@@ -329,10 +329,10 @@ def provider_under_test(request) -> ProviderUnderTest:
             name=name,
             provider=p,
             endpoint=(
-                "https://mock.gemini.com/models/gemini-2.0-flash:generateContent"
+                "https://mock.gemini.com/models/gemini-2.5-flash:generateContent"
             ),
             stream_endpoint=(
-                "https://mock.gemini.com/models/gemini-2.0-flash"
+                "https://mock.gemini.com/models/gemini-2.5-flash"
                 ":streamGenerateContent?alt=sse"
             ),
             ok_response=_OK_GEMINI,

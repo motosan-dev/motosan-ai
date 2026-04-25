@@ -1,5 +1,7 @@
 # Python SDK Phase 2b — Gemini HTTP Provider Implementation Plan
 
+> **Status:** ✅ **COMPLETE (2026-04-24)** — shipped as `motosan-ai` v0.8.0; default model updated in v0.8.2 to `gemini-2.5-flash`.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a native `GeminiProvider` that calls Google's Generative Language REST API at `generativelanguage.googleapis.com/v1beta`. Full feature coverage: text, vision, tools, streaming, stop sequences, tool choice. No PDF (Gemini doesn't support document blocks).
@@ -19,7 +21,7 @@
   - Non-stream endpoint: `POST /v1beta/models/{model}:generateContent`
   - Stream endpoint: `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`
   - Auth header: `x-goog-api-key: <key>` (not `Authorization`)
-  - Default model: `gemini-2.0-flash`
+  - Default model: `gemini-2.5-flash`
 - **Role mapping gotcha:** Python SDK's `Role.assistant` → Gemini `"model"`; our `Role.tool` result → Gemini `"user"` role with a `functionResponse` part (Google merges tool results back into user turns).
 - **Tool call ID convention:** Gemini does not assign IDs to function calls. The Python SDK generates UUIDs on receipt. For tool_result messages, `tool_call_id` holds the **function name** (matches Rust SDK convention — see gemini.rs line 139-140 comment).
 
@@ -78,7 +80,7 @@ def provider():
 
 
 def test_default_model_is_gemini_2_flash(provider):
-    assert provider.model == "gemini-2.0-flash"
+    assert provider.model == "gemini-2.5-flash"
 
 
 def test_capabilities_is_with_image(provider):
@@ -88,14 +90,14 @@ def test_capabilities_is_with_image(provider):
 def test_generate_url_includes_model(provider):
     req = ChatRequest(messages=[Message.user("hi")])
     url = provider._generate_url(req)
-    assert url.endswith("/v1beta/models/gemini-2.0-flash:generateContent")
+    assert url.endswith("/v1beta/models/gemini-2.5-flash:generateContent")
 
 
 def test_stream_url_has_alt_sse(provider):
     req = ChatRequest(messages=[Message.user("hi")])
     url = provider._stream_url(req)
     assert url.endswith(
-        "/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse"
+        "/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     )
 
 
@@ -146,7 +148,7 @@ from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.types import ChatRequest, ChatResponse, StreamEvent
 
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
-_DEFAULT_MODEL = "gemini-2.0-flash"
+_DEFAULT_MODEL = "gemini-2.5-flash"
 _DEFAULT_MAX_TOKENS = 8192
 
 
@@ -907,7 +909,7 @@ def provider():
 def _url():
     return (
         "https://generativelanguage.googleapis.com/v1beta"
-        "/models/gemini-2.0-flash:generateContent"
+        "/models/gemini-2.5-flash:generateContent"
     )
 
 
@@ -925,7 +927,7 @@ async def test_chat_parses_text_response(provider):
                     }
                 ],
                 "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 2},
-                "modelVersion": "gemini-2.0-flash-001",
+                "modelVersion": "gemini-2.5-flash-001",
             },
         )
     )
@@ -935,7 +937,7 @@ async def test_chat_parses_text_response(provider):
     assert resp.stop_reason == StopReason.end_turn
     assert resp.usage.input_tokens == 5
     assert resp.usage.output_tokens == 2
-    assert resp.model == "gemini-2.0-flash-001"
+    assert resp.model == "gemini-2.5-flash-001"
 
 
 @respx.mock
@@ -962,7 +964,7 @@ async def test_chat_parses_function_call_as_tool_call(provider):
                     }
                 ],
                 "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5},
-                "modelVersion": "gemini-2.0-flash",
+                "modelVersion": "gemini-2.5-flash",
             },
         )
     )
@@ -1157,7 +1159,7 @@ def provider():
 def _url():
     return (
         "https://generativelanguage.googleapis.com/v1beta"
-        "/models/gemini-2.0-flash:generateContent"
+        "/models/gemini-2.5-flash:generateContent"
     )
 
 
@@ -1236,7 +1238,7 @@ def provider():
 def _stream_url():
     return (
         "https://generativelanguage.googleapis.com/v1beta"
-        "/models/gemini-2.0-flash:streamGenerateContent?alt=sse"
+        "/models/gemini-2.5-flash:streamGenerateContent?alt=sse"
     )
 
 
@@ -1502,7 +1504,7 @@ def test_provider_enum_has_gemini():
 
 
 def test_client_gemini_classmethod(monkeypatch):
-    client = Client.gemini(api_key="key", model="gemini-2.0-flash")
+    client = Client.gemini(api_key="key", model="gemini-2.5-flash")
     assert client.provider == Provider.gemini
     assert isinstance(client._provider, GeminiProvider)
 
@@ -1525,7 +1527,7 @@ async def test_client_chat_dispatches_to_gemini(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     url = (
         "https://generativelanguage.googleapis.com/v1beta"
-        "/models/gemini-2.0-flash:generateContent"
+        "/models/gemini-2.5-flash:generateContent"
     )
     respx.post(url).mock(
         return_value=httpx.Response(
@@ -1794,7 +1796,7 @@ Replace the date with the actual release day (YYYY-MM-DD) when cutting the relea
   - `Provider.gemini` registered in `Client` dispatch.
   - `Client.gemini(api_key=..., model=..., base_url=...)` classmethod.
   - `GEMINI_API_KEY` env var loaded automatically.
-  - Default model: `gemini-2.0-flash`.
+  - Default model: `gemini-2.5-flash`.
   - Full feature coverage: text, vision (base64 + URL), tools (`functionDeclarations`), tool choice (AUTO / ANY / allowedFunctionNames), streaming (`streamGenerateContent?alt=sse`), system prompts (`systemInstruction`), stop sequences (`stopSequences`), usage reporting (`promptTokenCount` / `candidatesTokenCount`).
   - Capabilities: `with_image()` — document blocks raise `InvalidRequestError` before any HTTP call.
   - Tool call IDs are generated client-side (Gemini doesn't assign them). By convention, `Message.tool_result(tool_call_id=<function_name>, ...)` uses the function name as the ID for Gemini round-trips.

@@ -134,10 +134,10 @@ When releasing both at once, use separate tags:
 
 ```bash
 git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md
-git commit -m "chore: release python-v0.5.0 + rust-v0.3.4"
-git tag -a python-v0.5.0 -m "python-v0.5.0 — summary"
-git tag -a rust-v0.3.4 -m "rust-v0.3.4 — summary"
-git push origin main python-v0.5.0 rust-v0.3.4
+git commit -m "chore: release python-vX.Y.Z + rust-vA.B.C"
+git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
+git tag -a rust-vA.B.C -m "rust-vA.B.C — summary"
+git push origin main python-vX.Y.Z rust-vA.B.C
 ```
 
 Both publish workflows will run in parallel.
