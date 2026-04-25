@@ -12,6 +12,12 @@
 
 ---
 
+## Errata from implementation
+
+The implementation cross-checked this plan against the Rust canon and followed `sdks/rust/src/providers/claude_code/spawn.rs` where the original plan text had stale flag guidance. Correct wire shapes are: `system_prompt(str)` emits `--system-prompt VALUE` while request-level extracted system prompts continue to emit `--append-system-prompt VALUE`; `allowed_tools` / `disallowed_tools` are variadic (`--allowed-tools Read Bash`), not comma-joined; and `max_budget_usd(f)` emits `--max-budget-usd VALUE`, not `--max-budget VALUE`. Tests now pin the Rust-compatible shapes.
+
+---
+
 ## Reference material
 
 - **Rust canon:** [sdks/rust/src/providers/claude_code/mod.rs](sdks/rust/src/providers/claude_code/mod.rs) — the ClaudeCodeProvider builder (lines 1-727). Enumerate all `pub fn` for the flag list. [sdks/rust/src/providers/claude_code/spawn.rs](sdks/rust/src/providers/claude_code/spawn.rs) — arg composition. [sdks/rust/src/providers/claude_code/stream_json.rs](sdks/rust/src/providers/claude_code/stream_json.rs) — NDJSON parsing (result event → usage + done).
@@ -155,7 +161,7 @@ Rust mapping (`sdks/rust/src/providers/claude_code/spawn.rs`):
 | Builder | CLI arg | Kind |
 |---|---|---|
 | `bare(bool)` | `--bare` | bool |
-| `system_prompt(str)` | `--append-system-prompt VALUE` | string |
+| `system_prompt(str)` | `--system-prompt VALUE` | string |
 | `permission_mode(mode)` | `--permission-mode VALUE` | string (plan/acceptEdits/default) |
 | `effort(level)` | `--effort VALUE` | string (low/medium/high) |
 | `fallback_model(str)` | `--fallback-model VALUE` | string |
@@ -187,10 +193,10 @@ def test_bare_flag_absent_by_default():
     assert "--bare" not in _args(ClaudeCodeClient())
 
 
-def test_system_prompt_emits_append_system_prompt():
+def test_system_prompt_emits_system_prompt():
     c = ClaudeCodeClient().system_prompt("be terse")
     args = _args(c)
-    i = args.index("--append-system-prompt")
+    i = args.index("--system-prompt")
     assert args[i + 1] == "be terse"
 
 
@@ -227,7 +233,7 @@ def test_agent_forwarded():
 
 def test_empty_system_prompt_omitted():
     c = ClaudeCodeClient().system_prompt("   ")
-    assert "--append-system-prompt" not in _args(c)
+    assert "--system-prompt" not in _args(c)
 ```
 
 - [ ] **Step 2: Run tests — should FAIL**
@@ -292,7 +298,7 @@ Extend `_build_args` — add these blocks after the existing flag handling, befo
         if self._config.bare:
             args.append("--bare")
         if self._config.system_prompt_flag:
-            args.extend(["--append-system-prompt", self._config.system_prompt_flag])
+            args.extend(["--system-prompt", self._config.system_prompt_flag])
         if self._config.permission_mode:
             args.extend(["--permission-mode", self._config.permission_mode])
         if self._config.effort:
@@ -325,7 +331,7 @@ git commit -m "feat(python,claude-code): add bare/system_prompt/permission_mode/
 - Modify: `sdks/python/motosan_ai/providers/claude_code.py`
 - Modify: `sdks/python/tests/test_claude_code_flags.py`
 
-Repeatable flags. Each exposes a singular appender (`add_dir`) and a plural replacer (`add_dirs`). Rust convention (from `spawn.rs`): `--add-dir PATH` can appear multiple times; `--allowed-tools "Tool1,Tool2"` is comma-joined.
+Repeatable flags. Each exposes a singular appender (`add_dir`) and a plural replacer (`add_dirs`). Rust convention (from `spawn.rs`): `--add-dir PATH` can appear multiple times; `--allowed-tools Tool1 Tool2` and `--disallowed-tools Tool1 Tool2` are variadic.
 
 - [ ] **Step 1: Append failing tests**
 
@@ -353,21 +359,21 @@ def test_allow_tool_appends():
     c = ClaudeCodeClient().allow_tool("Read").allow_tool("Write")
     args = _args(c)
     i = args.index("--allowed-tools")
-    assert args[i + 1] == "Read,Write"
+    assert args[i + 1 : i + 3] == ["Read", "Write"]
 
 
 def test_allowed_tools_replaces():
     c = ClaudeCodeClient().allow_tool("Read").allowed_tools(["Bash", "Edit"])
     args = _args(c)
     i = args.index("--allowed-tools")
-    assert args[i + 1] == "Bash,Edit"
+    assert args[i + 1 : i + 3] == ["Bash", "Edit"]
 
 
 def test_disallow_tool_appends():
     c = ClaudeCodeClient().disallow_tool("Bash").disallow_tool("Write")
     args = _args(c)
     i = args.index("--disallowed-tools")
-    assert args[i + 1] == "Bash,Write"
+    assert args[i + 1 : i + 3] == ["Bash", "Write"]
 
 
 def test_disallowed_tools_replaces():
@@ -426,9 +432,11 @@ In `_build_args`:
         for d in self._config.add_dirs:
             args.extend(["--add-dir", d])
         if self._config.allowed_tools:
-            args.extend(["--allowed-tools", ",".join(self._config.allowed_tools)])
+            args.append("--allowed-tools")
+            args.extend(self._config.allowed_tools)
         if self._config.disallowed_tools:
-            args.extend(["--disallowed-tools", ",".join(self._config.disallowed_tools)])
+            args.append("--disallowed-tools")
+            args.extend(self._config.disallowed_tools)
 ```
 
 - [ ] **Step 4: Run tests — PASS**
@@ -725,11 +733,11 @@ def test_plugin_dirs_replaces():
 def test_max_budget_usd_forwarded():
     c = ClaudeCodeClient().max_budget_usd(12.5)
     args = _args(c)
-    assert args[args.index("--max-budget") + 1] == "12.5"
+    assert args[args.index("--max-budget-usd") + 1] == "12.5"
 
 
 def test_max_budget_usd_absent_by_default():
-    assert "--max-budget" not in _args(ClaudeCodeClient())
+    assert "--max-budget-usd" not in _args(ClaudeCodeClient())
 ```
 
 - [ ] **Step 2: Run — FAIL**
@@ -761,7 +769,7 @@ def test_max_budget_usd_absent_by_default():
         for p in self._config.plugin_dirs:
             args.extend(["--plugin-dir", p])
         if self._config.max_budget_usd is not None:
-            args.extend(["--max-budget", str(self._config.max_budget_usd)])
+            args.extend(["--max-budget-usd", str(self._config.max_budget_usd)])
 ```
 
 - [ ] **Step 4: Run — PASS**

@@ -7,9 +7,10 @@
 > - Phase 2 ✅ complete (2026-04-24) — v0.7.0 (Anthropic wire) + v0.8.0 (Gemini HTTP).
 > - Testing infra ✅ complete (2026-04-24) — v0.8.1, 311 tests, snapshot-based parity matrix, OpenAI vision fix, `Retry-After` parsing, nightly live CI. See `2026-04-24-python-sdk-testing-strategy.md`.
 > - Patch fixes ✅ complete (2026-04-25) — v0.8.2, Anthropic OAuth thinking deltas, Gemini default `gemini-2.5-flash`, live vision fixtures.
-> - Phase 3 (CLI backends + OAuth) next.
+> - Phase 3a ✅ complete (2026-04-25) — v0.9.0, Claude Code CLI full flag surface + stream usage events.
+> - Phase 3b (Codex CLI provider) next.
 
-**Goal:** Bring `motosan-ai` Python SDK from its original v0.5.0 baseline toward feature parity with Rust SDK (v0.14.0). Current Python release: v0.8.2.
+**Goal:** Bring `motosan-ai` Python SDK from its original v0.5.0 baseline toward feature parity with Rust SDK (v0.14.0). Current Python release: v0.9.0.
 
 **Ship target:** Python v0.10.0+ in 4 successive releases (~8 weeks).
 
@@ -96,7 +97,7 @@ See detailed plan: `2026-04-24-python-sdk-phase2b-gemini.md`.
 
 Split into 4 sub-phases, each ships an independent 0.9.x release.
 
-**3a — Claude Code CLI full flag surface (v0.9.0)**
+**3a — Claude Code CLI full flag surface (v0.9.0) — ✅ COMPLETE (2026-04-25)**
 - Port Rust's 26 missing builder methods (`bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool/allowed_tools`, `disallow_tool/disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, `max_budget_usd`).
 - Refactor state into `_ClaudeCodeConfig` dataclass.
 - NDJSON `result` event now emits `StreamEvent(usage)` before terminal `done`, matching Rust `stream_json.rs`.
