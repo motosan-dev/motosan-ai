@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.11.0] - 2026-04-27
+
+### Removed (BREAKING)
+- **`Client.chat_sync()`** — removed per the v0.10.0 deprecation notice. The SDK is async-only; callers should wrap `await client.chat(...)` in `asyncio.run()` from synchronous contexts. See `sdks/python/README.md#sync-usage`.
+
+### Notes
+- No other surface changes; this is a single-method removal release.
+- Migration: `client.chat_sync(messages, **kwargs)` → `asyncio.run(client.chat(messages, **kwargs))`.
+
 ## [0.10.0] - 2026-04-26
 
 ### Added — Client API parity with Rust SDK (Phase 4)

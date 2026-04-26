@@ -174,16 +174,16 @@ client = Client.anthropic(api_key="...", max_retries=5)
 
 Respects `Retry-After` header when present.
 
-## Sync Wrapper (Deprecated)
+## Sync usage
 
-> **Deprecated** since v0.10.0; will be removed in v0.11.0. Use
-> `asyncio.run(client.chat(...))` instead.
+The SDK is async-only. Wrap the call in `asyncio.run`:
 
 ```python
+import asyncio
 from motosan_ai import Client, Message
 
 client = Client.minimax(api_key="...")
-response = client.chat_sync([Message.user("Hello from sync")])
+response = asyncio.run(client.chat([Message.user("Hello from sync")]))
 print(response.content)
 ```
 

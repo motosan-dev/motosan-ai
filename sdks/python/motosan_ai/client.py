@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import warnings
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import replace
 from enum import StrEnum
@@ -435,34 +434,3 @@ class Client:
         if not response.model:
             response = replace(response, model=model_hint)
         return response
-
-    def chat_sync(
-        self,
-        messages: Iterable[Message | dict[str, Any]],
-        *,
-        tools: list[Tool] | None = None,
-        system: str | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        provider_options: dict[str, Any] | None = None,
-    ) -> ChatResponse:
-        """Deprecated. Use ``asyncio.run(client.chat(...))`` instead.
-
-        Will be removed in v0.11.0.
-        """
-        warnings.warn(
-            "Client.chat_sync() is deprecated and will be removed in v0.11.0. "
-            "Wrap await client.chat(...) in asyncio.run() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return asyncio.run(
-            self.chat(
-                messages,
-                tools=tools,
-                system=system,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                provider_options=provider_options,
-            )
-        )

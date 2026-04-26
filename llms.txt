@@ -133,7 +133,7 @@ resp = await client.stream_collect_with(req)
 
 Use `*_with` for fields not exposed by `chat()`/`stream()` kwargs:
 `thinking`, `tool_choice`, `mcp_servers`, `system_blocks`, and `stop_sequences`.
-`Client.chat_sync()` is deprecated in v0.10.0; use `asyncio.run(client.chat(...))`.
+The SDK is async-only — wrap in `asyncio.run(client.chat(...))` from sync code.
 
 ### Message Helpers
 

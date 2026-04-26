@@ -54,18 +54,6 @@ def test_client_env_fallback(monkeypatch):
     assert client.api_key == "env-anthropic"
 
 
-@pytest.mark.filterwarnings("ignore::DeprecationWarning")
-def test_chat_sync(monkeypatch):
-    """chat_sync() is soft-deprecated in v0.10.0; this test ignores the
-    expected DeprecationWarning. Removal in v0.11.0 — drop this test then."""
-    monkeypatch.setenv("MINIMAX_API_KEY", "env-mini")
-    client = Client(Provider.minimax)
-    fake = FakeProvider()
-    client._provider = fake
-    response = client.chat_sync([Message.user("hi")])
-    assert response.content == "ok"
-
-
 def test_provider_factory_methods(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "a")
     monkeypatch.setenv("OPENAI_API_KEY", "o")
