@@ -2,6 +2,26 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.10.0] - 2026-04-26
+
+### Added — Client API parity with Rust SDK (Phase 4)
+- **`Client.chat_with(request: ChatRequest)`** — full ChatRequest passthrough. Use with `ChatRequest.builder()` for Phase 1 fields like `tool_choice`, `thinking`, `mcp_servers`, `system_blocks`, and `stop_sequences`.
+- **`Client.stream_with(request: ChatRequest)`** — full ChatRequest passthrough for streaming with the same retry semantics as `stream()`.
+- **`Client.stream_collect(messages, **kwargs)`** — drives a stream to completion and returns the assembled `ChatResponse`; convenience wrapper around `stream() + collect_stream()`.
+- **`Client.stream_collect_with(request: ChatRequest)`** — streaming + collecting with full ChatRequest control.
+- **`motosan_ai.collect_stream(events) -> ChatResponse`** — top-level helper for callers who want stream-to-response assembly without going through `Client`. Handles text, thinking, tool calls (start/args/end), usage, and stop reason.
+
+### Changed
+- `Client.chat()` and `Client.stream()` now delegate to `chat_with()` / `stream_with()` internally. No behavior change for existing callers.
+- Both `*_with` methods fall back to `client.model` when `request.model` is None (matches Rust precedence).
+
+### Deprecated
+- **`Client.chat_sync()`** — emits `DeprecationWarning`. Wrap `await client.chat(...)` in `asyncio.run()` instead. Will be removed in v0.11.0.
+
+### Notes
+- Phase 4 closes the Rust-parity roadmap. Python SDK is now method-for-method aligned with `motosan-ai` Rust v0.14.x at the Client layer.
+- See `docs/superpowers/plans/2026-04-26-python-sdk-phase4-client-api-parity.md` for the per-task TDD breakdown.
+
 ## [0.9.3] - 2026-04-25
 
 ### Added — `GeminiCodeAssistProvider` + Google OAuth (Phase 3d)

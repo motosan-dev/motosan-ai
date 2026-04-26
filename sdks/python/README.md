@@ -101,6 +101,62 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
+## Full `ChatRequest` Control
+
+`Client.chat()` exposes the common kwargs (`tools`, `system`, `temperature`,
+`max_tokens`, `provider_options`). For fields like `tool_choice`, `thinking`,
+`mcp_servers`, `system_blocks`, or `stop_sequences`, use `chat_with()` or
+`stream_with()` with `ChatRequest.builder()`:
+
+```python
+from motosan_ai import ChatRequest, Client, Message, ToolChoice
+
+client = Client.anthropic()
+
+req = (
+    ChatRequest.builder()
+    .message(Message.user("Solve: 13 * 17"))
+    .thinking(2048)
+    .tool_choice(ToolChoice.auto())
+    .system_cached("Show concise reasoning.")
+    .build()
+)
+resp = await client.chat_with(req)
+print(resp.thinking)
+print(resp.content)
+
+async for event in client.stream_with(req):
+    if event.content:
+        print(event.content, end="")
+```
+
+## Streaming → Assembled Response
+
+`stream_collect()` and `stream_collect_with()` drive a stream to completion and
+return a `ChatResponse`. Use them when a provider path is stream-first or when
+you want a complete response while preserving streaming transport behavior.
+
+```python
+from motosan_ai import ChatRequest, Client, Message
+
+client = Client.anthropic()
+
+# Convenience kwargs path
+resp = await client.stream_collect([Message.user("hi")])
+
+# Full ChatRequest path
+req = ChatRequest.builder().message(Message.user("hi")).thinking(1024).build()
+resp = await client.stream_collect_with(req)
+```
+
+The lower-level helper is also exported for custom stream callers:
+
+```python
+from motosan_ai import collect_stream
+
+resp = await collect_stream(event_iterator)
+```
+
 ## Retry
 
 All API calls automatically retry on transient errors (429 rate limit, 5xx server errors, network timeouts). Default: 3 retries with exponential backoff (100ms, 200ms, 400ms).
@@ -118,7 +174,10 @@ client = Client.anthropic(api_key="...", max_retries=5)
 
 Respects `Retry-After` header when present.
 
-## Sync Wrapper
+## Sync Wrapper (Deprecated)
+
+> **Deprecated** since v0.10.0; will be removed in v0.11.0. Use
+> `asyncio.run(client.chat(...))` instead.
 
 ```python
 from motosan_ai import Client, Message

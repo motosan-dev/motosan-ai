@@ -6,6 +6,7 @@ from typing import Any
 
 import httpx
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.types import (
@@ -290,67 +291,17 @@ class AnthropicProvider(BaseProvider):
         self.validate_request(request)
         # OAuth tokens require streaming — collect stream into a single response.
         if self._is_oauth:
-            content = ""
-            thinking_content = ""
-            tool_calls: list[ToolCall] = []
-            current_tc_id = ""
-            current_tc_name = ""
-            current_tc_args = ""
-            stop_reason = StopReason.end_turn
-            usage = Usage(0, 0)
-
-            async for event in self.stream(request):
-                if event.usage is not None:
-                    usage = Usage(
-                        input_tokens=event.usage.input_tokens or usage.input_tokens,
-                        output_tokens=event.usage.output_tokens or usage.output_tokens,
-                        cache_creation_input_tokens=(
-                            event.usage.cache_creation_input_tokens
-                            if event.usage.cache_creation_input_tokens is not None
-                            else usage.cache_creation_input_tokens
-                        ),
-                        cache_read_input_tokens=(
-                            event.usage.cache_read_input_tokens
-                            if event.usage.cache_read_input_tokens is not None
-                            else usage.cache_read_input_tokens
-                        ),
-                    )
-                if event.done:
-                    if event.stop_reason is not None:
-                        stop_reason = event.stop_reason
-                    break
-                if event.event_type == "text" and event.content:
-                    content += event.content
-                elif event.event_type == "thinking" and event.content:
-                    thinking_content += event.content
-                elif event.event_type == "tool_call_start":
-                    current_tc_id = event.tool_call_id or ""
-                    current_tc_name = event.tool_call_name or ""
-                    current_tc_args = ""
-                elif event.event_type == "tool_call_args":
-                    current_tc_args += event.tool_call_args_delta or ""
-                elif event.event_type == "tool_call_end":
-                    try:
-                        parsed_input = json.loads(current_tc_args) if current_tc_args else {}
-                    except json.JSONDecodeError:
-                        parsed_input = {}
-                    tool_calls.append(
-                        ToolCall(id=current_tc_id, name=current_tc_name, input=parsed_input)
-                    )
-                    current_tc_id = ""
-                    current_tc_name = ""
-                    current_tc_args = ""
-
-            if tool_calls:
+            response = await collect_stream(self.stream(request))
+            stop_reason = response.stop_reason
+            if response.tool_calls:
                 stop_reason = StopReason.tool_use
-
             return ChatResponse(
-                content=content,
+                content=response.content,
                 model=request.model or self.model,
-                usage=usage,
+                usage=response.usage,
                 stop_reason=stop_reason,
-                tool_calls=tool_calls,
-                thinking=thinking_content or None,
+                tool_calls=response.tool_calls,
+                thinking=response.thinking,
             )
 
         body = self._build_body(request)

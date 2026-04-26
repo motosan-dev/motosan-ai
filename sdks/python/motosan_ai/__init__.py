@@ -1,4 +1,5 @@
 from motosan_ai import oauth
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.client import Client, Provider
 from motosan_ai.error import (
     AuthError,
@@ -103,5 +104,6 @@ __all__ = [
     "ToolCall",
     "ToolChoice",
     "Usage",
+    "collect_stream",
     "oauth",
 ]

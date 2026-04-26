@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.9.3 · Rust 0.14.0
+- Python 0.10.0 · Rust 0.14.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -114,6 +114,27 @@ async for event in client.stream(
     # handle events (see Streaming section)
 ```
 
+### Rust-parity Client methods (Python v0.10.0)
+
+```python
+from motosan_ai import ChatRequest
+
+# Full ChatRequest passthrough; request.model falls back to client.model.
+req = ChatRequest.builder().message(Message.user("Hi")).thinking(1024).build()
+resp = await client.chat_with(req)
+
+async for event in client.stream_with(req):
+    ...
+
+# Stream-to-ChatResponse assembly.
+resp = await client.stream_collect([Message.user("Hi")])
+resp = await client.stream_collect_with(req)
+```
+
+Use `*_with` for fields not exposed by `chat()`/`stream()` kwargs:
+`thinking`, `tool_choice`, `mcp_servers`, `system_blocks`, and `stop_sequences`.
+`Client.chat_sync()` is deprecated in v0.10.0; use `asyncio.run(client.chat(...))`.
+
 ### Message Helpers
 
 ```python
@@ -173,7 +194,7 @@ Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `G
 
 `Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
 
-`GeminiCodeAssist` (Rust v0.13.0 feature `gemini-code-assist`; Python v0.9.3 `GeminiCodeAssistProvider` / `Provider.gemini_code_assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` in Rust or `motosan_ai.oauth` PKCE flow in Python). Requires GCP project ID. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
+`GeminiCodeAssist` (Rust v0.13.0 feature `gemini-code-assist`; Python v0.10.0 `GeminiCodeAssistProvider` / `Provider.gemini_code_assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` in Rust or `motosan_ai.oauth` PKCE flow in Python). Requires GCP project ID. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint).
 
 CLI backends (`ClaudeCode` / `CodexCli` / `GeminiCli`) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` via `.claude_code(...)` / `.codex_cli(...)` / `.gemini_cli(...)`. `ClaudeCode` and `CodexCli` landed in v0.11.0; `GeminiCli` followed in the same generation. See the CLI Backends section under Provider-Specific Notes for a full example.
 

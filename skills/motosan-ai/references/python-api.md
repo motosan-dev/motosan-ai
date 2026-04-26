@@ -17,6 +17,7 @@ from motosan_ai import (
     Message, Role, Tool, ToolCall,
     ChatRequest, ChatResponse,
     Usage, StopReason, StreamEvent,
+    collect_stream,
     MotosanError, AuthError, RateLimitError,
     InvalidRequestError, ConfigError, ProviderError,
     NetworkError, StreamError,
@@ -90,6 +91,75 @@ async for event in client.stream(
 ):
     # handle events — see streaming.md
 ```
+
+### `chat_with(request)` — full ChatRequest passthrough
+
+```python
+from motosan_ai import ChatRequest, Message, ToolChoice
+
+req = (
+    ChatRequest.builder()
+    .message(Message.user("Hello"))
+    .thinking(1024)
+    .tool_choice(ToolChoice.auto())
+    .build()
+)
+resp = await client.chat_with(req)
+```
+
+Use when you need fields not exposed by `chat()` kwargs: `thinking`,
+`tool_choice`, `mcp_servers`, `system_blocks`, `stop_sequences`. If
+`request.model` is unset, `client.model` is used.
+
+### `stream_with(request)` — full ChatRequest streaming
+
+```python
+async for event in client.stream_with(req):
+    if event.content:
+        print(event.content, end="")
+```
+
+Same use case and model fallback as `chat_with()`, with the same retry behavior
+as `stream()`.
+
+### `stream_collect()` — stream into ChatResponse
+
+```python
+resp = await client.stream_collect(
+    [Message.user("Hello")],
+    system="You are concise.",
+    max_tokens=256,
+)
+```
+
+Convenience wrapper around `stream()` plus `collect_stream()`. Returns a full
+`ChatResponse` with text, thinking, tool calls, usage, stop reason, and model
+fallback from `client.model`.
+
+### `stream_collect_with(request)` — full ChatRequest stream collection
+
+```python
+req = ChatRequest.builder().message(Message.user("Hello")).thinking(1024).build()
+resp = await client.stream_collect_with(req)
+```
+
+Use for stream-to-response assembly with the full `ChatRequest` surface.
+Response `model` falls back to `request.model or client.model` when the stream
+omits it.
+
+### `collect_stream(events)` — top-level helper
+
+```python
+from motosan_ai import collect_stream
+
+resp = await collect_stream(event_iterator)
+```
+
+Collects any `AsyncIterator[StreamEvent]` into `ChatResponse`; handles text,
+thinking, tool call start/args/end, usage, and terminal stop reason.
+
+> `Client.chat_sync()` is deprecated in Python v0.10.0 and will be removed in
+> v0.11.0. Use `asyncio.run(client.chat(...))` instead.
 
 ## Message Helpers
 

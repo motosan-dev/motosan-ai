@@ -9,10 +9,11 @@ from typing import Any
 
 import httpx
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers.gemini import build_gemini_body
-from motosan_ai.types import ChatRequest, ChatResponse, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.types import ChatRequest, ChatResponse, StopReason, StreamEvent, Usage
 
 _DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com"
 _DEFAULT_MODEL = "gemini-2.5-flash"
@@ -223,38 +224,12 @@ class GeminiCodeAssistProvider(BaseProvider):
             await resp.aclose()
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        content = ""
-        tool_calls: list[ToolCall] = []
-        usage = Usage(0, 0)
-        stop_reason = StopReason.end_turn
-        current_tc_id = ""
-        current_tc_name = ""
-        current_tc_args = ""
-
-        async for event in self.stream(request):
-            if event.event_type == "text" and event.content:
-                content += event.content
-            elif event.event_type == "tool_call_start":
-                current_tc_id = event.tool_call_id or ""
-                current_tc_name = event.tool_call_name or ""
-                current_tc_args = ""
-            elif event.event_type == "tool_call_args":
-                current_tc_args += event.tool_call_args_delta or ""
-            elif event.event_type == "tool_call_end":
-                try:
-                    parsed = json.loads(current_tc_args) if current_tc_args else {}
-                except json.JSONDecodeError:
-                    parsed = {}
-                tool_calls.append(ToolCall(id=current_tc_id, name=current_tc_name, input=parsed))
-            elif event.event_type == "usage" and event.usage is not None:
-                usage = event.usage
-            if event.done and event.stop_reason is not None:
-                stop_reason = event.stop_reason
-
+        response = await collect_stream(self.stream(request))
         return ChatResponse(
-            content=content,
-            tool_calls=tool_calls,
+            content=response.content,
+            tool_calls=response.tool_calls,
             model=request.model or self.model,
-            usage=usage,
-            stop_reason=stop_reason,
+            usage=response.usage,
+            stop_reason=response.stop_reason,
+            thinking=response.thinking,
         )

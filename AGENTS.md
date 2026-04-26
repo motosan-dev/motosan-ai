@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.14.0 (crates.io) · Python v0.9.3 (PyPI)
+Rust v0.14.0 (crates.io) · Python v0.10.0 (PyPI)
 
 ## Where To Find Things
 
@@ -49,6 +49,8 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 3. `ChatResponse.tool_calls` is always `Vec`/`list` — never optional
 4. `Message::tool_result(id, content)` constructor must exist in both SDKs
 5. All providers implement: `chat()`, `stream()`, `chat_with()`, `stream_with()`
+6. Python `Client` exposes Rust-parity helpers: `chat_with(request)`, `stream_with(request)`, `stream_collect(messages)`, `stream_collect_with(request)`; use `ChatRequest.builder()` with `*_with` for `thinking`, `tool_choice`, `mcp_servers`, `system_blocks`, and `stop_sequences`.
+7. Python `Client.chat_sync()` is deprecated in v0.10.0 and should be removed in v0.11.0; use `asyncio.run(client.chat(...))` for sync entry points.
 
 ## Adding a New Provider (Rust)
 

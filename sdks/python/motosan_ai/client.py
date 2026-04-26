@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import warnings
 from collections.abc import AsyncIterator, Iterable
+from dataclasses import replace
 from enum import StrEnum
 from typing import Any
 
@@ -281,6 +283,25 @@ class Client:
             provider_options=provider_options,
         )
 
+    async def chat_with(self, request: ChatRequest) -> ChatResponse:
+        """Send a fully-built ChatRequest.
+
+        Use this when you need fields that ``chat()`` kwargs do not expose,
+        such as tool_choice, thinking, mcp_servers, system_blocks, or
+        stop_sequences. If ``request.model`` is None, ``self.model`` is used.
+        """
+        if request.model is None and self.model is not None:
+            request = replace(request, model=self.model)
+
+        if self._max_retries > 0:
+            from motosan_ai.retry import with_retry
+
+            return await with_retry(
+                lambda: self._provider.chat(request),
+                max_retries=self._max_retries,
+            )
+        return await self._provider.chat(request)
+
     async def chat(
         self,
         messages: Iterable[Message | dict[str, Any]],
@@ -299,33 +320,17 @@ class Client:
             max_tokens=max_tokens,
             provider_options=provider_options,
         )
-        if self._max_retries > 0:
-            from motosan_ai.retry import with_retry
+        return await self.chat_with(request)
 
-            return await with_retry(
-                lambda: self._provider.chat(request),
-                max_retries=self._max_retries,
-            )
-        return await self._provider.chat(request)
+    async def stream_with(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
+        """Stream a fully-built ChatRequest.
 
-    async def stream(
-        self,
-        messages: Iterable[Message | dict[str, Any]],
-        *,
-        tools: list[Tool] | None = None,
-        system: str | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        provider_options: dict[str, Any] | None = None,
-    ) -> AsyncIterator[StreamEvent]:
-        request = self._build_request(
-            messages,
-            tools=tools,
-            system=system,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            provider_options=provider_options,
-        )
+        If ``request.model`` is None, ``self.model`` is used. Retry semantics
+        are identical to the previous ``stream()`` implementation.
+        """
+        if request.model is None and self.model is not None:
+            request = replace(request, model=self.model)
+
         last_error: RateLimitError | None = None
         max_attempts = self._max_retries + 1 if self._max_retries > 0 else 1
         for attempt in range(max_attempts):
@@ -342,7 +347,7 @@ class Client:
                             if remaining:
                                 yield StreamEvent(content=remaining, done=False)
                         yield event
-                return  # stream completed successfully
+                return
             except (RateLimitError, NetworkError, ProviderError) as e:
                 from motosan_ai.retry import (
                     DEFAULT_INITIAL_BACKOFF,
@@ -373,6 +378,64 @@ class Client:
                 await asyncio.sleep(wait)
         raise last_error  # type: ignore[misc]
 
+    async def stream(
+        self,
+        messages: Iterable[Message | dict[str, Any]],
+        *,
+        tools: list[Tool] | None = None,
+        system: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> AsyncIterator[StreamEvent]:
+        request = self._build_request(
+            messages,
+            tools=tools,
+            system=system,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            provider_options=provider_options,
+        )
+        async for event in self.stream_with(request):
+            yield event
+
+    async def stream_collect(
+        self,
+        messages: Iterable[Message | dict[str, Any]],
+        *,
+        tools: list[Tool] | None = None,
+        system: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+        provider_options: dict[str, Any] | None = None,
+    ) -> ChatResponse:
+        """Stream a chat request and assemble the full ChatResponse."""
+        from motosan_ai._stream_collect import collect_stream
+
+        response = await collect_stream(
+            self.stream(
+                messages,
+                tools=tools,
+                system=system,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                provider_options=provider_options,
+            )
+        )
+        if not response.model and self.model is not None:
+            response = replace(response, model=self.model)
+        return response
+
+    async def stream_collect_with(self, request: ChatRequest) -> ChatResponse:
+        """Stream a fully-built ChatRequest and assemble the full ChatResponse."""
+        from motosan_ai._stream_collect import collect_stream
+
+        model_hint = request.model or self.model or ""
+        response = await collect_stream(self.stream_with(request))
+        if not response.model:
+            response = replace(response, model=model_hint)
+        return response
+
     def chat_sync(
         self,
         messages: Iterable[Message | dict[str, Any]],
@@ -383,6 +446,16 @@ class Client:
         max_tokens: int | None = None,
         provider_options: dict[str, Any] | None = None,
     ) -> ChatResponse:
+        """Deprecated. Use ``asyncio.run(client.chat(...))`` instead.
+
+        Will be removed in v0.11.0.
+        """
+        warnings.warn(
+            "Client.chat_sync() is deprecated and will be removed in v0.11.0. "
+            "Wrap await client.chat(...) in asyncio.run() instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         return asyncio.run(
             self.chat(
                 messages,
