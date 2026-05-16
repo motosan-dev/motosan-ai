@@ -12,6 +12,29 @@
 //! authentication, tool execution, sandboxing, and approvals internally; we
 //! just surface the final `agent_message` text plus token usage.
 //!
+//! # Streaming vs Blocking
+//!
+//! Unlike the HTTP providers (Anthropic, OpenAI, etc.) where `.chat()`
+//! and `.stream()` are two views over the same SSE engine, the codex CLI
+//! always emits NDJSON regardless of which path is used:
+//!
+//! - [`chat`](CodexCliProvider) spawns `codex exec --json
+//!   --skip-git-repo-check`, waits for the subprocess to exit, collects
+//!   the full NDJSON output, and extracts the final `agent_message` plus
+//!   `turn.completed` usage into a single [`ChatResponse`]. Intermediate
+//!   events are discarded.
+//! - [`stream`](CodexCliProvider) spawns the same command but reads
+//!   NDJSON lines as they arrive, yielding one [`StreamEvent`] per
+//!   meaningful event (`item.completed` of type `agent_message` becomes
+//!   `Text`; `turn.completed` becomes the terminal `done` event with
+//!   usage).
+//!
+//! Callers should prefer `stream()` for any UI that benefits from
+//! incremental output, and `chat()` only when they need the whole reply
+//! as a single string.
+//!
+//! [`StreamEvent`]: crate::StreamEvent
+//!
 //! # Why it lives outside `providers/`
 //!
 //! HTTP providers share request/response serialization machinery. A CLI-based

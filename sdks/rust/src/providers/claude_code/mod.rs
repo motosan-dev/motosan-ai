@@ -6,6 +6,29 @@
 //! the same shape as [`codex_cli`](super::codex_cli) and
 //! [`gemini_cli`](super::gemini_cli) so all three CLI backends are
 //! interchangeable via `Box<dyn ProviderImpl>`.
+//!
+//! # Streaming vs Blocking
+//!
+//! Unlike the HTTP providers (Anthropic, OpenAI, etc.) where `.chat()`
+//! and `.stream()` are two views over the same SSE engine, CLI backends
+//! spawn the binary in **different modes** for each path:
+//!
+//! - [`chat`](ClaudeCodeProvider) spawns `claude --print -` (no
+//!   `--output-format`), waits for the subprocess to exit, collects the
+//!   complete stdout, and returns a single [`ChatResponse`]. No
+//!   intermediate events are surfaced. Token usage is `0`/`0` unless
+//!   `agent_mode` is enabled (which adds `--output-format json`).
+//! - [`stream`](ClaudeCodeProvider) spawns
+//!   `claude --print --output-format stream-json --verbose -`, reads
+//!   NDJSON lines from stdout as they arrive, and yields one
+//!   [`StreamEvent`] per parsed line. The `--verbose` flag is **required**
+//!   by `claude` ≥ 2.1.x for this format and is enforced by this crate.
+//!
+//! Callers should prefer `stream()` for any UI that benefits from
+//! incremental output, and `chat()` only when they need the whole reply
+//! as a single string.
+//!
+//! [`StreamEvent`]: crate::StreamEvent
 
 pub mod prompt;
 mod spawn;
@@ -393,7 +416,15 @@ impl ClaudeCodeProvider {
         let config = self.build_spawn_config(request.model, append_system_prompt);
 
         let mut cmd = Command::new(&config.binary_path);
-        cmd.arg("--print").arg("--output-format").arg("stream-json");
+        // `--verbose` is required by `claude` ≥ 2.1.x when combining `--print`
+        // with `--output-format=stream-json`. Without it the CLI exits with
+        // "Error: When using --print, --output-format=stream-json requires
+        // --verbose" and emits zero NDJSON — our stream then yields no events
+        // and capo's downstream consumer sees nothing.
+        cmd.arg("--print")
+            .arg("--output-format")
+            .arg("stream-json")
+            .arg("--verbose");
         cmd.args(spawn::common_args(&config));
         cmd.arg("-");
 

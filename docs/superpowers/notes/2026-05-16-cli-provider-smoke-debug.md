@@ -70,9 +70,13 @@ echo "Reply with exactly the word: pong" | codex exec --json --skip-git-repo-che
 
 Codex with `codex-cli 0.130.0` emits the expected events under motosan-ai's exact spawn args. If capo continues to see empty output for `--provider codex-cli` after the claude fix lands, the next investigation step is parser shape: do motosan-ai's `codex_cli/mod.rs` and `codex_cli/event.rs` correctly map `item.completed` events with `item.type=="agent_message"` to a `StreamEvent::Text`? That's an in-repo audit worth ~30 minutes; out of scope for this round.
 
-## Fix scope (claude_code)
+## Fix scope (claude_code) — turned out to be TWO bugs, not one
 
-Single-line change in `claude_code/mod.rs:396`:
+**Update 2026-05-17 (during implementation):** the `--verbose` fix was necessary but **not sufficient**. After adding it, the live integration test still failed with zero Text events. Investigation found a *second* bug: the NDJSON parser only recognised the legacy `{"type":"text","text":"..."}` event shape. Modern `claude` (≥ 2.1.x) emits assistant text inside `{"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}` — which the old parser dropped as `Other`. Both bugs had to be fixed together for any text to reach consumers.
+
+### Bug 1: missing `--verbose` flag
+
+In `claude_code/mod.rs:396`:
 
 ```diff
 - cmd.arg("--print").arg("--output-format").arg("stream-json");
@@ -81,8 +85,20 @@ Single-line change in `claude_code/mod.rs:396`:
 
 `--verbose` has been a stable flag in the `claude` CLI long before the requirement was added, so this is backwards-compatible with older binaries.
 
-Also worth fixing in the same commit:
-- `mod.rs:452`: `let _ = child.wait().await;` silently swallows non-zero exit codes. Should at minimum log or yield a `StreamEvent::Error` when the child exits non-zero AND no events were emitted. (Separate paragraph in the fix; not blocking.)
+### Bug 2: stale NDJSON parser
+
+In `claude_code/stream_json.rs`, the `ClaudeStreamEvent` enum only matched `Text` and `Result`. Added `Assistant { message: AssistantMessage }` variant + `AssistantContentBlock` enum that walks `message.content[]`, extracts text from `text`-typed blocks, and skips `thinking`/`tool_use`/etc via `#[serde(other)]`. Multiple text blocks in a single assistant turn are concatenated.
+
+Three unit tests added:
+- `parse_assistant_event_with_single_text_block`
+- `assistant_event_skips_thinking_keeps_text`
+- `assistant_event_with_only_non_text_blocks_is_dropped`
+
+Plus the live integration test (`integration_client_dispatches_to_claude_code_stream` in `tests/client_builder.rs`) now passes against the real `claude` binary.
+
+### Secondary issue (deferred, NOT fixed in 0.14.3)
+
+- `mod.rs:452`: `let _ = child.wait().await;` silently swallows non-zero exit codes. The `--verbose`/parser bugs were both symptoms whose detection would have been much faster if a non-zero exit yielded a `StreamEvent::Error`. Fix is straightforward but introduces a new event variant for callers to handle — separate PR worth a small design conversation.
 
 ## Test plan
 

@@ -242,6 +242,49 @@ fn client_builder_still_requires_api_key_for_http_providers() {
     assert!(matches!(result, Err(MotosanError::Config(_))));
 }
 
+#[cfg(feature = "claude-code")]
+#[tokio::test]
+#[ignore] // Requires `claude` CLI installed + auth.
+async fn integration_client_dispatches_to_claude_code_stream() {
+    // Regression guard for the 0.14.3 fix: claude --print --output-format
+    // stream-json now requires --verbose (claude ≥ 2.1.x). Without the
+    // --verbose arg in claude_code/mod.rs the CLI errors at startup, stdout
+    // is empty, and this stream yields ZERO events — which is exactly what
+    // capo's manual smoke surfaced. This test fails fast if the regression
+    // ever returns: the stream must produce at least one non-empty Text
+    // event for a trivial "pong" prompt.
+    use motosan_ai::{ChatRequest, ClaudeCodeProvider, StreamEventType};
+    use tokio_stream::StreamExt;
+
+    let client = Client::builder()
+        .provider(Provider::ClaudeCode)
+        .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+        .build()
+        .expect("build client");
+
+    let request = ChatRequest::builder()
+        .message(Message::user("Reply with only the word 'pong'."))
+        .build();
+
+    let mut stream = client
+        .stream_with(request)
+        .await
+        .expect("claude stream should succeed via Client dispatch");
+
+    let mut saw_non_empty_text = false;
+    while let Some(event) = stream.next().await {
+        if matches!(event.event_type, StreamEventType::Text) && !event.content.trim().is_empty() {
+            saw_non_empty_text = true;
+        }
+    }
+
+    assert!(
+        saw_non_empty_text,
+        "claude_code .stream() emitted no non-empty Text events — \
+         did `--verbose` get dropped from claude_code/mod.rs?"
+    );
+}
+
 #[cfg(feature = "codex-cli")]
 #[tokio::test]
 #[ignore] // Requires `codex` CLI installed + auth.

@@ -5,17 +5,47 @@ use crate::types::{StreamEvent, Usage};
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 pub enum ClaudeStreamEvent {
+    // Legacy shape emitted by claude < 2.1.x. Kept for backward compatibility
+    // with older binaries; never observed under current claude releases.
     #[serde(rename = "text")]
     Text { text: String },
 
+    // Current shape (claude ≥ 2.1.x): assistant turns ship one event per
+    // turn with a `message.content` array of typed blocks. We pull text out
+    // of the `text` blocks and ignore `thinking` / `tool_use` for now.
+    #[serde(rename = "assistant")]
+    Assistant { message: AssistantMessage },
+
     #[serde(rename = "result")]
     Result {
+        // The `result` field on a terminal `result` event duplicates what
+        // we already yielded as Text from the preceding `assistant` event.
+        // Kept parsed so the variant matches the wire shape, deliberately
+        // ignored to avoid double-emission.
         #[allow(dead_code)]
         result: String,
         #[serde(default)]
         usage: Option<ClaudeStreamUsage>,
     },
 
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+pub struct AssistantMessage {
+    pub content: Vec<AssistantContentBlock>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+pub enum AssistantContentBlock {
+    #[serde(rename = "text")]
+    Text { text: String },
+
+    // `thinking`, `tool_use`, etc — ignored for now; capo doesn't surface
+    // these to the user and motosan-ai's CLI bridge has no Stream variant
+    // for them yet.
     #[serde(other)]
     Other,
 }
@@ -42,6 +72,21 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
     match event {
         ClaudeStreamEvent::Text { text } if !text.is_empty() => {
             Some(NdjsonAction::Text(StreamEvent::text(text)))
+        }
+        ClaudeStreamEvent::Assistant { message } => {
+            let combined: String = message
+                .content
+                .iter()
+                .filter_map(|block| match block {
+                    AssistantContentBlock::Text { text } => Some(text.as_str()),
+                    AssistantContentBlock::Other => None,
+                })
+                .collect();
+            if combined.is_empty() {
+                None
+            } else {
+                Some(NdjsonAction::Text(StreamEvent::text(combined)))
+            }
         }
         ClaudeStreamEvent::Result { usage, .. } => {
             let usage_event = usage.map(|u| {
@@ -124,6 +169,41 @@ mod tests {
     #[test]
     fn ignore_empty_text() {
         let line = r#"{"type":"text","text":""}"#;
+        assert!(parse_ndjson_line(line).is_none());
+    }
+
+    #[test]
+    fn parse_assistant_event_with_single_text_block() {
+        // Wire shape emitted by claude ≥ 2.1.x in stream-json mode.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"pong"}]}}"#;
+        let action = parse_ndjson_line(line).expect("should parse");
+        match action {
+            NdjsonAction::Text(event) => {
+                assert_eq!(event.content, "pong");
+                assert!(!event.done);
+            }
+            _ => panic!("expected Text action"),
+        }
+    }
+
+    #[test]
+    fn assistant_event_skips_thinking_keeps_text() {
+        // Mixed content with a thinking block before the text block. Only the
+        // text portion should reach motosan-ai's stream consumers.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"pong"}]}}"#;
+        let action = parse_ndjson_line(line).expect("should parse");
+        match action {
+            NdjsonAction::Text(event) => {
+                assert_eq!(event.content, "pong");
+            }
+            _ => panic!("expected Text action"),
+        }
+    }
+
+    #[test]
+    fn assistant_event_with_only_non_text_blocks_is_dropped() {
+        // tool_use-only assistant turn: nothing to surface as text.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"x","input":{}}]}}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
 }
