@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.10.0 · Rust 0.14.0
+- Python 0.10.0 · Rust 0.14.2
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.14.0", features = ["anthropic"] }
+motosan-ai = { version = "0.14.2", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -571,6 +571,16 @@ Billing: subscription-based ($19–$45/seat/month). 1,000–2,000 requests/day d
 
 - Regular API key (`sk-ant-api*`): uses `x-api-key` header
 - OAuth token (`sk-ant-oat01*`): auto-switches to OAuth mode with `Authorization: Bearer`, streaming required, `chat()` auto-redirects to `stream()`
+
+### Anthropic Base URL
+
+```rust
+// Point at a proxy, on-prem deployment, or Anthropic-compatible third-party endpoint.
+// Defaults to https://api.anthropic.com when unset. (Rust v0.14.2+)
+client_builder.anthropic_base_url("https://proxy.example.com/anthropic")
+```
+
+Getter: `client.anthropic_base_url() -> Option<&str>` returns the override, or `None` if the default is in use.
 
 ### OpenAI
 
