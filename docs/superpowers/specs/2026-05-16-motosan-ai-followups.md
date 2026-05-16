@@ -203,6 +203,36 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 ---
 
+## Long-term backlog (post-§2–§5, not for 0.14.x / 0.15.0)
+
+Two ideas surfaced by reading [@earendil-works/pi-ai](https://github.com/earendil-works/pi/tree/main/packages/ai) (v0.74.0, TS/npm equivalent unified-LLM package) on 2026-05-16. Recording here so they don't get lost, but **explicitly out of §2–§5 scope** — neither is reachable through the current followups.
+
+### B1. Built-in `Provider::Faux` for downstream testing
+
+**What:** A canned-response provider that downstream consumers (capo, motosan-agent-loop, any future consumer) can use in tests without spinning up a mockito server. Returns scripted `ChatResponse` / `StreamEvent` sequences from a builder.
+
+**Reference:** pi-ai's `packages/ai/src/providers/faux.ts` (~15 KB). It's a first-class provider in their registry, gated behind no feature flag.
+
+**Why now:** capo's M2 smoke test had to spin up mockito to test motosan-ai dispatch wiring. A built-in faux provider would have cut that to ~5 LOC of canned responses.
+
+**Why deferred:** Pure ergonomic improvement, no caller is currently blocked. Probably a new feature flag (`faux`) gated behind `cfg(any(test, feature = "faux"))` to avoid bloating the default release surface. Earliest fit: 0.16.0 or later.
+
+### B2. Re-evaluate stream error model — errors-as-events vs `Result<BoxStream, _>`
+
+**What:** pi-ai encodes stream-terminal errors **into the stream itself** as an `AssistantMessage` with `stopReason="error"` + `errorMessage`. motosan-ai currently splits failure between (a) `Result<BoxStream, MotosanError>` at stream-acquisition time and (b) per-event error variants once the stream is live.
+
+**Trade-off:** pi-ai's model gives consumers a single failure-handling site (the stream loop). motosan-ai's model surfaces setup failures synchronously, which can be friendlier when the entire run shouldn't start. Neither is universally better.
+
+**Why deferred:** Changing this is **breaking** for everyone currently consuming `Result<BoxStream, _>` (capo, motosan-agent-loop). Worth revisiting only when (a) we hit a real UX problem downstream, or (b) we're cutting a 1.0 anyway. Earliest fit: 1.0 conversation, not a 0.x patch.
+
+### Not borrowed from pi-ai
+
+- **Registry-based dispatch** (`Map<string, RegisteredApiProvider>` vs our `enum Provider`) — our enum is simpler and works for the closed set of providers we ship. Don't refactor.
+- **Auto-generated model registry** (`models.generated.ts`, 448 KB) — useful for IDE autocomplete but heavy; motosan-ai keeps models as opaque strings on purpose. Don't pursue.
+- **Image generation / Bedrock / Cloudflare AI Gateway / Vertex** — no demand from current consumers.
+
+---
+
 ## Reference: how the related capo work threads through
 
 For context, the consuming project capo (`~/Projects/wade/capo/`):
