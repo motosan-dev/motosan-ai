@@ -15,6 +15,7 @@ pub struct Client {
     openai_responses_fallback: bool,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
+    anthropic_base_url: Option<String>,
     minimax_base_url: Option<String>,
     ollama_base_url: String,
     ollama_native: bool,
@@ -80,6 +81,13 @@ impl Client {
 
     pub fn openai_responses_fallback(&self) -> bool {
         self.openai_responses_fallback
+    }
+
+    /// The custom Anthropic base URL, if one was set via
+    /// [`ClientBuilder::anthropic_base_url`]. Returns `None` when the client
+    /// uses the default `https://api.anthropic.com`.
+    pub fn anthropic_base_url(&self) -> Option<&str> {
+        self.anthropic_base_url.as_deref()
     }
 
     pub async fn chat(&self, messages: Vec<Message>) -> Result<ChatResponse, MotosanError> {
@@ -486,7 +494,7 @@ impl Client {
         crate::providers::anthropic::AnthropicProvider::new(
             self.api_key.clone(),
             self.model.clone(),
-            None,
+            self.anthropic_base_url.clone(),
         )
         .with_retry_policy(self.retry_policy.clone())
     }
@@ -657,6 +665,7 @@ pub struct ClientBuilder {
     openai_responses_fallback: Option<bool>,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
+    anthropic_base_url: Option<String>,
     minimax_base_url: Option<String>,
     ollama_base_url: Option<String>,
     ollama_native: Option<bool>,
@@ -730,6 +739,14 @@ impl ClientBuilder {
     /// enabled.
     pub fn openai_responses_url(mut self, url: impl Into<String>) -> Self {
         self.openai_responses_url = Some(url.into());
+        self
+    }
+
+    /// Override the Anthropic base URL. Useful for staging, on-prem
+    /// proxies, or Anthropic-compatible third-party endpoints. Defaults to
+    /// `https://api.anthropic.com` when unset.
+    pub fn anthropic_base_url(mut self, anthropic_base_url: impl Into<String>) -> Self {
+        self.anthropic_base_url = Some(anthropic_base_url.into());
         self
     }
 
@@ -860,6 +877,7 @@ impl ClientBuilder {
             openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
             openai_chat_url: self.openai_chat_url,
             openai_responses_url: self.openai_responses_url,
+            anthropic_base_url: self.anthropic_base_url,
             minimax_base_url: self.minimax_base_url,
             ollama_base_url: self
                 .ollama_base_url

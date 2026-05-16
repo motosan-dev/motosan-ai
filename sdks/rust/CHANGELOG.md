@@ -2,6 +2,16 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.14.2] - 2026-05-16
+
+### Added
+- **`ClientBuilder::anthropic_base_url(...)`** — override the Anthropic base URL for staging, on-prem proxies, or Anthropic-compatible third-party endpoints. Defaults to `https://api.anthropic.com` when unset. Mirrors the existing `minimax_base_url` / `ollama_base_url` setters. The new value is forwarded to `AnthropicProvider::new(..., base_url)` in `build_anthropic_provider`.
+- **`Client::anthropic_base_url() -> Option<&str>`** — getter that returns the override if one was set, `None` otherwise. Used by downstream consumers and the new round-trip test.
+
+### Notes
+- Purely additive: existing `Client::builder().provider(Provider::Anthropic).api_key(...).build()` callers see no behaviour change.
+- Restores parity with M1-era capo and similar downstream wrappers that previously rolled their own `AnthropicProvider` constructor to support custom base URLs.
+
 ## [0.14.1] - 2026-04-25
 
 ### Fixed

@@ -51,6 +51,31 @@ fn builder_uses_default_retry_policy_and_allows_override() {
     );
 }
 
+#[cfg(feature = "anthropic")]
+#[test]
+fn builder_anthropic_base_url_defaults_to_none_and_round_trips_override() {
+    // Default: no override set → getter returns None (provider falls back to
+    // https://api.anthropic.com).
+    let default_client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("k")
+        .build()
+        .expect("build client");
+    assert_eq!(default_client.anthropic_base_url(), None);
+
+    // Override: set a custom URL → getter returns it verbatim.
+    let custom_client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("k")
+        .anthropic_base_url("https://proxy.example.com/anthropic")
+        .build()
+        .expect("build client");
+    assert_eq!(
+        custom_client.anthropic_base_url(),
+        Some("https://proxy.example.com/anthropic")
+    );
+}
+
 #[cfg(feature = "minimax")]
 #[tokio::test]
 async fn builder_accepts_minimax_base_url_override() {
