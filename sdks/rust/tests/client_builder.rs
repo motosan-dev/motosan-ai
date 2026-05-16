@@ -51,6 +51,70 @@ fn builder_uses_default_retry_policy_and_allows_override() {
     );
 }
 
+#[cfg(feature = "anthropic")]
+#[test]
+fn builder_anthropic_base_url_defaults_to_none_and_round_trips_override() {
+    // Default: no override set → getter returns None (provider falls back to
+    // https://api.anthropic.com).
+    let default_client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("k")
+        .build()
+        .expect("build client");
+    assert_eq!(default_client.anthropic_base_url(), None);
+
+    // Override: set a custom URL → getter returns it verbatim.
+    let custom_client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("k")
+        .anthropic_base_url("https://proxy.example.com/anthropic")
+        .build()
+        .expect("build client");
+    assert_eq!(
+        custom_client.anthropic_base_url(),
+        Some("https://proxy.example.com/anthropic")
+    );
+}
+
+#[cfg(feature = "anthropic")]
+#[tokio::test]
+async fn builder_anthropic_base_url_is_forwarded_to_http_request() {
+    // Regression guard: the getter test above can pass even if
+    // build_anthropic_provider stops threading self.anthropic_base_url into
+    // AnthropicProvider::new. This test asserts the override actually reaches
+    // the wire by pointing the client at a mockito server and verifying the
+    // POST lands on that host.
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("test-key")
+        .anthropic_base_url(server.url())
+        .build()
+        .expect("build client");
+
+    let _ = client
+        .chat(vec![Message::user("hi")])
+        .await
+        .expect("chat against mock server");
+    mock.assert_async().await;
+}
+
 #[cfg(feature = "minimax")]
 #[tokio::test]
 async fn builder_accepts_minimax_base_url_override() {
