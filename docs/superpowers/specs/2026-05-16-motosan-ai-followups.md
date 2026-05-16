@@ -213,17 +213,17 @@ Two ideas surfaced by reading [@earendil-works/pi-ai](https://github.com/earendi
 
 **Reference:** pi-ai's `packages/ai/src/providers/faux.ts` (~15 KB). It's a first-class provider in their registry, gated behind no feature flag.
 
-**Why now:** capo's M2 smoke test had to spin up mockito to test motosan-ai dispatch wiring. A built-in faux provider would have cut that to ~5 LOC of canned responses.
+**Motivating example:** capo's M2 smoke test had to spin up mockito to test motosan-ai dispatch wiring. A built-in faux provider would have cut that to ~5 LOC of canned responses.
 
-**Why deferred:** Pure ergonomic improvement, no caller is currently blocked. Probably a new feature flag (`faux`) gated behind `cfg(any(test, feature = "faux"))` to avoid bloating the default release surface. Earliest fit: 0.16.0 or later.
+**Why deferred:** Pure ergonomic improvement, no caller is currently blocked. Likely behind a `faux` feature flag to keep the default release surface small, but the implementation details (flag layout, builder shape, default behaviour) are left to the implementer. Earliest fit: 0.16.0 or later.
 
 ### B2. Re-evaluate stream error model — errors-as-events vs `Result<BoxStream, _>`
 
 **What:** pi-ai encodes stream-terminal errors **into the stream itself** as an `AssistantMessage` with `stopReason="error"` + `errorMessage`. motosan-ai currently splits failure between (a) `Result<BoxStream, MotosanError>` at stream-acquisition time and (b) per-event error variants once the stream is live.
 
-**Trade-off:** pi-ai's model gives consumers a single failure-handling site (the stream loop). motosan-ai's model surfaces setup failures synchronously, which can be friendlier when the entire run shouldn't start. Neither is universally better.
+**Trade-off:** pi-ai's model gives consumers a single failure-handling site (the stream loop). motosan-ai's model surfaces setup failures synchronously, which lets the caller short-circuit before spinning up consumer state (UI, downstream tasks, telemetry) for a run that was never going to start. Neither is universally better.
 
-**Why deferred:** Changing this is **breaking** for everyone currently consuming `Result<BoxStream, _>` (capo, motosan-agent-loop). Worth revisiting only when (a) we hit a real UX problem downstream, or (b) we're cutting a 1.0 anyway. Earliest fit: 1.0 conversation, not a 0.x patch.
+**Why deferred:** Changing this is **breaking** for everyone currently consuming `Result<BoxStream, _>` (capo, motosan-agent-loop). Worth revisiting only when (a) we hit a real UX problem downstream, or (b) we're cutting a 1.0 anyway. Earliest fit: 1.0 release planning, not a 0.x patch.
 
 ### Not borrowed from pi-ai
 
