@@ -1,6 +1,6 @@
 # motosan-ai Rust SDK Follow-ups — 2026-05-16
 
-**Status:** Draft (spec); ready to hand off to a fresh session running inside `~/Projects/wade/motosan-ai/`.
+**Status:** In progress — §1 shipped 2026-05-16 (motosan-ai 0.14.2 on crates.io); §2–§5 open. Ready to hand off to a fresh session running inside `~/Projects/wade/motosan-ai/`.
 
 **Context:** Surfaced during capo's M2 manual-smoke side-quest (capo PR #11 — "multi-provider LLM dispatch"). capo wanted to use the user's already-authenticated `claude` / `codex` CLIs as LLM providers via `motosan-ai`'s `Provider::ClaudeCode` / `Provider::CodexCli`. The dispatch wiring worked, but capo's print-mode smoke discovered the final assistant text never reaches capo. An audit of motosan-ai's Rust SDK surfaced four additional items worth addressing.
 
@@ -8,31 +8,25 @@ This spec collects all five into one document so they can be triaged + executed 
 
 ---
 
-## 1. In-flight work — publish 0.14.2
+## 1. ✅ DONE — publish 0.14.2
 
-**Already done** (merged to `main`, commits `7847136` + `ac03b16`, merge `f13d1fa`):
+**Shipped** (merged to `main`, commits `7847136` + `ac03b16`, merge `f13d1fa`):
 - `ClientBuilder::anthropic_base_url(...)` setter
 - `Client::anthropic_base_url() -> Option<&str>` getter
 - Threading through `build_anthropic_provider` (was hardcoded `None`)
-- Round-trip test in `tests/client_builder.rs`
+- Round-trip test + mockito wire-through test in `tests/client_builder.rs`
 - Bumped `version = "0.14.2"` in `sdks/rust/Cargo.toml`
 - `CHANGELOG.md` entry
+- Release-checklist docs (AGENTS.md, llms.txt, SKILL.md, READMEs, rust-api.md)
 
-**Pending (user action):**
-1. Tag the merge commit:
-   ```bash
-   cd ~/Projects/wade/motosan-ai
-   git tag rust-v0.14.2 f13d1fa
-   git push origin rust-v0.14.2
-   ```
-2. Publish to crates.io:
-   ```bash
-   cd ~/Projects/wade/motosan-ai/sdks/rust
-   cargo publish
-   ```
-3. Notify the capo session — capo has a ~20 LOC follow-up patch waiting (bump `motosan-ai = "0.14"` + add `Settings::anthropic.base_url` + env overlay + chain `.anthropic_base_url()` in `build_anthropic` when non-default).
+**Release** (completed 2026-05-16):
+1. ✅ Pre-push gate passed (4 stages, incl. 9 Rust live tests against Anthropic API)
+2. ✅ PR [#173](https://github.com/motosan-dev/motosan-ai/pull/173) merged via `gh pr merge --merge` → `f13d1fa`
+3. ✅ Tag `rust-v0.14.2` pushed → triggered `publish-rust.yml` ([run 25956826592](https://github.com/motosan-dev/motosan-ai/actions/runs/25956826592))
+4. ✅ Workflow green (fmt + clippy + test --all-features + publish)
+5. ✅ crates.io: `motosan-ai 0.14.2` live at `2026-05-16T08:03:41Z`, not yanked
 
-**Risk:** publish is destructive (public on crates.io). Verify the changeset before running `cargo publish`. The change is purely additive — no breaking-change risk to existing consumers.
+**Downstream (capo) — out of scope for this repo:** capo has a ~20 LOC follow-up patch waiting (bump `motosan-ai = "0.14.2"` + add `Settings::anthropic.base_url` + env overlay + chain `.anthropic_base_url()` in `build_anthropic` when non-default). Tracked on the capo side.
 
 ---
 
@@ -184,7 +178,7 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 | Release | Includes | Trigger |
 |---|---|---|
-| **0.14.2** (already merged) | `anthropic_base_url` setter/getter | Publish ASAP — capo follow-up is waiting on this |
+| **0.14.2** ✅ published 2026-05-16 | `anthropic_base_url` setter/getter | Live on crates.io; capo follow-up unblocked |
 | **0.14.3 (patch)** | #4 docs + #5a unused-field cleanup | Bundle whenever convenient; non-breaking |
 | **0.15.0 (minor)** | #3 (option A or B — both arguably breaking) + #5b clippy cleanup | Cut after #2 investigation closes; #2 might add additional spawn-arg changes |
 | **(no release needed)** | #2 investigation if it concludes "bug is upstream binary / downstream capo" | If neither side is motosan-ai, file findings in the notes doc and move on |
@@ -193,7 +187,7 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 ## Done criteria for this spec
 
-- [ ] Section 1: 0.14.2 tagged + published to crates.io.
+- [x] Section 1: 0.14.2 tagged + published to crates.io.
 - [ ] Section 2: investigation completed, root cause documented in `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md`. If fix lives in motosan-ai, it's merged.
 - [ ] Section 3: Ollama HTTP gap addressed via option A / B / C. Decision recorded in the commit message.
 - [ ] Section 4: docs added to both CLI provider modules.
