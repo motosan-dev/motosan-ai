@@ -2,6 +2,23 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.14.3] - 2026-05-17
+
+### Fixed
+- **`Provider::ClaudeCode` `.stream()` emitted zero events under `claude` ≥ 2.1.x.** Two compounding bugs were silently producing empty streams for capo / motosan-agent-loop / any downstream stream consumer:
+  1. **Missing `--verbose` flag.** Modern `claude` requires `--verbose` when combining `--print` with `--output-format=stream-json`; without it the CLI exits non-zero with `Error: When using --print, --output-format=stream-json requires --verbose` and emits no NDJSON. Fixed in `sdks/rust/src/providers/claude_code/mod.rs:396`.
+  2. **Stale NDJSON parser.** Even with `--verbose` producing output, the parser in `claude_code/stream_json.rs` only matched the legacy `{"type":"text","text":"..."}` event shape. Modern `claude` emits assistant text inside `{"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}`, which the parser dropped as `Other`. Added an `Assistant` variant + `AssistantContentBlock` enum that walks `message.content[]`, extracts text from `text`-typed blocks, and skips `thinking` / `tool_use` via `#[serde(other)]`. Multiple text blocks in one assistant turn are concatenated.
+
+### Added
+- `tests/client_builder.rs::integration_client_dispatches_to_claude_code_stream` — live regression test (gated `#[ignore]`, requires `claude` binary + auth) that fails fast if either fix regresses.
+- Three unit tests in `claude_code/stream_json.rs` covering the new assistant-event parsing (single text block, mixed thinking+text, tool-use-only).
+- "Streaming vs Blocking" module-level documentation on both `providers::claude_code` and `providers::codex_cli`, clarifying that `.chat()` and `.stream()` spawn the CLI in different modes (unlike HTTP providers where they share an engine).
+
+### Notes
+- Investigation notes at `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md` with full repro commands.
+- Codex side acquitted under motosan-ai's exact spawn args — emits the expected NDJSON shape. No codex-side change in this release.
+- Deferred to a future release: `claude_code/mod.rs:452` silently discards the child process exit code via `let _ = child.wait().await`. If the stream is empty AND the child exited non-zero, we should yield a `StreamEvent::Error` — but that introduces a new event variant for callers to handle, so it's worth a small design conversation.
+
 ## [0.14.2] - 2026-05-16
 
 ### Added
