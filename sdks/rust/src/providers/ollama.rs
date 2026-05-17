@@ -134,9 +134,21 @@ impl OllamaProvider {
             "stream": stream,
         });
 
-        // Think mode: when set, pass think=true to Ollama
-        if self.think.is_some() {
-            body["think"] = json!(true);
+        // Think mode: parse the user-supplied string into an appropriate
+        // JSON value so callers can opt into either:
+        //   - bool true/false (truthy / falsy synonyms)
+        //   - string reasoning levels like "low" / "medium" / "high"
+        //     (newer Ollama versions accept these)
+        // Before 0.15.1 this hard-coded `true` for any non-None value,
+        // silently flattening `ollama_think("no")` to bool true. Fixed in
+        // 0.15.1 — see CHANGELOG.
+        if let Some(think_str) = &self.think {
+            let trimmed = think_str.trim();
+            body["think"] = match trimmed.to_ascii_lowercase().as_str() {
+                "true" | "yes" | "on" | "1" => json!(true),
+                "false" | "no" | "off" | "0" => json!(false),
+                _ => json!(trimmed),
+            };
         }
 
         if let Some(keep_alive) = &self.keep_alive {
@@ -530,5 +542,72 @@ impl futures_core::Stream for NdjsonStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ChatRequest;
+
+    fn req() -> ChatRequest {
+        ChatRequest::builder()
+            .message(crate::types::Message::user("hi"))
+            .build()
+    }
+
+    #[test]
+    fn think_truthy_strings_serialize_as_bool_true() {
+        for input in &["true", "yes", "on", "1", "YES", "True", "  yes  "] {
+            let provider =
+                OllamaProvider::new("llama3", "http://x").with_think(Some(input.to_string()));
+            let body = provider.build_request_body(&req(), false);
+            assert_eq!(
+                body["think"],
+                serde_json::json!(true),
+                "input {input:?} should serialize as bool true, got {:?}",
+                body["think"]
+            );
+        }
+    }
+
+    #[test]
+    fn think_falsy_strings_serialize_as_bool_false() {
+        for input in &["false", "no", "off", "0", "NO", "False"] {
+            let provider =
+                OllamaProvider::new("llama3", "http://x").with_think(Some(input.to_string()));
+            let body = provider.build_request_body(&req(), false);
+            assert_eq!(
+                body["think"],
+                serde_json::json!(false),
+                "input {input:?} should serialize as bool false, got {:?}",
+                body["think"]
+            );
+        }
+    }
+
+    #[test]
+    fn think_other_strings_pass_through_verbatim() {
+        for input in &["low", "medium", "high", "custom-value"] {
+            let provider =
+                OllamaProvider::new("llama3", "http://x").with_think(Some(input.to_string()));
+            let body = provider.build_request_body(&req(), false);
+            assert_eq!(
+                body["think"],
+                serde_json::json!(input),
+                "input {input:?} should pass through as string, got {:?}",
+                body["think"]
+            );
+        }
+    }
+
+    #[test]
+    fn think_not_set_omits_field_entirely() {
+        let provider = OllamaProvider::new("llama3", "http://x").with_think(None);
+        let body = provider.build_request_body(&req(), false);
+        assert!(
+            body.get("think").is_none(),
+            "think field should be absent when not set; got body: {body}"
+        );
     }
 }

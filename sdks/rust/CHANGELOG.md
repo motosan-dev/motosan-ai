@@ -2,6 +2,22 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.15.1] - 2026-05-17
+
+### Fixed
+- **`ollama_think` now serializes per input value** instead of hard-coding `body["think"] = true` for any non-None input. Pre-existing bug from before 0.15.0: `ClientBuilder::ollama_think` takes a string but `providers/ollama.rs:138-140` was flattening `ollama_think("no")` to bool `true`, silently inverting caller intent. Now:
+  - Truthy synonyms (`"true"` / `"yes"` / `"on"` / `"1"`, case-insensitive + trimmed) → JSON `true`
+  - Falsy synonyms (`"false"` / `"no"` / `"off"` / `"0"`, case-insensitive + trimmed) → JSON `false`
+  - Anything else (e.g. `"low"` / `"medium"` / `"high"`) → JSON string verbatim (so callers can opt into Ollama's newer string-valued reasoning levels)
+- Backward compatible: existing `ollama_think("yes")` / `ollama_think("on")` callers still see bool `true` on the wire.
+
+### Changed
+- `.gitignore`: added macOS `.DS_Store` patterns + `.idea` / `.vscode` IDE caches. Pure repo hygiene.
+
+### Notes
+- Four unit tests in `providers::ollama::tests` lock in the new parser behavior.
+- `tests/ollama_http_autoswitch.rs::live_ollama_think_string_parser_round_trip` is a new `#[ignore]`'d live test verifying the wire body is accepted by a real Ollama server.
+
 ## [0.15.0] - 2026-05-17
 
 ### Fixed

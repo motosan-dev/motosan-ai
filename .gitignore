@@ -17,3 +17,11 @@ sdks/typescript/node_modules/
 sdks/typescript/dist/
 .worktrees/
 .env
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# IDE caches (developer-local, don't need to be tracked)
+.idea/
+.vscode/
