@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.15.2] - 2026-05-17
+
+### Fixed
+- **`ollama_think("")` and `ollama_think("   ")` no longer emit `body["think"] = ""`** (which Ollama rejects as an invalid think value). Empty / whitespace-only inputs are now treated as if the field was never set, matching caller intent. Edge case left undocumented by the 0.15.1 parser fix. Closes the self-review followup from PR #178.
+
+### Notes
+- Single one-line guard in `providers/ollama.rs::build_request_body` (`if !trimmed.is_empty()` before the match block).
+- New unit test `think_empty_or_whitespace_only_omits_field_entirely` covers 6 variants: empty, single space, multi-space, tab, newline, mixed whitespace.
+
 ## [0.15.1] - 2026-05-17
 
 ### Fixed

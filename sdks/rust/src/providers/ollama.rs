@@ -144,11 +144,16 @@ impl OllamaProvider {
         // 0.15.1 — see CHANGELOG.
         if let Some(think_str) = &self.think {
             let trimmed = think_str.trim();
-            body["think"] = match trimmed.to_ascii_lowercase().as_str() {
-                "true" | "yes" | "on" | "1" => json!(true),
-                "false" | "no" | "off" | "0" => json!(false),
-                _ => json!(trimmed),
-            };
+            // Skip empty / whitespace-only inputs — caller almost
+            // certainly meant "don't set this field" rather than "send
+            // think=empty-string" (which Ollama would reject anyway).
+            if !trimmed.is_empty() {
+                body["think"] = match trimmed.to_ascii_lowercase().as_str() {
+                    "true" | "yes" | "on" | "1" => json!(true),
+                    "false" | "no" | "off" | "0" => json!(false),
+                    _ => json!(trimmed),
+                };
+            }
         }
 
         if let Some(keep_alive) = &self.keep_alive {
@@ -609,5 +614,23 @@ mod tests {
             body.get("think").is_none(),
             "think field should be absent when not set; got body: {body}"
         );
+    }
+
+    #[test]
+    fn think_empty_or_whitespace_only_omits_field_entirely() {
+        // Defensive: callers passing "" or "   " almost certainly mean
+        // "don't set this field" rather than "send think=empty-string".
+        // Emitting a JSON empty string would be rejected by Ollama as
+        // an unknown think value. Treat as unset.
+        for input in &["", " ", "   ", "\t", "\n", "\t  \n"] {
+            let provider =
+                OllamaProvider::new("llama3", "http://x").with_think(Some(input.to_string()));
+            let body = provider.build_request_body(&req(), false);
+            assert!(
+                body.get("think").is_none(),
+                "input {input:?} (trimmed empty) should omit the think field; \
+                 got body: {body}"
+            );
+        }
     }
 }
