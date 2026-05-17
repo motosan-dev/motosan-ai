@@ -315,6 +315,47 @@ async fn integration_client_dispatches_to_claude_code_stream() {
     );
 }
 
+#[cfg(feature = "claude-code")]
+#[tokio::test]
+#[ignore] // Requires `claude` CLI installed + auth.
+async fn integration_claude_code_short_reply_not_truncated() {
+    // Regression guard for the 0.15.3 ThinkStripper flush-before-done fix.
+    // Pre-fix: claude-code emits the entire assistant turn as one Text
+    // event followed by Done; `ThinkStripperStream` only flushed on
+    // `Poll::Ready(None)`, but `collect_stream` (used by `chat_with`)
+    // breaks on `event.done`, so the 6-char tail buffer was never
+    // observed. A 4-char reply like "pong" disappeared entirely. The
+    // sibling `integration_client_dispatches_to_claude_code_stream` test
+    // would still have passed under the bug (a tail-truncated Text event
+    // is still non-empty) — this test pins the round-trip content.
+    use motosan_ai::{ChatRequest, ClaudeCodeProvider};
+
+    let client = Client::builder()
+        .provider(Provider::ClaudeCode)
+        .claude_code(ClaudeCodeProvider::new().model("sonnet"))
+        .build()
+        .expect("build client");
+
+    let request = ChatRequest::builder()
+        .message(Message::user(
+            "Reply with only the four letters 'pong' (no punctuation, no whitespace, nothing else).",
+        ))
+        .build();
+
+    let response = client
+        .chat_with(request)
+        .await
+        .expect("claude chat should succeed via Client dispatch");
+
+    let trimmed = response.content.trim();
+    assert!(
+        trimmed.contains("pong"),
+        "claude reply should contain 'pong' end-to-end via collect_stream — got: {trimmed:?}. \
+         If this fails with content \"\" or a tail-stripped string, the \
+         ThinkStripperStream flush-before-done fix in src/client.rs has regressed."
+    );
+}
+
 #[cfg(feature = "codex-cli")]
 #[tokio::test]
 #[ignore] // Requires `codex` CLI installed + auth.
