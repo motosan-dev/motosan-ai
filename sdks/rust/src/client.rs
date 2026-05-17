@@ -186,12 +186,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_anthropic_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("anthropic"));
+                    Err(Self::feature_not_enabled("anthropic"))
                 }
             }
             Provider::OpenAI => {
@@ -200,12 +200,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_openai_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "openai"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("openai"));
+                    Err(Self::feature_not_enabled("openai"))
                 }
             }
             Provider::Minimax => {
@@ -214,35 +214,59 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_minimax_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("minimax"));
+                    Err(Self::feature_not_enabled("minimax"))
                 }
             }
             Provider::Ollama => {
-                #[cfg(feature = "ollama_native")]
-                {
-                    if self.ollama_native {
-                        use crate::providers::ProviderImpl;
-                        let p = self.build_ollama_native_provider();
-                        p.validate_request(&request)?;
-                        return p.chat(request).await;
-                    }
-                }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
-                    let p = self.build_ollama_provider();
-                    p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    // Auto-route to OllamaProvider (native /api/chat) when
+                    // ollama_native is explicitly enabled OR any of the
+                    // Ollama-specific tuning fields is set, since the
+                    // OpenAI-compat /v1/chat/completions endpoint silently
+                    // drops keep_alive / options.num_ctx / think
+                    // server-side. Otherwise stay on the OpenAI-compat
+                    // path for backwards compatibility.
+                    //
+                    // Capability trade-off: OllamaProvider is text-only
+                    // (no image capability) while the OpenAI-compat path
+                    // declares with_image(). Auto-switching strips image
+                    // capability — the wrapped validate_request error
+                    // below tells the caller WHY their image input
+                    // stopped working.
+                    let needs_native = self.ollama_native
+                        || self.ollama_keep_alive.is_some()
+                        || self.ollama_num_ctx.is_some()
+                        || self.ollama_think.is_some();
+                    if needs_native {
+                        let p = self.build_ollama_native_provider();
+                        p.validate_request(&request).map_err(|e| match e {
+                            MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
+                                "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
+                                 because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
+                                 and the native endpoint is text-only. Either remove the tuning field(s) to \
+                                 stay on the OpenAI-compat path (which supports images), or remove the image \
+                                 input."
+                            )),
+                            other => other,
+                        })?;
+                        p.chat(request).await
+                    } else {
+                        let p = self.build_ollama_provider();
+                        p.validate_request(&request)?;
+                        p.chat(request).await
+                    }
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("ollama"));
+                    Err(Self::feature_not_enabled("ollama"))
                 }
             }
             Provider::ClaudeCode => {
@@ -251,12 +275,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_claude_code_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "claude-code"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("claude-code"));
+                    Err(Self::feature_not_enabled("claude-code"))
                 }
             }
             Provider::CodexCli => {
@@ -265,12 +289,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_codex_cli_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "codex-cli"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("codex-cli"));
+                    Err(Self::feature_not_enabled("codex-cli"))
                 }
             }
             Provider::GeminiCli => {
@@ -279,12 +303,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_cli_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "gemini-cli"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini-cli"));
+                    Err(Self::feature_not_enabled("gemini-cli"))
                 }
             }
             Provider::Gemini => {
@@ -293,12 +317,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "gemini"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini"));
+                    Err(Self::feature_not_enabled("gemini"))
                 }
             }
             Provider::GeminiCodeAssist => {
@@ -307,12 +331,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_code_assist_provider();
                     p.validate_request(&request)?;
-                    return p.chat(request).await;
+                    p.chat(request).await
                 }
                 #[cfg(not(feature = "gemini-code-assist"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini-code-assist"));
+                    Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
             }
         }
@@ -341,12 +365,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_anthropic_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("anthropic"));
+                    Err(Self::feature_not_enabled("anthropic"))
                 }
             }
             Provider::OpenAI => {
@@ -355,12 +379,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_openai_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "openai"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("openai"));
+                    Err(Self::feature_not_enabled("openai"))
                 }
             }
             Provider::Minimax => {
@@ -369,35 +393,48 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_minimax_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("minimax"));
+                    Err(Self::feature_not_enabled("minimax"))
                 }
             }
             Provider::Ollama => {
-                #[cfg(feature = "ollama_native")]
-                {
-                    if self.ollama_native {
-                        use crate::providers::ProviderImpl;
-                        let p = self.build_ollama_native_provider();
-                        p.validate_request(&request)?;
-                        return p.stream(request).await;
-                    }
-                }
                 #[cfg(feature = "ollama")]
                 {
                     use crate::providers::ProviderImpl;
-                    let p = self.build_ollama_provider();
-                    p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    // Same auto-switch + capability trade-off as
+                    // dispatch_chat — keep the routing condition
+                    // identical so chat and stream are never split.
+                    let needs_native = self.ollama_native
+                        || self.ollama_keep_alive.is_some()
+                        || self.ollama_num_ctx.is_some()
+                        || self.ollama_think.is_some();
+                    if needs_native {
+                        let p = self.build_ollama_native_provider();
+                        p.validate_request(&request).map_err(|e| match e {
+                            MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
+                                "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
+                                 because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
+                                 and the native endpoint is text-only. Either remove the tuning field(s) to \
+                                 stay on the OpenAI-compat path (which supports images), or remove the image \
+                                 input."
+                            )),
+                            other => other,
+                        })?;
+                        p.stream(request).await
+                    } else {
+                        let p = self.build_ollama_provider();
+                        p.validate_request(&request)?;
+                        p.stream(request).await
+                    }
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("ollama"));
+                    Err(Self::feature_not_enabled("ollama"))
                 }
             }
             Provider::ClaudeCode => {
@@ -406,12 +443,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_claude_code_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "claude-code"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("claude-code"));
+                    Err(Self::feature_not_enabled("claude-code"))
                 }
             }
             Provider::CodexCli => {
@@ -420,12 +457,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_codex_cli_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "codex-cli"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("codex-cli"));
+                    Err(Self::feature_not_enabled("codex-cli"))
                 }
             }
             Provider::GeminiCli => {
@@ -434,12 +471,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_cli_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "gemini-cli"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini-cli"));
+                    Err(Self::feature_not_enabled("gemini-cli"))
                 }
             }
             Provider::Gemini => {
@@ -448,12 +485,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "gemini"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini"));
+                    Err(Self::feature_not_enabled("gemini"))
                 }
             }
             Provider::GeminiCodeAssist => {
@@ -462,12 +499,12 @@ impl Client {
                     use crate::providers::ProviderImpl;
                     let p = self.build_gemini_code_assist_provider();
                     p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    p.stream(request).await
                 }
                 #[cfg(not(feature = "gemini-code-assist"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("gemini-code-assist"));
+                    Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
             }
         }
@@ -568,7 +605,7 @@ impl Client {
             .with_retry_policy(self.retry_policy.clone())
     }
 
-    #[cfg(feature = "ollama_native")]
+    #[cfg(feature = "ollama")]
     fn build_ollama_native_provider(&self) -> crate::providers::ollama::OllamaProvider {
         let model = self
             .model
@@ -760,21 +797,86 @@ impl ClientBuilder {
         self
     }
 
+    /// Force the Ollama provider to use the native `/api/chat` endpoint
+    /// instead of the OpenAI-compatible `/v1/chat/completions` path.
+    ///
+    /// As of 0.15.0, setting this explicitly is **only required** when you
+    /// want the native endpoint without setting any tuning fields. Setting
+    /// `ollama_think` / `ollama_keep_alive` / `ollama_num_ctx` auto-selects
+    /// the native endpoint regardless of this flag, since the OpenAI-compat
+    /// endpoint silently drops those fields.
+    ///
+    /// **Capability trade-off:** the native endpoint is text-only — image
+    /// inputs will be rejected. The OpenAI-compatible default supports
+    /// images.
     pub fn ollama_native(mut self, native: bool) -> Self {
         self.ollama_native = Some(native);
         self
     }
 
+    /// Set Ollama's `think` parameter controlling whether the model emits
+    /// a thinking block. Forwarded only via the native `/api/chat`
+    /// endpoint — Ollama's OpenAI-compatible `/v1/chat/completions`
+    /// endpoint silently drops this field (verified against
+    /// [ollama/openai.go](https://github.com/ollama/ollama/blob/main/openai/openai.go)).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider (native `/api/chat`) regardless of whether
+    /// `ollama_native(true)` was called.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
+    ///
+    /// **Known limitation:** OllamaProvider currently emits this as a
+    /// boolean `think: true` regardless of the input string value (see
+    /// `providers/ollama.rs:138-140`). The string is accepted for forward
+    /// compatibility but not differentiated server-side.
     pub fn ollama_think(mut self, think: impl Into<String>) -> Self {
         self.ollama_think = Some(think.into());
         self
     }
 
+    /// Set Ollama's `keep_alive` duration (e.g. `"5m"`, `"-1"` for forever).
+    /// Controls how long Ollama keeps the model loaded after a request.
+    /// Forwarded only via the native `/api/chat` endpoint — the
+    /// OpenAI-compatible endpoint silently drops this field (verified
+    /// against ollama/openai.go).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider regardless of `ollama_native(true)`.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
     pub fn ollama_keep_alive(mut self, duration: impl Into<String>) -> Self {
         self.ollama_keep_alive = Some(duration.into());
         self
     }
 
+    /// Set Ollama's `options.num_ctx` (context window size in tokens).
+    /// Forwarded only via the native `/api/chat` endpoint — the
+    /// OpenAI-compatible endpoint silently drops nested `options` fields
+    /// (verified against ollama/openai.go).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider regardless of `ollama_native(true)`.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
     pub fn ollama_num_ctx(mut self, tokens: u32) -> Self {
         self.ollama_num_ctx = Some(tokens);
         self
@@ -868,6 +970,29 @@ impl ClientBuilder {
             }
             None => String::new(),
         };
+
+        // Guard: ollama_* setters only make sense when the selected
+        // provider routes through Ollama (either path — OpenAI-compat or
+        // auto-switched native). Catching this at build time prevents the
+        // silent no-op that motivated the 0.15.0 fix.
+        if !matches!(provider, crate::providers::Provider::Ollama) {
+            let mut misused: Vec<&str> = Vec::new();
+            if self.ollama_keep_alive.is_some() {
+                misused.push("ollama_keep_alive");
+            }
+            if self.ollama_num_ctx.is_some() {
+                misused.push("ollama_num_ctx");
+            }
+            if self.ollama_think.is_some() {
+                misused.push("ollama_think");
+            }
+            if !misused.is_empty() {
+                return Err(MotosanError::Config(format!(
+                    "{} can only be used with Provider::Ollama",
+                    misused.join(", ")
+                )));
+            }
+        }
 
         Ok(Client {
             provider,

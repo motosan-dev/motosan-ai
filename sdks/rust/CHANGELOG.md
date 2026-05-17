@@ -2,6 +2,22 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.15.0] - 2026-05-17
+
+### Fixed
+- **Ollama HTTP path now honors `ollama_keep_alive` / `ollama_num_ctx` / `ollama_think`.** Previously these three `ClientBuilder` setters were wired only to the explicit native path (`ollama_native(true)`). HTTP-path callers (the default) silently dropped them, and even forwarding them to the OpenAI-compat `/v1/chat/completions` endpoint would have been theatrical — verified against [ollama/openai.go](https://github.com/ollama/ollama/blob/main/openai/openai.go), Ollama's OpenAI-compat handler's `ChatCompletionRequest` struct silently discards these fields server-side. Fix: `dispatch_chat` and `dispatch_stream` now auto-route to `OllamaProvider` (native `/api/chat`) whenever any of the three fields is set, regardless of the `ollama_native(true)` flag. Closes followups.md §3.
+- Clippy `needless_return` cleanup: removed `return ...;` statements in `client.rs` dispatch arms. The `never_read` warning on `ollama_*` fields was auto-cleared by the routing fix. Closes followups.md §5b + §5c.
+
+### Changed (BREAKING)
+- **`ClientBuilder::build()` now returns `Err(MotosanError::Config)` if `ollama_keep_alive` / `ollama_num_ctx` / `ollama_think` are set on a non-`Provider::Ollama` client.** Previously these were silently accepted then dropped. The error message names the misused field(s). Closes followups.md §3 option B. Likely zero affected callers in practice (the silent drop was undetected), but cataloged as breaking for semver discipline.
+- **Cargo feature `ollama_native` is now an alias for `ollama`.** Previously `ollama_native` added the `bytes` dep that the native `OllamaProvider` needs. To support the new auto-routing behavior, `ollama` now pulls `bytes` too; `ollama_native` is retained as a feature name for backwards compatibility but is a no-op. Existing `Cargo.toml` files with `features = ["ollama_native"]` continue to compile unchanged. Existing `features = ["ollama"]` callers will get a small dep tree increase (`bytes` ~80 KB plus its transitive closure) even when they don't trigger the native path. No workaround if you want `ollama` without `bytes` — accept and document.
+- **`ClientBuilder::ollama_native(true)` is no longer the only way to reach the native `/api/chat` endpoint.** Setting any of the three tuning fields now also routes there. The flag remains a valid escape hatch for callers who want native dispatch without setting any tuning fields.
+- **Image-capability loss when auto-routed.** `Provider::Ollama` callers who simultaneously set any of the three tuning fields AND send image content will now get a wrapped `MotosanError::UnsupportedFeature` from `validate_request`. The OpenAI-compatible path declares `with_image()` capability; `OllamaProvider` is text-only. Affected callers should either drop the tuning field (and lose the field's effect) or drop the image input (and use a different model). The error message explains the trade-off; see also the setter docs on `ollama_think` / `ollama_keep_alive` / `ollama_num_ctx`.
+
+### Notes
+- Setter doc-comments on `ollama_think` / `ollama_keep_alive` / `ollama_num_ctx` / `ollama_native` updated to describe the auto-switch behavior and the build-time guard.
+- mockito integration tests in `tests/ollama_http_autoswitch.rs` lock in the routing behavior end-to-end for both branches (with-fields → `/api/chat`, without-fields → `/v1/chat/completions`).
+
 ## [0.14.3] - 2026-05-17
 
 ### Fixed

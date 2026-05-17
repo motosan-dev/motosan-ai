@@ -298,7 +298,7 @@ pub mod anthropic;
 #[cfg(feature = "openai")]
 pub mod openai;
 
-#[cfg(feature = "ollama_native")]
+#[cfg(feature = "ollama")]
 pub mod ollama;
 
 #[cfg(feature = "claude-code")]
