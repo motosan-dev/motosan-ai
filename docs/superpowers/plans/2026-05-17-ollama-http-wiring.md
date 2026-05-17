@@ -1201,3 +1201,47 @@ git push origin main
 - Python SDK changes — separate maintainer track.
 - Eventually removing the `ollama_native` feature alias entirely (0.16.0 or later).
 - Adding an `OpenAIProvider::with_extra_body_params` escape hatch for OTHER OpenAI-compat servers (would have been the original plan's centerpiece; now deferred since Ollama doesn't benefit and no other consumer has asked).
+
+---
+
+## Lessons learned (retrospective 2026-05-17)
+
+Plan executed 95% as designed. Two predictive failures worth fixing in future plan templates:
+
+### 1. Missing `cargo fmt` step in test-adding tasks
+
+**What happened:** Subagent stopped at Task 9 Step 1 (rule-6 stop) because `cargo fmt --check` failed on `tests/ollama_http_autoswitch.rs` — long-line wraps in Tasks 2-4's mockito setup exceeded rustfmt's default width. Operator added `aab3b84` to apply `cargo fmt`.
+
+**Fix for future plans:** any task that adds substantial test code (typically those creating mockito setups with multi-arg `Matcher::Regex(...)` calls) should end with a `cargo fmt` step BEFORE the commit step:
+
+```markdown
+- [ ] **Step N: Format the new code**
+
+Run: `cargo fmt`
+
+Expected: zero output. If rustfmt rewraps anything, those rewrites are intentional and should be included in the same commit.
+```
+
+Cost: 5 LOC per affected task. Saves: one rule-6-stop event per execution.
+
+### 2. Missing real-server verification in Done Criteria
+
+**What happened:** Plan's Done Criteria covered crates.io publish + clippy clean + spec closure but didn't require running the fix against a real Ollama server. User flagged the gap post-release ("你有幫我測試過嗎?"). Forced retroactive PR #176 + cleanup churn (revert/cherry-pick) when operator (me) direct-pushed the live test in violation of the project's PR-vs-direct rule.
+
+**Fix for future plans:** any plan that fixes HTTP/wire behavior should include a `#[ignore]`'d live integration test as an in-scope Task, with the corresponding Done Criteria checkbox:
+
+```markdown
+- [ ] **Task N+1: Live integration test (gated #[ignore])**
+
+  Add a `#[tokio::test] #[ignore]` test that runs against a real instance of the target service (default localhost, env-var overridable). Required scope: prove the wire request is accepted by the real binary, not just that motosan-ai emits the right shape.
+
+- [ ] In Done Criteria: "Live test passes against a real <service> instance (recorded in commit message or PR description)."
+```
+
+Cost: ~30 LOC of test code + 1 manual run before merge. Catches the "mockito tests pass but real server rejects" class of bugs the rest of the plan can't see.
+
+### What went really well (worth keeping)
+
+- **Pre-execution architectural research** (reading ollama/openai.go BEFORE writing plan v2) prevented shipping a fix that would have been theatrical. Worth the 10 minutes every time the plan involves a third-party API contract.
+- **TDD 5-step structure per task** (test → fail → impl → pass → commit) — produced clean, atomic commits that bisected cleanly when the rustfmt blocker hit.
+- **Explicit pre-existing limitations in header** kept scope tight, prevented subagent from "improving" things outside the fix.
