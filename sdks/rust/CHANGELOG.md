@@ -2,6 +2,17 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.15.3] - 2026-05-17
+
+### Fixed
+- **`ThinkStripperStream` now flushes the tail buffer before forwarding a terminal `done` event.** `ThinkStripper::feed` always retains up to 6 trailing chars in case a split `<think>` open tag is arriving in pieces. The wrapper previously only called `flush()` on `Poll::Ready(None)`, but `collect_stream` (and any normal consumer) breaks on `event.done` first — so the flush was never observed. Anthropic / OpenAI dodged it because their SSE adapters emit many small text deltas; `Provider::ClaudeCode` triggered it sharply because it emits the entire assistant turn as one Text event followed by Done. Symptom: `pong` / `ok` / `yes` (≤6 chars) disappeared entirely; `Hello, world!` collapsed to `Hello, ` — last 6 chars always lost.
+
+### Notes
+- Single change in `client.rs::ThinkStripperStream::poll_next`: on a terminal `done` event, flush the stripper first; if the buffered tail is non-empty, queue the done event in a new `pending: Option<StreamEvent>` field and emit the tail as a Text event on the current poll. Mid-stream `Usage` events still pass through without flushing — flushing while the buffer holds e.g. `<thin…` would leak a partial open tag.
+- Six unit tests in `think_stripper_stream_tests` lock in the regression: short reply survives, 6-char tail not lost, `<think>` still stripped when followed by Done, terminal `done` flag still observed, `Text → Usage → Done` (the actual claude-code wire order, per `providers/claude_code/stream_json.rs:91-104`) preserves the tail across the mid-stream Usage event, and `done_with_stop_reason` keeps its `stop_reason` field through the flush detour.
+- `tests/client_builder.rs::integration_claude_code_short_reply_not_truncated` is a new `#[ignore]`'d live test that spawns the real `claude` CLI, sends a "reply with only 'pong'" prompt, and asserts the collected content contains `pong` end-to-end. Defends against future regressions in the spawn glue / NDJSON parser / stripper wrapper interplay.
+- Python SDK (`sdks/python/motosan_ai/client.py:344-347`) already flushed-before-done correctly; no Python change needed (and `Provider::ClaudeCode` is Rust-only).
+
 ## [0.15.2] - 2026-05-17
 
 ### Fixed
