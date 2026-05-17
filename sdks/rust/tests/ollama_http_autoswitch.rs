@@ -11,7 +11,9 @@ async fn ollama_with_keep_alive_routes_to_api_chat_endpoint() {
     let mut server = mockito::Server::new_async().await;
     let mock = server
         .mock("POST", "/api/chat")
-        .match_body(Matcher::Regex(r#"\"keep_alive\"\s*:\s*\"10m\""#.to_string()))
+        .match_body(Matcher::Regex(
+            r#"\"keep_alive\"\s*:\s*\"10m\""#.to_string(),
+        ))
         .with_status(200)
         .with_body(
             serde_json::json!({
@@ -141,7 +143,11 @@ async fn ollama_with_tuning_field_plus_image_returns_wrapped_error() {
         .expect("build client");
 
     let request = motosan_ai::ChatRequest::builder()
-        .message(Message::user_with_image("describe this", "abc123", "image/png"))
+        .message(Message::user_with_image(
+            "describe this",
+            "abc123",
+            "image/png",
+        ))
         .build();
 
     let err = client
@@ -156,7 +162,9 @@ async fn ollama_with_tuning_field_plus_image_returns_wrapped_error() {
                 "wrapped error should explain the auto-switch context, got: {msg}"
             );
             assert!(
-                msg.contains("ollama_keep_alive") || msg.contains("ollama_num_ctx") || msg.contains("ollama_think"),
+                msg.contains("ollama_keep_alive")
+                    || msg.contains("ollama_num_ctx")
+                    || msg.contains("ollama_think"),
                 "wrapped error should mention the field that triggered the switch, got: {msg}"
             );
         }
