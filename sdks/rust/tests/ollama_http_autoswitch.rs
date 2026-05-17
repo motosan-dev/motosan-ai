@@ -171,3 +171,69 @@ async fn ollama_with_tuning_field_plus_image_returns_wrapped_error() {
         other => panic!("expected UnsupportedFeature, got: {other:?}"),
     }
 }
+
+#[tokio::test]
+#[ignore] // Requires `ollama serve` running on localhost:11434 with at least one model pulled.
+async fn live_ollama_auto_switch_against_real_server() {
+    // Real end-to-end verification of the §3 fix. The mockito tests above
+    // only prove motosan-ai's request shape is correct; this one proves
+    // a real Ollama server actually accepts the request and returns text
+    // — i.e. the auto-switched /api/chat path works against the live
+    // binary, not just our mocks.
+    //
+    // Scope honesty: this test proves "Ollama accepts the request and
+    // responds non-empty" — it does NOT prove Ollama HONORS keep_alive
+    // and num_ctx in observable ways (verifying those would need server
+    // logs / process inspection). For that level of verification, run
+    // this with `OLLAMA_VERBOSE_LOGS=1 ollama serve` in another terminal
+    // and watch the server log lines for the request body.
+    //
+    // To run:
+    //   cargo test --features ollama --test ollama_http_autoswitch \
+    //     live_ollama_auto_switch_against_real_server -- --ignored --nocapture
+    //
+    // Configuration:
+    //   OLLAMA_MODEL    — REQUIRED. Name of any chat model you have
+    //                     pulled (`ollama list` to check, `ollama pull
+    //                     <model>` to add). No default because pulled
+    //                     models vary by machine — defaulting to a
+    //                     specific tag would silently fail for most
+    //                     readers.
+    //   OLLAMA_BASE_URL — optional, defaults to http://localhost:11434
+    //
+    // Forensic note: manual run on 2026-05-17 against `llama3.1:8b`
+    // confirmed `num_ctx=512` was actually honored by the server (log
+    // line: `llama_context: n_ctx_seq (512) < n_ctx_train (131072)`).
+    // Re-verify the same way if the routing logic changes.
+
+    let model = std::env::var("OLLAMA_MODEL").expect(
+        "set OLLAMA_MODEL to any chat model you have pulled — \
+         run `ollama list` to see what's available",
+    );
+    let base_url =
+        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+
+    let client = Client::builder()
+        .provider(Provider::Ollama)
+        .api_key("ollama") // ignored by Ollama but required by ClientBuilder
+        .ollama_base_url(&base_url)
+        .model(&model)
+        .ollama_keep_alive("30s") // short pin so the test doesn't tie up the GPU
+        .ollama_num_ctx(512)
+        .build()
+        .expect("build client");
+
+    let response = client
+        .chat(vec![Message::user("Reply with exactly the word: pong")])
+        .await
+        .unwrap_or_else(|e| {
+            panic!("Ollama chat failed against {base_url} with model {model}: {e}.\nIs `ollama serve` running?")
+        });
+
+    assert!(
+        !response.content.trim().is_empty(),
+        "Ollama auto-switched /api/chat returned empty content; \
+         expected a non-empty reply. Got: {:?}",
+        response.content
+    );
+}
