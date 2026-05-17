@@ -1,6 +1,6 @@
 # motosan-ai Rust SDK Follow-ups — 2026-05-16
 
-**Status:** In progress — §1, §2, §4, §5a shipped (motosan-ai 0.14.2 + 0.14.3 on crates.io); §3 + §5b remain open for 0.15.0 minor. Ready to hand off to a fresh session running inside `~/Projects/wade/motosan-ai/`.
+**Status:** ✅ All sections (§1–§5) shipped across 0.14.2 / 0.14.3 / 0.15.0 on crates.io. B1 + B2 long-term backlog items remain (post-0.15). Spec retained as historical record of the multi-release work.
 
 **Context:** Surfaced during capo's M2 manual-smoke side-quest (capo PR #11 — "multi-provider LLM dispatch"). capo wanted to use the user's already-authenticated `claude` / `codex` CLIs as LLM providers via `motosan-ai`'s `Provider::ClaudeCode` / `Provider::CodexCli`. The dispatch wiring worked, but capo's print-mode smoke discovered the final assistant text never reaches capo. An audit of motosan-ai's Rust SDK surfaced four additional items worth addressing.
 
@@ -135,7 +135,21 @@ Whatever step pinpoints the root cause, add a short note to `docs/superpowers/no
 
 ---
 
-## 3. HIGH — Ollama HTTP path silently ignores three builder fields
+## 3. ✅ DONE — Ollama HTTP path silently ignores three builder fields
+
+**Resolved in 0.15.0** (merge `004ef6b`, tag `rust-v0.15.0`, crates.io published `2026-05-17`). The fix turned out to require an architectural rethink rather than the wire-through approach the spec originally recommended:
+
+- The OpenAI-compat `/v1/chat/completions` endpoint silently drops `keep_alive`, `options.num_ctx`, and `think` (verified against [ollama/openai.go](https://github.com/ollama/ollama/blob/main/openai/openai.go) — `ChatCompletionRequest` struct doesn't declare them, Go's encoding/json discards unknown fields). Wiring the fields through the OpenAI-compat body would have been theatrical.
+- Instead, `Provider::Ollama` dispatch now auto-routes to `OllamaProvider` (native `/api/chat`) whenever any of the 3 fields is set. The OpenAI-compat path is retained as the default for callers who don't set any of these fields.
+- `ClientBuilder::build()` returns `Err(MotosanError::Config)` if `ollama_*` fields are set on a non-`Provider::Ollama` client (option B).
+- Setter doc-comments updated to describe the auto-switch + image-capability trade-off (option C).
+- Cargo feature `ollama_native` collapsed into `ollama` so OllamaProvider is available whenever `ollama` is; `ollama_native` retained as alias.
+
+mockito tests in `tests/ollama_http_autoswitch.rs` cover all four cells of the {routing-branch × input-shape} matrix.
+
+---
+
+The original spec text below is retained for historical record.
 
 **Files:** `sdks/rust/src/client.rs` lines 20-24, 235-240, 578-580.
 
@@ -194,9 +208,13 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 **5a (original spec text):** Unused `result` field in `sdks/rust/src/providers/claude_code/stream_json.rs:13`, currently annotated `#[allow(dead_code)]`. Either delete it or replace the `#[allow]` with a comment explaining why it's kept (e.g. "kept for forward-compat with future Claude --print --output-format stream-json schema additions").
 
-**5b. 10+ `unneeded return` clippy warnings** across the codebase (pre-existing, surfaced when running `cargo clippy --features anthropic,minimax,ollama,openai --all-targets -- -D warnings`). Pure style cleanup. Not blocking but worth a single grep+sed cleanup commit.
+**5b. ✅ DONE in 0.15.0** — all `unneeded return` warnings in `client.rs` dispatch arms removed. Some were cleared incidentally by the §3 routing fix; the rest by a follow-on sweep. `cargo clippy --features anthropic,minimax,ollama,openai --all-targets -- -D warnings` now clean.
 
-**5c. Three `--all-features` clippy errors** about `ollama_native, ollama_think, ollama_keep_alive, ollama_num_ctx` "never read" — this overlaps with #3 above. Resolving #3 (option A) also clears these.
+**5b (original spec text):** 10+ `unneeded return` clippy warnings across the codebase (pre-existing, surfaced when running `cargo clippy --features anthropic,minimax,ollama,openai --all-targets -- -D warnings`). Pure style cleanup. Not blocking but worth a single grep+sed cleanup commit.
+
+**5c. ✅ DONE in 0.15.0** — auto-cleared by the §3 routing fix; `ollama_*` fields are now read in `dispatch_chat` / `dispatch_stream_inner` to compute the routing decision.
+
+**5c (original spec text):** Three `--all-features` clippy errors about `ollama_native, ollama_think, ollama_keep_alive, ollama_num_ctx` "never read" — this overlaps with #3 above. Resolving #3 (option A) also clears these.
 
 ---
 
@@ -206,7 +224,7 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 |---|---|---|
 | **0.14.2** ✅ published 2026-05-16 | `anthropic_base_url` setter/getter | Live on crates.io; capo follow-up unblocked |
 | **0.14.3** ✅ published 2026-05-16 | #2 (claude `--verbose` + NDJSON parser) + #4 docs + #5a cleanup | Live on crates.io; capo can bump dep and re-run smoke |
-| **0.15.0 (minor)** | #3 (option A or B — both arguably breaking) + #5b clippy cleanup | Cut whenever scope warrants; both items are pure cleanup, not capo-blocking |
+| **0.15.0** ✅ published 2026-05-17 | #3 (auto-switch + option B + option C) + #5b + #5c | Live on crates.io; followups.md §3/§5 closed |
 
 ---
 
@@ -214,10 +232,10 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 - [x] Section 1: 0.14.2 tagged + published to crates.io.
 - [x] Section 2: investigation completed, root cause documented in `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md`, fix shipped in 0.14.3.
-- [ ] Section 3: Ollama HTTP gap addressed via option A / B / C. Decision recorded in the commit message.
+- [x] Section 3: Ollama HTTP gap addressed via auto-switch + option B + option C. Decision recorded in the 0.15.0 CHANGELOG.
 - [x] Section 4: docs added to both CLI provider modules (shipped in 0.14.3).
-- [ ] Section 5: §5a done in 0.14.3; §5b (clippy `unneeded return` mass cleanup) still open for 0.15.0.
-- [ ] Release plan executed per the table above (0.14.2 + 0.14.3 done; 0.15.0 pending).
+- [x] Section 5: §5a done in 0.14.3; §5b + §5c done in 0.15.0.
+- [x] Release plan executed per the table above (0.14.2 + 0.14.3 + 0.15.0 all published).
 
 ## Out of scope (defer to a separate spec)
 
