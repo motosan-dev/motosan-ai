@@ -206,4 +206,27 @@ mod tests {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"x","input":{}}]}}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
+
+    #[test]
+    fn assistant_event_concatenates_multiple_text_blocks_no_separator() {
+        // If claude ever ships an assistant turn with multiple text blocks in
+        // a single event, they are concatenated verbatim (no separator). Locks
+        // in the silent-concat behavior so a future refactor doesn't drift.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"foo"},{"type":"text","text":"bar"}]}}"#;
+        let action = parse_ndjson_line(line).expect("should parse");
+        match action {
+            NdjsonAction::Text(event) => {
+                assert_eq!(event.content, "foobar");
+            }
+            _ => panic!("expected Text action"),
+        }
+    }
+
+    #[test]
+    fn assistant_event_with_empty_content_array_is_dropped() {
+        // Defensive: an empty content array (zero blocks of any kind) yields
+        // nothing rather than an empty Text event that would confuse consumers.
+        let line = r#"{"type":"assistant","message":{"content":[]}}"#;
+        assert!(parse_ndjson_line(line).is_none());
+    }
 }

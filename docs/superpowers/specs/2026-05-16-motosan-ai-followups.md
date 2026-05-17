@@ -1,6 +1,6 @@
 # motosan-ai Rust SDK Follow-ups — 2026-05-16
 
-**Status:** In progress — §1 shipped 2026-05-16 (motosan-ai 0.14.2 on crates.io); §2–§5 open. Ready to hand off to a fresh session running inside `~/Projects/wade/motosan-ai/`.
+**Status:** In progress — §1, §2, §4, §5a shipped (motosan-ai 0.14.2 + 0.14.3 on crates.io); §3 + §5b remain open for 0.15.0 minor. Ready to hand off to a fresh session running inside `~/Projects/wade/motosan-ai/`.
 
 **Context:** Surfaced during capo's M2 manual-smoke side-quest (capo PR #11 — "multi-provider LLM dispatch"). capo wanted to use the user's already-authenticated `claude` / `codex` CLIs as LLM providers via `motosan-ai`'s `Provider::ClaudeCode` / `Provider::CodexCli`. The dispatch wiring worked, but capo's print-mode smoke discovered the final assistant text never reaches capo. An audit of motosan-ai's Rust SDK surfaced four additional items worth addressing.
 
@@ -30,7 +30,23 @@ This spec collects all five into one document so they can be triaged + executed 
 
 ---
 
-## 2. CRITICAL — CLI providers (`ClaudeCode`, `CodexCli`) emit no text under capo's invocation
+## 2. ✅ DONE — CLI providers (`ClaudeCode`, `CodexCli`) emit no text under capo's invocation
+
+**Resolved in 0.14.3** (commits `0cadd98` + `d96cfc8`, merge `e496dfe`, tag `rust-v0.14.3`, crates.io published `2026-05-16T17:52:08Z`).
+
+**Root cause** — TWO compounding bugs in claude_code:
+1. Missing `--verbose` flag in `claude_code/mod.rs:396` (modern `claude` ≥ 2.1.x rejects `--print --output-format=stream-json` without it).
+2. Stale NDJSON parser in `claude_code/stream_json.rs` — only matched the legacy `{"type":"text",...}` shape; modern `claude` emits text inside `{"type":"assistant","message":{"content":[...]}}`.
+
+**Codex side acquitted** — direct invocation under motosan-ai's exact spawn args emits proper NDJSON. If capo continues to see empty output for `--provider codex-cli` after 0.14.3, that's a separate parser-shape issue (out of scope for this followup).
+
+**Full investigation + repro commands**: see `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md`.
+
+**Deferred to a future release**: `claude_code/mod.rs:445` `let _ = child.wait().await` silently swallows non-zero exit codes — both bugs would have surfaced faster if it yielded a `StreamEvent::Error`. Worth a small design conversation (new event variant for callers).
+
+---
+
+The original investigation protocol below is retained for historical record.
 
 **Empirical symptom (from capo PR #11 manual smoke):**
 ```bash
@@ -145,7 +161,15 @@ Whatever step pinpoints the root cause, add a short note to `docs/superpowers/no
 
 ---
 
-## 4. MEDIUM — CLI providers under-documented
+## 4. ✅ DONE — CLI providers under-documented
+
+**Resolved in 0.14.3** (same commit `d96cfc8` as §2). Added "## Streaming vs Blocking" sections to both `providers::claude_code` and `providers::codex_cli` module-level docs. ~25 lines each, no code change.
+
+---
+
+The original spec text below is retained for historical record.
+
+
 
 **Files:** `sdks/rust/src/providers/claude_code/mod.rs`, `sdks/rust/src/providers/codex_cli/mod.rs`.
 
@@ -166,7 +190,9 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 
 ## 5. LOW — Style cleanup
 
-**5a. Unused `result` field** in `sdks/rust/src/providers/claude_code/stream_json.rs:13`, currently annotated `#[allow(dead_code)]`. Either delete it or replace the `#[allow]` with a comment explaining why it's kept (e.g. "kept for forward-compat with future Claude --print --output-format stream-json schema additions").
+**5a. ✅ DONE in 0.14.3** — replaced the bare `#[allow(dead_code)]` on `ClaudeStreamEvent::Result::result` with a real comment explaining why the field is kept parsed but ignored (it duplicates text already yielded from the preceding `assistant` event; emitting it would double-up). See `claude_code/stream_json.rs:21-26`.
+
+**5a (original spec text):** Unused `result` field in `sdks/rust/src/providers/claude_code/stream_json.rs:13`, currently annotated `#[allow(dead_code)]`. Either delete it or replace the `#[allow]` with a comment explaining why it's kept (e.g. "kept for forward-compat with future Claude --print --output-format stream-json schema additions").
 
 **5b. 10+ `unneeded return` clippy warnings** across the codebase (pre-existing, surfaced when running `cargo clippy --features anthropic,minimax,ollama,openai --all-targets -- -D warnings`). Pure style cleanup. Not blocking but worth a single grep+sed cleanup commit.
 
@@ -179,20 +205,19 @@ This asymmetry vs HTTP providers (where chat/stream paths are essentially the sa
 | Release | Includes | Trigger |
 |---|---|---|
 | **0.14.2** ✅ published 2026-05-16 | `anthropic_base_url` setter/getter | Live on crates.io; capo follow-up unblocked |
-| **0.14.3 (patch)** | #4 docs + #5a unused-field cleanup | Bundle whenever convenient; non-breaking |
-| **0.15.0 (minor)** | #3 (option A or B — both arguably breaking) + #5b clippy cleanup | Cut after #2 investigation closes; #2 might add additional spawn-arg changes |
-| **(no release needed)** | #2 investigation if it concludes "bug is upstream binary / downstream capo" | If neither side is motosan-ai, file findings in the notes doc and move on |
+| **0.14.3** ✅ published 2026-05-16 | #2 (claude `--verbose` + NDJSON parser) + #4 docs + #5a cleanup | Live on crates.io; capo can bump dep and re-run smoke |
+| **0.15.0 (minor)** | #3 (option A or B — both arguably breaking) + #5b clippy cleanup | Cut whenever scope warrants; both items are pure cleanup, not capo-blocking |
 
 ---
 
 ## Done criteria for this spec
 
 - [x] Section 1: 0.14.2 tagged + published to crates.io.
-- [ ] Section 2: investigation completed, root cause documented in `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md`. If fix lives in motosan-ai, it's merged.
+- [x] Section 2: investigation completed, root cause documented in `docs/superpowers/notes/2026-05-16-cli-provider-smoke-debug.md`, fix shipped in 0.14.3.
 - [ ] Section 3: Ollama HTTP gap addressed via option A / B / C. Decision recorded in the commit message.
-- [ ] Section 4: docs added to both CLI provider modules.
-- [ ] Section 5: clippy cleanup commit landed; `--features anthropic,minimax,ollama,openai` clippy is clean (or remaining errors documented).
-- [ ] Release plan executed per the table above.
+- [x] Section 4: docs added to both CLI provider modules (shipped in 0.14.3).
+- [ ] Section 5: §5a done in 0.14.3; §5b (clippy `unneeded return` mass cleanup) still open for 0.15.0.
+- [ ] Release plan executed per the table above (0.14.2 + 0.14.3 done; 0.15.0 pending).
 
 ## Out of scope (defer to a separate spec)
 
