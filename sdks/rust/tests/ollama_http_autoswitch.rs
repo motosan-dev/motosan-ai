@@ -237,3 +237,52 @@ async fn live_ollama_auto_switch_against_real_server() {
         response.content
     );
 }
+
+#[tokio::test]
+#[ignore] // Requires `ollama serve` running on localhost:11434 + OLLAMA_MODEL env var.
+async fn live_ollama_think_string_parser_round_trip() {
+    // Verifies the 0.15.1 fix: ollama_think("yes") and ollama_think("true")
+    // both still produce a wire body the real Ollama server accepts.
+    //
+    // Scope honesty: most common pre-pulled models (llama3.1:8b, qwen2.5,
+    // mistral) don't actually support `think` — they accept the field
+    // silently and return a normal response. This test verifies "Ollama
+    // doesn't reject the new serialization shape", not "thinking actually
+    // happens". For the latter, set OLLAMA_MODEL to a think-capable model
+    // like deepseek-r1 or qwen3.
+    //
+    // To run:
+    //   OLLAMA_MODEL=llama3.1:8b cargo test --features ollama \
+    //     --test ollama_http_autoswitch live_ollama_think -- --ignored --nocapture
+
+    let model = std::env::var("OLLAMA_MODEL").expect(
+        "set OLLAMA_MODEL to any chat model you have pulled — \
+         run `ollama list` to see what's available",
+    );
+    let base_url =
+        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+
+    let client = Client::builder()
+        .provider(Provider::Ollama)
+        .api_key("ollama")
+        .ollama_base_url(&base_url)
+        .model(&model)
+        .ollama_think("yes") // parser maps to bool true on the wire
+        .ollama_keep_alive("30s")
+        .build()
+        .expect("build client");
+
+    let response = client
+        .chat(vec![Message::user("Reply with exactly the word: pong")])
+        .await
+        .unwrap_or_else(|e| {
+            panic!("Ollama chat failed against {base_url} with model {model} and think=yes: {e}.\nIs `ollama serve` running?")
+        });
+
+    assert!(
+        !response.content.trim().is_empty(),
+        "Ollama with think=yes returned empty content; \
+         expected a non-empty reply. Got: {:?}",
+        response.content
+    );
+}
