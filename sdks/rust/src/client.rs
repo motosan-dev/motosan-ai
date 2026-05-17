@@ -404,24 +404,37 @@ impl Client {
             Provider::Ollama => {
                 #[cfg(feature = "ollama")]
                 {
-                    if self.ollama_native {
-                        use crate::providers::ProviderImpl;
-                        let p = self.build_ollama_native_provider();
-                        p.validate_request(&request)?;
-                        return p.stream(request).await;
-                    }
-                }
-                #[cfg(feature = "ollama")]
-                {
                     use crate::providers::ProviderImpl;
-                    let p = self.build_ollama_provider();
-                    p.validate_request(&request)?;
-                    return p.stream(request).await;
+                    // Same auto-switch + capability trade-off as
+                    // dispatch_chat — keep the routing condition
+                    // identical so chat and stream are never split.
+                    let needs_native = self.ollama_native
+                        || self.ollama_keep_alive.is_some()
+                        || self.ollama_num_ctx.is_some()
+                        || self.ollama_think.is_some();
+                    if needs_native {
+                        let p = self.build_ollama_native_provider();
+                        p.validate_request(&request).map_err(|e| match e {
+                            MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
+                                "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
+                                 because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
+                                 and the native endpoint is text-only. Either remove the tuning field(s) to \
+                                 stay on the OpenAI-compat path (which supports images), or remove the image \
+                                 input."
+                            )),
+                            other => other,
+                        })?;
+                        p.stream(request).await
+                    } else {
+                        let p = self.build_ollama_provider();
+                        p.validate_request(&request)?;
+                        p.stream(request).await
+                    }
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
                     let _ = request;
-                    return Err(Self::feature_not_enabled("ollama"));
+                    Err(Self::feature_not_enabled("ollama"))
                 }
             }
             Provider::ClaudeCode => {
