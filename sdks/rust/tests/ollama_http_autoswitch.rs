@@ -171,3 +171,60 @@ async fn ollama_with_tuning_field_plus_image_returns_wrapped_error() {
         other => panic!("expected UnsupportedFeature, got: {other:?}"),
     }
 }
+
+#[tokio::test]
+#[ignore] // Requires `ollama serve` running on localhost:11434 with at least one model pulled.
+async fn live_ollama_auto_switch_against_real_server() {
+    // Real end-to-end verification of the §3 fix. The mockito tests above
+    // only prove motosan-ai's request shape is correct; this one proves
+    // a real Ollama server actually accepts the request and returns text
+    // — i.e. the auto-switched /api/chat path works against the live
+    // binary, not just our mocks.
+    //
+    // Scope honesty: this test proves "Ollama accepts the request and
+    // responds non-empty" — it does NOT prove Ollama HONORS keep_alive
+    // and num_ctx in observable ways (verifying those would need server
+    // logs / process inspection). For that level of verification, run
+    // this with `OLLAMA_VERBOSE_LOGS=1 ollama serve` in another terminal
+    // and watch the server log lines for the request body.
+    //
+    // To run:
+    //   cargo test --features ollama --test ollama_http_autoswitch \
+    //     live_ollama_auto_switch_against_real_server -- --ignored --nocapture
+    //
+    // Configuration (env vars, all optional):
+    //   OLLAMA_BASE_URL — defaults to http://localhost:11434
+    //   OLLAMA_MODEL    — defaults to llama3.2 (must be pulled via
+    //                     `ollama pull <model>` first)
+
+    let base_url =
+        std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+
+    let client = Client::builder()
+        .provider(Provider::Ollama)
+        .api_key("ollama") // ignored by Ollama but required by ClientBuilder
+        .ollama_base_url(&base_url)
+        .model(&model)
+        .ollama_keep_alive("30s") // short pin so the test doesn't tie up the GPU
+        .ollama_num_ctx(512)
+        .build()
+        .expect("build client");
+
+    let response = client
+        .chat(vec![Message::user("Reply with exactly the word: pong")])
+        .await
+        .unwrap_or_else(|e| {
+            panic!(
+                "Ollama chat failed against {base_url} with model {model}: {e}.\n\
+                 Is `ollama serve` running and `ollama pull {model}` done?"
+            )
+        });
+
+    assert!(
+        !response.content.trim().is_empty(),
+        "Ollama auto-switched /api/chat returned empty content; \
+         expected a non-empty reply. Got: {:?}",
+        response.content
+    );
+}
