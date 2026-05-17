@@ -192,26 +192,14 @@ async fn live_ollama_auto_switch_against_real_server() {
     //   cargo test --features ollama --test ollama_http_autoswitch \
     //     live_ollama_auto_switch_against_real_server -- --ignored --nocapture
     //
-    // Configuration:
-    //   OLLAMA_MODEL    — REQUIRED. Name of any chat model you have
-    //                     pulled (`ollama list` to check, `ollama pull
-    //                     <model>` to add). No default because pulled
-    //                     models vary by machine — defaulting to a
-    //                     specific tag would silently fail for most
-    //                     readers.
-    //   OLLAMA_BASE_URL — optional, defaults to http://localhost:11434
-    //
-    // Forensic note: manual run on 2026-05-17 against `llama3.1:8b`
-    // confirmed `num_ctx=512` was actually honored by the server (log
-    // line: `llama_context: n_ctx_seq (512) < n_ctx_train (131072)`).
-    // Re-verify the same way if the routing logic changes.
+    // Configuration (env vars, all optional):
+    //   OLLAMA_BASE_URL — defaults to http://localhost:11434
+    //   OLLAMA_MODEL    — defaults to llama3.2 (must be pulled via
+    //                     `ollama pull <model>` first)
 
-    let model = std::env::var("OLLAMA_MODEL").expect(
-        "set OLLAMA_MODEL to any chat model you have pulled — \
-         run `ollama list` to see what's available",
-    );
     let base_url =
         std::env::var("OLLAMA_BASE_URL").unwrap_or_else(|_| "http://localhost:11434".to_string());
+    let model = std::env::var("OLLAMA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
 
     let client = Client::builder()
         .provider(Provider::Ollama)
@@ -227,7 +215,10 @@ async fn live_ollama_auto_switch_against_real_server() {
         .chat(vec![Message::user("Reply with exactly the word: pong")])
         .await
         .unwrap_or_else(|e| {
-            panic!("Ollama chat failed against {base_url} with model {model}: {e}.\nIs `ollama serve` running?")
+            panic!(
+                "Ollama chat failed against {base_url} with model {model}: {e}.\n\
+                 Is `ollama serve` running and `ollama pull {model}` done?"
+            )
         });
 
     assert!(
