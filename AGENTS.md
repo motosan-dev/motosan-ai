@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.15.1 (crates.io) · Python v0.10.0 (PyPI)
+Rust v0.15.2 (crates.io) · Python v0.10.0 (PyPI)
 
 ## Where To Find Things
 
