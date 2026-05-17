@@ -797,21 +797,86 @@ impl ClientBuilder {
         self
     }
 
+    /// Force the Ollama provider to use the native `/api/chat` endpoint
+    /// instead of the OpenAI-compatible `/v1/chat/completions` path.
+    ///
+    /// As of 0.15.0, setting this explicitly is **only required** when you
+    /// want the native endpoint without setting any tuning fields. Setting
+    /// `ollama_think` / `ollama_keep_alive` / `ollama_num_ctx` auto-selects
+    /// the native endpoint regardless of this flag, since the OpenAI-compat
+    /// endpoint silently drops those fields.
+    ///
+    /// **Capability trade-off:** the native endpoint is text-only — image
+    /// inputs will be rejected. The OpenAI-compatible default supports
+    /// images.
     pub fn ollama_native(mut self, native: bool) -> Self {
         self.ollama_native = Some(native);
         self
     }
 
+    /// Set Ollama's `think` parameter controlling whether the model emits
+    /// a thinking block. Forwarded only via the native `/api/chat`
+    /// endpoint — Ollama's OpenAI-compatible `/v1/chat/completions`
+    /// endpoint silently drops this field (verified against
+    /// [ollama/openai.go](https://github.com/ollama/ollama/blob/main/openai/openai.go)).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider (native `/api/chat`) regardless of whether
+    /// `ollama_native(true)` was called.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
+    ///
+    /// **Known limitation:** OllamaProvider currently emits this as a
+    /// boolean `think: true` regardless of the input string value (see
+    /// `providers/ollama.rs:138-140`). The string is accepted for forward
+    /// compatibility but not differentiated server-side.
     pub fn ollama_think(mut self, think: impl Into<String>) -> Self {
         self.ollama_think = Some(think.into());
         self
     }
 
+    /// Set Ollama's `keep_alive` duration (e.g. `"5m"`, `"-1"` for forever).
+    /// Controls how long Ollama keeps the model loaded after a request.
+    /// Forwarded only via the native `/api/chat` endpoint — the
+    /// OpenAI-compatible endpoint silently drops this field (verified
+    /// against ollama/openai.go).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider regardless of `ollama_native(true)`.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
     pub fn ollama_keep_alive(mut self, duration: impl Into<String>) -> Self {
         self.ollama_keep_alive = Some(duration.into());
         self
     }
 
+    /// Set Ollama's `options.num_ctx` (context window size in tokens).
+    /// Forwarded only via the native `/api/chat` endpoint — the
+    /// OpenAI-compatible endpoint silently drops nested `options` fields
+    /// (verified against ollama/openai.go).
+    ///
+    /// **Side effect (since 0.15.0):** setting this auto-routes the client
+    /// to OllamaProvider regardless of `ollama_native(true)`.
+    ///
+    /// **Capability trade-off:** OllamaProvider is text-only. If you set
+    /// this AND send image content in the request, `validate_request`
+    /// will reject the request with a wrapped error explaining the
+    /// auto-switch context.
+    ///
+    /// `ClientBuilder::build()` will return `Err(MotosanError::Config)` if you
+    /// set this on a non-`Provider::Ollama` client.
     pub fn ollama_num_ctx(mut self, tokens: u32) -> Self {
         self.ollama_num_ctx = Some(tokens);
         self
