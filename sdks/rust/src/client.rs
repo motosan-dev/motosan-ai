@@ -175,6 +175,7 @@ impl Client {
         Box::pin(ThinkStripperStream {
             inner: raw,
             stripper: ThinkStripper::new(),
+            pending: None,
         })
     }
 
@@ -1098,6 +1099,13 @@ impl futures_core::Stream for ReadTimeoutStream {
 struct ThinkStripperStream {
     inner: BoxStream,
     stripper: ThinkStripper,
+    // Holds a terminal `done` event when the stripper had buffered text at
+    // the moment the inner stream emitted it. The buffered tail is yielded
+    // first and the done event is returned on the next poll. Without this,
+    // consumers that break on `event.done` (e.g. `collect_stream`) would
+    // never observe the flushed tail — losing up to 6 trailing chars on
+    // providers like claude-code that emit one Text event per turn.
+    pending: Option<StreamEvent>,
 }
 
 impl futures_core::Stream for ThinkStripperStream {
@@ -1109,6 +1117,9 @@ impl futures_core::Stream for ThinkStripperStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         use std::task::Poll;
         loop {
+            if let Some(ev) = self.pending.take() {
+                return Poll::Ready(Some(ev));
+            }
             match self.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(event)) => {
                     if event.event_type == StreamEventType::Text && !event.content.is_empty() {
@@ -1117,6 +1128,13 @@ impl futures_core::Stream for ThinkStripperStream {
                             continue; // buffering, skip this event
                         }
                         return Poll::Ready(Some(StreamEvent::text(clean)));
+                    }
+                    if event.done {
+                        let remaining = self.stripper.flush();
+                        if !remaining.is_empty() {
+                            self.pending = Some(event);
+                            return Poll::Ready(Some(StreamEvent::text(remaining)));
+                        }
                     }
                     return Poll::Ready(Some(event));
                 }
@@ -1130,6 +1148,75 @@ impl futures_core::Stream for ThinkStripperStream {
                 Poll::Pending => return Poll::Pending,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod think_stripper_stream_tests {
+    use super::*;
+    use crate::types::StreamEvent;
+    use tokio_stream::StreamExt;
+
+    fn mock(events: Vec<StreamEvent>) -> BoxStream {
+        Box::pin(tokio_stream::iter(events))
+    }
+
+    async fn collect_until_done(mut stream: BoxStream) -> String {
+        let mut content = String::new();
+        let mut saw_done = false;
+        while let Some(ev) = stream.next().await {
+            if ev.done {
+                saw_done = true;
+                break;
+            }
+            content.push_str(&ev.content);
+        }
+        assert!(saw_done, "stream ended without a done event");
+        content
+    }
+
+    // Reproduces the claude-code regression: provider emits the entire turn
+    // as one Text event followed by Done. The 6-char tail buffer must be
+    // flushed before the done event reaches the consumer (`collect_stream`
+    // breaks on `event.done`), otherwise short replies vanish.
+    #[tokio::test]
+    async fn short_response_survives_when_followed_by_done() {
+        let raw = mock(vec![StreamEvent::text("pong"), StreamEvent::done()]);
+        let wrapped = Client::wrap_with_think_stripper(raw);
+        assert_eq!(collect_until_done(wrapped).await, "pong");
+    }
+
+    #[tokio::test]
+    async fn long_response_does_not_lose_six_char_tail() {
+        let raw = mock(vec![
+            StreamEvent::text("Hello, world!"),
+            StreamEvent::done(),
+        ]);
+        let wrapped = Client::wrap_with_think_stripper(raw);
+        assert_eq!(collect_until_done(wrapped).await, "Hello, world!");
+    }
+
+    #[tokio::test]
+    async fn think_block_still_stripped_with_terminal_done() {
+        let raw = mock(vec![
+            StreamEvent::text("<think>secret</think>visible"),
+            StreamEvent::done(),
+        ]);
+        let wrapped = Client::wrap_with_think_stripper(raw);
+        assert_eq!(collect_until_done(wrapped).await, "visible");
+    }
+
+    #[tokio::test]
+    async fn flush_does_not_swallow_done_flag() {
+        let raw = mock(vec![StreamEvent::text("ok"), StreamEvent::done()]);
+        let mut wrapped = Client::wrap_with_think_stripper(raw);
+        let mut events = Vec::new();
+        while let Some(ev) = wrapped.next().await {
+            events.push(ev);
+        }
+        // Must see both the buffered text and the terminal done event.
+        assert!(events.iter().any(|e| e.content == "ok" && !e.done));
+        assert!(events.iter().any(|e| e.done));
     }
 }
 
