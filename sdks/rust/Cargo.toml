@@ -27,14 +27,19 @@ openai = [
   "dep:tokio",
 ]
 minimax = ["anthropic"]
-ollama = ["openai"]
-ollama_native = [
-  "ollama",
+ollama = [
+  "openai",
   "dep:reqwest",
   "dep:tokio",
   "dep:tokio-stream",
   "dep:bytes",
 ]
+# Retained as an alias for backwards compatibility. The `ollama_native(true)`
+# runtime flag still controls explicit routing — see ClientBuilder::ollama_native.
+# As of 0.15.0 the OllamaProvider (/api/chat) is also auto-selected whenever
+# ollama_think / ollama_keep_alive / ollama_num_ctx is set, regardless of this
+# feature, because Ollama's OpenAI-compat endpoint silently drops those fields.
+ollama_native = ["ollama"]
 claude-code = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 codex-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 gemini-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]

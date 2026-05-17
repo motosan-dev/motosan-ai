@@ -223,7 +223,7 @@ impl Client {
                 }
             }
             Provider::Ollama => {
-                #[cfg(feature = "ollama_native")]
+                #[cfg(feature = "ollama")]
                 {
                     if self.ollama_native {
                         use crate::providers::ProviderImpl;
@@ -378,7 +378,7 @@ impl Client {
                 }
             }
             Provider::Ollama => {
-                #[cfg(feature = "ollama_native")]
+                #[cfg(feature = "ollama")]
                 {
                     if self.ollama_native {
                         use crate::providers::ProviderImpl;
@@ -568,7 +568,7 @@ impl Client {
             .with_retry_policy(self.retry_policy.clone())
     }
 
-    #[cfg(feature = "ollama_native")]
+    #[cfg(feature = "ollama")]
     fn build_ollama_native_provider(&self) -> crate::providers::ollama::OllamaProvider {
         let model = self
             .model
