@@ -1154,7 +1154,7 @@ impl futures_core::Stream for ThinkStripperStream {
 #[cfg(test)]
 mod think_stripper_stream_tests {
     use super::*;
-    use crate::types::StreamEvent;
+    use crate::types::{StreamEvent, Usage};
     use tokio_stream::StreamExt;
 
     fn mock(events: Vec<StreamEvent>) -> BoxStream {
@@ -1217,6 +1217,68 @@ mod think_stripper_stream_tests {
         // Must see both the buffered text and the terminal done event.
         assert!(events.iter().any(|e| e.content == "ok" && !e.done));
         assert!(events.iter().any(|e| e.done));
+    }
+
+    // Mirrors the actual claude-code wire order (Text → Usage → Done, per
+    // providers/claude_code/stream_json.rs). The Usage event arrives while
+    // the stripper still holds the 6-char tail; it must pass through without
+    // disturbing the buffer, and the tail must still be flushed on the
+    // subsequent Done.
+    #[tokio::test]
+    async fn usage_between_text_and_done_does_not_lose_tail() {
+        let raw = mock(vec![
+            StreamEvent::text("Hello, world!"),
+            StreamEvent::usage(Usage {
+                input_tokens: 12,
+                output_tokens: 8,
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: None,
+            }),
+            StreamEvent::done(),
+        ]);
+        let mut wrapped = Client::wrap_with_think_stripper(raw);
+        let mut content = String::new();
+        let mut saw_usage = false;
+        let mut saw_done = false;
+        while let Some(ev) = wrapped.next().await {
+            if ev.done {
+                saw_done = true;
+                break;
+            }
+            if ev.event_type == StreamEventType::Usage {
+                saw_usage = true;
+                let u = ev.usage.expect("usage event carries Usage payload");
+                assert_eq!(u.input_tokens, 12);
+                assert_eq!(u.output_tokens, 8);
+                continue;
+            }
+            content.push_str(&ev.content);
+        }
+        assert_eq!(content, "Hello, world!");
+        assert!(saw_usage, "Usage event must reach the consumer");
+        assert!(saw_done, "Done event must reach the consumer");
+    }
+
+    // The deferred done event must keep its stop_reason field. Guards against
+    // a future refactor that synthesizes a fresh `StreamEvent::done()` instead
+    // of queuing the original event into `pending`.
+    #[tokio::test]
+    async fn deferred_done_preserves_stop_reason() {
+        use crate::types::StopReason;
+        let raw = mock(vec![
+            StreamEvent::text("pong"),
+            StreamEvent::done_with_stop_reason(StopReason::EndTurn),
+        ]);
+        let mut wrapped = Client::wrap_with_think_stripper(raw);
+        let mut events = Vec::new();
+        while let Some(ev) = wrapped.next().await {
+            events.push(ev);
+        }
+        let done = events
+            .iter()
+            .find(|e| e.done)
+            .expect("terminal done event must be observed");
+        assert_eq!(done.stop_reason.as_ref(), Some(&StopReason::EndTurn));
     }
 }
 
