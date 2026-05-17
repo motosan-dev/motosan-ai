@@ -174,6 +174,36 @@ fn builder_defaults_openai_options_and_allows_override() {
     assert_eq!(reset_to_bearer_client.openai_auth_header(), None);
 }
 
+#[test]
+fn build_rejects_ollama_fields_with_non_ollama_provider() {
+    // ollama_keep_alive set but provider is OpenAI — should error at build()
+    // rather than silently dropping the value at runtime.
+    let result = Client::builder()
+        .provider(Provider::OpenAI)
+        .api_key("k")
+        .ollama_keep_alive("10m")
+        .build();
+    let err = result.expect_err("should reject ollama_* on non-Ollama provider");
+    let msg = format!("{err}");
+    assert!(
+        msg.contains("ollama_keep_alive") && msg.contains("Provider::Ollama"),
+        "error message should name the field + correct provider, got: {msg}"
+    );
+}
+
+#[test]
+fn build_accepts_ollama_fields_with_ollama_provider() {
+    // Sanity guard: the validation should NOT fire for the correct provider.
+    let result = Client::builder()
+        .provider(Provider::Ollama)
+        .api_key("ollama")
+        .ollama_keep_alive("10m")
+        .ollama_num_ctx(8192)
+        .ollama_think("yes")
+        .build();
+    assert!(result.is_ok(), "valid combo should build");
+}
+
 #[tokio::test]
 async fn chat_and_stream_exist_and_dispatch() {
     let client = Client::builder()

@@ -906,6 +906,29 @@ impl ClientBuilder {
             None => String::new(),
         };
 
+        // Guard: ollama_* setters only make sense when the selected
+        // provider routes through Ollama (either path — OpenAI-compat or
+        // auto-switched native). Catching this at build time prevents the
+        // silent no-op that motivated the 0.15.0 fix.
+        if !matches!(provider, crate::providers::Provider::Ollama) {
+            let mut misused: Vec<&str> = Vec::new();
+            if self.ollama_keep_alive.is_some() {
+                misused.push("ollama_keep_alive");
+            }
+            if self.ollama_num_ctx.is_some() {
+                misused.push("ollama_num_ctx");
+            }
+            if self.ollama_think.is_some() {
+                misused.push("ollama_think");
+            }
+            if !misused.is_empty() {
+                return Err(MotosanError::Config(format!(
+                    "{} can only be used with Provider::Ollama",
+                    misused.join(", ")
+                )));
+            }
+        }
+
         Ok(Client {
             provider,
             api_key,
