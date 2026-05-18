@@ -42,6 +42,11 @@ class TokenBodyFormat(enum.Enum):
     JSON = "json"
 
 
+class StateStrategy(enum.Enum):
+    RANDOM = "random"
+    EQUALS_VERIFIER = "verifier"
+
+
 @dataclass(frozen=True)
 class OAuthConfig:
     client_id: str
@@ -54,6 +59,7 @@ class OAuthConfig:
     redirect_uri_host: str = "127.0.0.1"
     token_body: TokenBodyFormat = TokenBodyFormat.FORM
     extra_auth_params: Sequence[tuple[str, str]] = ()
+    state_strategy: StateStrategy = StateStrategy.RANDOM
 
 
 def save_token(token: Token, *, path: Path = DEFAULT_CACHE_PATH) -> None:
@@ -105,11 +111,15 @@ async def _post_token(config: OAuthConfig, data: dict[str, str]) -> Token:
 
 
 async def exchange_code(
-    config: OAuthConfig, *, code: str, verifier: str, redirect_uri: str
+    config: OAuthConfig, *, code: str, state: str, verifier: str, redirect_uri: str
 ) -> Token:
+    # `state` is echoed in the token POST body to match the Rust
+    # anthropic-oauth crate. RFC 6749 §4.1.3 does not require this;
+    # Anthropic empirically does. Google tolerates the extra field.
     data = {
         "grant_type": "authorization_code",
         "code": code,
+        "state": state,
         "redirect_uri": redirect_uri,
         "code_verifier": verifier,
         "client_id": config.client_id,
@@ -159,7 +169,10 @@ def _build_auth_url(config: OAuthConfig, challenge: str, state: str, redirect_ur
 
 async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = None) -> Token:
     pkce = Pkce.generate()
-    state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
+    if config.state_strategy is StateStrategy.EQUALS_VERIFIER:
+        state = pkce.verifier
+    else:
+        state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
     server = await bind(config.redirect_port, config.callback_path)
     redirect_uri = f"http://{config.redirect_uri_host}:{server.port}{config.callback_path}"
     auth_url = _build_auth_url(config, pkce.challenge, state, redirect_uri)
@@ -208,7 +221,9 @@ async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = No
     if returned_state != state:
         raise AuthError(f"OAuth state mismatch: sent {state!r}, got {returned_state!r}")
 
-    return await exchange_code(config, code=code, verifier=pkce.verifier, redirect_uri=redirect_uri)
+    return await exchange_code(
+        config, code=code, state=state, verifier=pkce.verifier, redirect_uri=redirect_uri
+    )
 
 
 async def ensure_fresh_token(

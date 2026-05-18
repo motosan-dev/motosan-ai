@@ -34,7 +34,11 @@ async def test_exchange_code_posts_to_token_url():
         )
     )
     token = await exchange_code(
-        cfg, code="auth-code", verifier="ver", redirect_uri="http://127.0.0.1:9999/auth/callback"
+        cfg,
+        code="auth-code",
+        state="st",
+        verifier="ver",
+        redirect_uri="http://127.0.0.1:9999/auth/callback",
     )
     assert token.access_token == "ya29.new"
     assert token.refresh_token == "1//ref"
@@ -56,7 +60,9 @@ async def test_exchange_code_400_raises():
         return_value=httpx.Response(400, json={"error": "invalid_grant"})
     )
     with pytest.raises(AuthError, match="invalid_grant"):
-        await exchange_code(cfg, code="bad", verifier="v", redirect_uri="http://127.0.0.1:0/cb")
+        await exchange_code(
+            cfg, code="bad", state="st", verifier="v", redirect_uri="http://127.0.0.1:0/cb"
+        )
 
 
 @respx.mock

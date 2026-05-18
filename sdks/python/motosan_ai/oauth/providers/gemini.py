@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from motosan_ai.oauth._flow import OAuthConfig, TokenBodyFormat
+from motosan_ai.oauth._flow import OAuthConfig, StateStrategy, TokenBodyFormat
 
 
 def gemini_config() -> OAuthConfig:
@@ -18,4 +18,5 @@ def gemini_config() -> OAuthConfig:
         redirect_uri_host="127.0.0.1",
         token_body=TokenBodyFormat.FORM,
         extra_auth_params=(("access_type", "offline"),),
+        state_strategy=StateStrategy.RANDOM,
     )
