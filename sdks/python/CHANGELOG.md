@@ -2,6 +2,25 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.12.0] - 2026-05-18
+
+### Added
+- Anthropic Claude Pro/Max OAuth: `motosan_ai.oauth.claude_pro_max_config()`
+  plus `login()` / `refresh_token()` yield an `sk-ant-oat01-*` token usable
+  directly with `AnthropicProvider`. See the README for the ToS disclosure.
+- `OAuthConfig` gained `callback_path`, `redirect_uri_host`, `token_body`,
+  `extra_auth_params`, and `state_strategy` fields, plus `TokenBodyFormat`
+  and `StateStrategy` enums.
+
+### Changed
+- **Breaking:** `motosan_ai.oauth` no longer exports `google_gemini_config`;
+  use `gemini_config` instead. The `oauth/` package was refactored from a
+  single `google.py` module into a generic core plus per-provider config
+  modules (`providers/gemini.py`, `providers/anthropic.py`).
+- **Breaking:** `exchange_code()` gained a required `state` keyword argument
+  (the `state` value is now echoed in the token-endpoint POST body, which
+  Anthropic requires).
+
 ## [0.11.0] - 2026-04-27
 
 ### Removed (BREAKING)
