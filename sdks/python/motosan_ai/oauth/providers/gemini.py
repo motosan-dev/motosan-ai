@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from motosan_ai.oauth._flow import OAuthConfig
+from motosan_ai.oauth._flow import OAuthConfig, TokenBodyFormat
 
 
 def gemini_config() -> OAuthConfig:
@@ -16,5 +16,6 @@ def gemini_config() -> OAuthConfig:
         ),
         callback_path="/auth/callback",
         redirect_uri_host="127.0.0.1",
+        token_body=TokenBodyFormat.FORM,
         extra_auth_params=(("access_type", "offline"),),
     )

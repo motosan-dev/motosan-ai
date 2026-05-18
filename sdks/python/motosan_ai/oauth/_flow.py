@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import enum
 import json
 import os
 import secrets
@@ -36,6 +37,11 @@ class Token:
         return int(time.time()) + _EXPIRY_BUFFER_SECS >= self.issued_at + self.expires_in
 
 
+class TokenBodyFormat(enum.Enum):
+    FORM = "form"
+    JSON = "json"
+
+
 @dataclass(frozen=True)
 class OAuthConfig:
     client_id: str
@@ -46,6 +52,7 @@ class OAuthConfig:
     redirect_port: int | None = None
     callback_path: str = "/auth/callback"
     redirect_uri_host: str = "127.0.0.1"
+    token_body: TokenBodyFormat = TokenBodyFormat.FORM
     extra_auth_params: Sequence[tuple[str, str]] = ()
 
 
@@ -72,11 +79,10 @@ def load_cached_token(*, path: Path = DEFAULT_CACHE_PATH) -> Token | None:
 async def _post_token(config: OAuthConfig, data: dict[str, str]) -> Token:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            resp = await client.post(
-                config.token_url,
-                data=data,
-                headers={"content-type": "application/x-www-form-urlencoded"},
-            )
+            if config.token_body is TokenBodyFormat.JSON:
+                resp = await client.post(config.token_url, json=data)
+            else:
+                resp = await client.post(config.token_url, data=data)
         except httpx.HTTPError as exc:
             raise NetworkError(f"OAuth token request failed: {exc}") from exc
 
