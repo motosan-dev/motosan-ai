@@ -11,6 +11,12 @@ use rand::RngCore as _;
 
 const LOGIN_TIMEOUT_SECS: u64 = 120;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenBodyFormat {
+    Form,
+    Json,
+}
+
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     pub client_id: &'static str,
@@ -19,6 +25,7 @@ pub struct OAuthConfig {
     pub token_url: &'static str,
     pub scopes: &'static [&'static str],
     pub redirect_port: Option<u16>,
+    pub extra_auth_params: &'static [(&'static str, &'static str)],
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -80,15 +87,19 @@ pub(crate) fn build_auth_url(
     redirect_uri: &str,
 ) -> String {
     let mut url = reqwest::Url::parse(config.auth_url).expect("auth_url must be valid");
-    url.query_pairs_mut()
-        .append_pair("client_id", config.client_id)
-        .append_pair("response_type", "code")
-        .append_pair("redirect_uri", redirect_uri)
-        .append_pair("scope", &config.scopes.join(" "))
-        .append_pair("state", state)
-        .append_pair("code_challenge", challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("access_type", "offline");
+    {
+        let mut q = url.query_pairs_mut();
+        q.append_pair("client_id", config.client_id)
+            .append_pair("response_type", "code")
+            .append_pair("redirect_uri", redirect_uri)
+            .append_pair("scope", &config.scopes.join(" "))
+            .append_pair("state", state)
+            .append_pair("code_challenge", challenge)
+            .append_pair("code_challenge_method", "S256");
+        for (k, v) in config.extra_auth_params {
+            q.append_pair(k, v);
+        }
+    }
     url.to_string()
 }
 
@@ -123,6 +134,7 @@ mod tests {
             token_url: "https://auth.example.com/oauth/token",
             scopes: &["openid", "profile"],
             redirect_port: None,
+            extra_auth_params: &[],
         }
     }
 
@@ -156,6 +168,28 @@ mod tests {
         let config = dummy_config();
         let url = build_auth_url(&config, "c", "s", "http://127.0.0.1:1234/auth/callback");
         reqwest::Url::parse(&url).expect("auth URL must be valid");
+    }
+
+    #[test]
+    fn build_auth_url_appends_extra_auth_params() {
+        let config = OAuthConfig {
+            extra_auth_params: &[("foo", "bar"), ("baz", "qux")],
+            ..dummy_config()
+        };
+        let url = build_auth_url(&config, "c", "s", "http://127.0.0.1:1234/auth/callback");
+        assert!(url.contains("foo=bar"));
+        assert!(url.contains("baz=qux"));
+    }
+
+    #[test]
+    fn build_auth_url_no_longer_hardcodes_access_type() {
+        // Empty extra_auth_params should produce no access_type query pair.
+        let config = OAuthConfig {
+            extra_auth_params: &[],
+            ..dummy_config()
+        };
+        let url = build_auth_url(&config, "c", "s", "http://127.0.0.1:1234/auth/callback");
+        assert!(!url.contains("access_type="));
     }
 
     #[test]
