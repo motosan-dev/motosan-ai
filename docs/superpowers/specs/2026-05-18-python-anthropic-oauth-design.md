@@ -107,9 +107,18 @@ from motosan_ai.oauth import login, claude_pro_max_config
 token = await login(claude_pro_max_config())
 ```
 
-In-repo consumers updated in the same PR:
+In-repo consumers updated in the same PR (every site that imports from the
+deleted `oauth/google.py` or calls a changed signature):
 - `tests/integration/test_code_assist_live.py` — imports
-  `google_gemini_config`; switch to `gemini_config`.
+  `google_gemini_config`, `ensure_fresh_token`, `DEFAULT_CACHE_PATH` from
+  `motosan_ai.oauth`; switch `google_gemini_config` → `gemini_config`.
+- `tests/test_oauth_token.py` — imports `Token`, `save_token`,
+  `load_cached_token`, `DEFAULT_CACHE_PATH` from `motosan_ai.oauth.google`;
+  switch the import to `motosan_ai.oauth` (the public re-export). Test logic
+  and assertions are unchanged.
+- `tests/test_oauth_callback.py` — calls `bind(port=None)` three times;
+  update each to also pass `callback_path` (see the `_callback_server.py`
+  section below).
 - `sdks/python/README.md` — the OAuth example uses `google_gemini_config`.
 
 ### The five knobs
@@ -228,9 +237,15 @@ use — the ToS disclosure already in the top-level README applies.
 
 ### `_callback_server.py` change
 
-`bind()` gains a `callback_path: str` parameter. The `_Handler.do_GET`
-comparison uses it instead of the hardcoded `/auth/callback`. The bind
-address stays `127.0.0.1`.
+`bind()` gains a **required** `callback_path: str` parameter (no default).
+The `_Handler.do_GET` comparison uses it instead of the hardcoded
+`/auth/callback`. The bind address stays `127.0.0.1`.
+
+`_callback_server.py` is private plumbing with exactly one production caller
+(`login`), which always has a `callback_path` available from the config — so
+a required parameter is correct (explicit over a magical default). The three
+`bind(port=None)` calls in `test_oauth_callback.py` are updated to pass
+`callback_path="/auth/callback"` accordingly.
 
 ### End-to-end usage
 
@@ -280,9 +295,12 @@ HTTP (the Python equivalent of Rust's mockito).
 
 **Regression gates that must stay green**:
 
-- The existing `test_oauth_pkce.py`, `test_oauth_token.py`, and
-  `test_oauth_callback.py` test logic (callback tests gain new path-param
-  cases but existing assertions stay valid).
+- `test_oauth_pkce.py` — untouched (`_pkce.py` does not change).
+- `test_oauth_token.py` — import switched from `motosan_ai.oauth.google` to
+  `motosan_ai.oauth`; test logic and assertions unchanged.
+- `test_oauth_callback.py` — the three `bind()` calls gain a `callback_path`
+  argument and new path-param assertions are added; the existing
+  `code`/`state`/HTML assertions stay valid.
 - `test_oauth_google.py` is renamed to `test_oauth_gemini.py`; its imports
   switch from `google_gemini_config` to `gemini_config` and from
   `motosan_ai.oauth.google` to `motosan_ai.oauth`, but the test logic and
