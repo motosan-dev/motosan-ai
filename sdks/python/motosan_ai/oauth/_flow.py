@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import enum
 import json
 import os
 import secrets
@@ -36,6 +37,16 @@ class Token:
         return int(time.time()) + _EXPIRY_BUFFER_SECS >= self.issued_at + self.expires_in
 
 
+class TokenBodyFormat(enum.Enum):
+    FORM = "form"
+    JSON = "json"
+
+
+class StateStrategy(enum.Enum):
+    RANDOM = "random"
+    EQUALS_VERIFIER = "verifier"
+
+
 @dataclass(frozen=True)
 class OAuthConfig:
     client_id: str
@@ -44,20 +55,11 @@ class OAuthConfig:
     token_url: str
     scopes: Sequence[str]
     redirect_port: int | None = None
-
-
-def google_gemini_config() -> OAuthConfig:
-    return OAuthConfig(
-        client_id="681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-        client_secret="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",
-        auth_url="https://accounts.google.com/o/oauth2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        scopes=(
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-        ),
-    )
+    callback_path: str = "/auth/callback"
+    redirect_uri_host: str = "127.0.0.1"
+    token_body: TokenBodyFormat = TokenBodyFormat.FORM
+    extra_auth_params: Sequence[tuple[str, str]] = ()
+    state_strategy: StateStrategy = StateStrategy.RANDOM
 
 
 def save_token(token: Token, *, path: Path = DEFAULT_CACHE_PATH) -> None:
@@ -83,11 +85,10 @@ def load_cached_token(*, path: Path = DEFAULT_CACHE_PATH) -> Token | None:
 async def _post_token(config: OAuthConfig, data: dict[str, str]) -> Token:
     async with httpx.AsyncClient(timeout=30.0) as client:
         try:
-            resp = await client.post(
-                config.token_url,
-                data=data,
-                headers={"content-type": "application/x-www-form-urlencoded"},
-            )
+            if config.token_body is TokenBodyFormat.JSON:
+                resp = await client.post(config.token_url, json=data)
+            else:
+                resp = await client.post(config.token_url, data=data)
         except httpx.HTTPError as exc:
             raise NetworkError(f"OAuth token request failed: {exc}") from exc
 
@@ -110,11 +111,15 @@ async def _post_token(config: OAuthConfig, data: dict[str, str]) -> Token:
 
 
 async def exchange_code(
-    config: OAuthConfig, *, code: str, verifier: str, redirect_uri: str
+    config: OAuthConfig, *, code: str, state: str, verifier: str, redirect_uri: str
 ) -> Token:
+    # `state` is echoed in the token POST body to match the Rust
+    # anthropic-oauth crate. RFC 6749 §4.1.3 does not require this;
+    # Anthropic empirically does. Google tolerates the extra field.
     data = {
         "grant_type": "authorization_code",
         "code": code,
+        "state": state,
         "redirect_uri": redirect_uri,
         "code_verifier": verifier,
         "client_id": config.client_id,
@@ -156,16 +161,23 @@ def _build_auth_url(config: OAuthConfig, challenge: str, state: str, redirect_ur
         "state": state,
         "code_challenge": challenge,
         "code_challenge_method": "S256",
-        "access_type": "offline",
     }
+    for key, value in config.extra_auth_params:
+        params[key] = value
     return f"{config.auth_url}?{urlencode(params)}"
 
 
 async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = None) -> Token:
     pkce = Pkce.generate()
-    state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
-    server = await bind(config.redirect_port)
-    redirect_uri = f"http://127.0.0.1:{server.port}/auth/callback"
+    if config.state_strategy is StateStrategy.EQUALS_VERIFIER:
+        state = pkce.verifier
+    else:
+        state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
+    try:
+        server = await bind(config.redirect_port, config.callback_path)
+    except OSError as exc:
+        raise AuthError(f"OAuth callback server failed to bind: {exc}") from exc
+    redirect_uri = f"http://{config.redirect_uri_host}:{server.port}{config.callback_path}"
     auth_url = _build_auth_url(config, pkce.challenge, state, redirect_uri)
 
     callback_task = asyncio.create_task(wait_for_callback(server))
@@ -212,7 +224,9 @@ async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = No
     if returned_state != state:
         raise AuthError(f"OAuth state mismatch: sent {state!r}, got {returned_state!r}")
 
-    return await exchange_code(config, code=code, verifier=pkce.verifier, redirect_uri=redirect_uri)
+    return await exchange_code(
+        config, code=code, state=state, verifier=pkce.verifier, redirect_uri=redirect_uri
+    )
 
 
 async def ensure_fresh_token(

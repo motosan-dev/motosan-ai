@@ -4,11 +4,13 @@ import os
 import stat
 import time
 
-from motosan_ai.oauth.google import (
+from motosan_ai.oauth import (
     DEFAULT_CACHE_PATH,
     OAuthConfig,
+    StateStrategy,
     Token,
-    google_gemini_config,
+    TokenBodyFormat,
+    gemini_config,
     load_cached_token,
     save_token,
 )
@@ -55,26 +57,31 @@ def test_save_token_chmod_user_only(tmp_path):
     assert stat.S_IMODE(os.stat(cache_path).st_mode) == 0o600
 
 
-def test_google_gemini_config_has_public_client_id():
-    assert "681255809395" in google_gemini_config().client_id
+def test_gemini_config_has_public_client_id():
+    assert "681255809395" in gemini_config().client_id
 
 
-def test_google_gemini_config_has_client_secret():
-    assert google_gemini_config().client_secret is not None
+def test_gemini_config_has_client_secret():
+    assert gemini_config().client_secret is not None
 
 
-def test_google_gemini_config_auth_url_is_google():
-    assert "accounts.google.com" in google_gemini_config().auth_url
+def test_gemini_config_auth_url_is_google():
+    assert "accounts.google.com" in gemini_config().auth_url
 
 
-def test_google_gemini_config_token_url_is_google():
-    assert google_gemini_config().token_url == "https://oauth2.googleapis.com/token"
+def test_gemini_config_token_url_is_google():
+    assert gemini_config().token_url == "https://oauth2.googleapis.com/token"
 
 
-def test_google_gemini_config_scopes_include_cloud_platform():
-    assert any("cloud-platform" in s for s in google_gemini_config().scopes)
+def test_gemini_config_scopes_include_cloud_platform():
+    assert any("cloud-platform" in s for s in gemini_config().scopes)
 
 
 def test_oauth_config_type_constructible():
     cfg = OAuthConfig("id", None, "auth", "token", ("scope",))
     assert cfg.client_id == "id"
+
+
+def test_public_oauth_exports_enums():
+    assert TokenBodyFormat.FORM.value == "form"
+    assert StateStrategy.RANDOM.value == "random"

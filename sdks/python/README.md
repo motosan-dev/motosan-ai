@@ -343,14 +343,39 @@ OAuth helpers are available under `motosan_ai.oauth`:
 
 ```python
 import asyncio
-from motosan_ai.oauth import google_gemini_config, login, save_token
+from motosan_ai.oauth import gemini_config, login, save_token
 
 async def main():
-    token = await login(google_gemini_config())
+    token = await login(gemini_config())
     save_token(token)
 
 asyncio.run(main())
 ```
+
+### Anthropic OAuth (Claude Pro/Max)
+
+`claude_pro_max_config()` drives a PKCE login against `claude.ai` and returns
+an `sk-ant-oat01-*` token usable directly with `AnthropicProvider`:
+
+```python
+import asyncio
+from motosan_ai import AnthropicProvider
+from motosan_ai.oauth import claude_pro_max_config, login
+
+async def main():
+    token = await login(claude_pro_max_config())
+    provider = AnthropicProvider(api_key=token.access_token)
+    # AnthropicProvider auto-detects the sk-ant-oat01- prefix.
+
+asyncio.run(main())
+```
+
+**⚠️ ToS disclosure:** this uses the OAuth `client_id` registered by
+Anthropic's Claude Code CLI. The resulting token authenticates **as a Claude
+Code CLI session**. Anthropic has not published this `client_id` for
+third-party use; usage for purposes other than running `claude` may be
+subject to change, rate limited, or in violation of Anthropic's terms. You
+are responsible for compliance. If you have an `sk-ant-api*` key, prefer it.
 
 Notes:
 - `GeminiCodeAssistProvider` targets `cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse`.
