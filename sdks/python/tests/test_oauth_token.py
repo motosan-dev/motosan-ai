@@ -7,7 +7,9 @@ import time
 from motosan_ai.oauth import (
     DEFAULT_CACHE_PATH,
     OAuthConfig,
+    StateStrategy,
     Token,
+    TokenBodyFormat,
     gemini_config,
     load_cached_token,
     save_token,
@@ -78,3 +80,8 @@ def test_gemini_config_scopes_include_cloud_platform():
 def test_oauth_config_type_constructible():
     cfg = OAuthConfig("id", None, "auth", "token", ("scope",))
     assert cfg.client_id == "id"
+
+
+def test_public_oauth_exports_enums():
+    assert TokenBodyFormat.FORM.value == "form"
+    assert StateStrategy.RANDOM.value == "random"

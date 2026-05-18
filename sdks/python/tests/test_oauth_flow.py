@@ -129,3 +129,17 @@ async def test_login_equals_verifier_uses_verifier_as_state():
         .decode()
     )
     assert expected_challenge == captured["challenge"]
+
+
+@pytest.mark.asyncio
+async def test_login_wraps_bind_oserror(monkeypatch):
+    from motosan_ai.error import AuthError
+    from motosan_ai.oauth import _flow
+
+    async def fail_bind(port: int | None, callback_path: str):
+        raise OSError("port in use")
+
+    monkeypatch.setattr(_flow, "bind", fail_bind)
+
+    with pytest.raises(AuthError, match="callback server failed to bind"):
+        await _flow.login(_cfg())

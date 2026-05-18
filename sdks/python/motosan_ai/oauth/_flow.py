@@ -173,7 +173,10 @@ async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = No
         state = pkce.verifier
     else:
         state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
-    server = await bind(config.redirect_port, config.callback_path)
+    try:
+        server = await bind(config.redirect_port, config.callback_path)
+    except OSError as exc:
+        raise AuthError(f"OAuth callback server failed to bind: {exc}") from exc
     redirect_uri = f"http://{config.redirect_uri_host}:{server.port}{config.callback_path}"
     auth_url = _build_auth_url(config, pkce.challenge, state, redirect_uri)
 
