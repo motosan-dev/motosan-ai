@@ -1,4 +1,4 @@
-use crate::OAuthConfig;
+use crate::{OAuthConfig, TokenBodyFormat};
 
 pub fn codex() -> OAuthConfig {
     OAuthConfig {
@@ -10,6 +10,7 @@ pub fn codex() -> OAuthConfig {
         redirect_port: Some(1455),
         callback_path: "/auth/callback",
         redirect_uri_host: "127.0.0.1",
+        token_body: TokenBodyFormat::Form,
         extra_auth_params: &[("access_type", "offline")],
     }
 }

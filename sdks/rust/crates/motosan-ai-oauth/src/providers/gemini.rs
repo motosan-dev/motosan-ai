@@ -6,7 +6,7 @@
 //! installed apps, these values are intentionally distributed in client software and are
 //! not treated as confidential — embedding them in source code is the documented practice.
 
-use crate::OAuthConfig;
+use crate::{OAuthConfig, TokenBodyFormat};
 
 pub fn gemini() -> OAuthConfig {
     OAuthConfig {
@@ -22,6 +22,7 @@ pub fn gemini() -> OAuthConfig {
         redirect_port: None,
         callback_path: "/auth/callback",
         redirect_uri_host: "127.0.0.1",
+        token_body: TokenBodyFormat::Form,
         extra_auth_params: &[("access_type", "offline")],
     }
 }

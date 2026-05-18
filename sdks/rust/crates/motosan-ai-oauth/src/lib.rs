@@ -27,6 +27,7 @@ pub struct OAuthConfig {
     pub redirect_port: Option<u16>,
     pub callback_path: &'static str,
     pub redirect_uri_host: &'static str,
+    pub token_body: TokenBodyFormat,
     pub extra_auth_params: &'static [(&'static str, &'static str)],
 }
 
@@ -143,6 +144,7 @@ mod tests {
             redirect_port: None,
             callback_path: "/auth/callback",
             redirect_uri_host: "127.0.0.1",
+            token_body: TokenBodyFormat::Form,
             extra_auth_params: &[],
         }
     }
