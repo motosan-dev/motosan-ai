@@ -12,7 +12,7 @@ keywords = ["openai", "codex", "oauth", "authentication"]
 categories = ["authentication", "api-bindings"]
 
 [dependencies]
-motosan-ai-oauth = { path = "../motosan-ai-oauth", features = ["codex"] }
+motosan-ai-oauth = { version = "0.2", path = "../motosan-ai-oauth", features = ["codex"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
