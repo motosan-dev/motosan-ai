@@ -18,24 +18,30 @@
 
 **Modify:**
 - `Cargo.toml` (workspace root) — add `sdks/rust/crates/anthropic-oauth` to `members`
-- `sdks/rust/crates/motosan-ai-oauth/Cargo.toml` — bump version, add `anthropic` feature, add `serde_json` dep
+- `sdks/rust/crates/motosan-ai-oauth/Cargo.toml` — minor bump (0.1.0 → 0.2.0), add `anthropic` feature, add `mockito` dev-dep
 - `sdks/rust/crates/motosan-ai-oauth/src/lib.rs` — `OAuthConfig` struct + `TokenBodyFormat` enum + `build_auth_url` + `login`
 - `sdks/rust/crates/motosan-ai-oauth/src/server.rs` — parametrize callback path
 - `sdks/rust/crates/motosan-ai-oauth/src/exchange.rs` — parametrize token body format
 - `sdks/rust/crates/motosan-ai-oauth/src/providers/mod.rs` — register `anthropic` module
 - `sdks/rust/crates/motosan-ai-oauth/src/providers/codex.rs` — fill 4 new fields, preserve current behavior
 - `sdks/rust/crates/motosan-ai-oauth/src/providers/gemini.rs` — fill 4 new fields, preserve current behavior
-- `sdks/rust/crates/codex-oauth/Cargo.toml` — patch bump
-- `sdks/rust/CHANGELOG.md` — entry for new minor version
+- `sdks/rust/crates/codex-oauth/Cargo.toml` — patch bump (0.1.0 → 0.1.1)
+- `llms.txt` — add `## anthropic-oauth` section, release-tag table row, Release Steps block, CI Pipeline bullet; bump in-line `motosan-ai-oauth = "0.1"` references to `"0.2"`
 - `README.md` — Anthropic OAuth section with ToS disclosure
 - `AGENTS.md` — add `crates/anthropic-oauth` to crate inventory
 
+**Not modified** (`sdks/rust/CHANGELOG.md` is `motosan-ai`-crate-scoped — verified via commit `d008b96`, the original motosan-ai-oauth v0.1.0 PR, which did not touch it).
+
 **Create:**
 - `sdks/rust/crates/motosan-ai-oauth/src/providers/anthropic.rs` — provider config
+- `sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md` — per-crate changelog (does not exist today; created on first version bump after 0.1.0)
+- `sdks/rust/crates/codex-oauth/CHANGELOG.md` — per-crate changelog (does not exist today)
 - `sdks/rust/crates/anthropic-oauth/Cargo.toml`
+- `sdks/rust/crates/anthropic-oauth/CHANGELOG.md`
 - `sdks/rust/crates/anthropic-oauth/src/lib.rs`
 - `sdks/rust/crates/anthropic-oauth/tests/refresh_integration.rs` — mockito test for `refresh()`
 - `sdks/rust/crates/anthropic-oauth/tests/login_live.rs` — `#[ignore]`'d live smoke test
+- `.github/workflows/publish-anthropic-oauth.yml` — per-crate publish workflow (mirrors `publish-codex-oauth.yml`)
 
 ---
 
@@ -1167,14 +1173,24 @@ Integration test verifies refresh sends JSON, not form."
 
 ---
 
-## Task 7: Documentation — README, AGENTS, CHANGELOG, version bumps
+## Task 7: Docs, version bumps, per-crate CHANGELOGs, and release tooling
+
+This task is large (lots of small edits) but logically one commit: "everything needed to make `anthropic-oauth` releasable the same way `codex-oauth` is."
 
 **Files:**
-- Modify: `README.md`
-- Modify: `AGENTS.md`
-- Modify: `sdks/rust/CHANGELOG.md`
-- Modify: `sdks/rust/crates/motosan-ai-oauth/Cargo.toml` (minor bump)
-- Modify: `sdks/rust/crates/codex-oauth/Cargo.toml` (patch bump)
+- Modify: `sdks/rust/crates/motosan-ai-oauth/Cargo.toml` (minor bump 0.1.0 → 0.2.0)
+- Modify: `sdks/rust/crates/codex-oauth/Cargo.toml` (patch bump 0.1.0 → 0.1.1)
+- Create: `sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md`
+- Create: `sdks/rust/crates/codex-oauth/CHANGELOG.md`
+- Create: `sdks/rust/crates/anthropic-oauth/CHANGELOG.md`
+- Create: `.github/workflows/publish-anthropic-oauth.yml`
+- Modify: `llms.txt` (add anthropic-oauth section + release-tag entry + Release Steps + CI Pipeline mention; bump in-line `motosan-ai-oauth = "0.1"` reference to `"0.2"`)
+- Modify: `README.md` (top-level — add Anthropic OAuth section + ToS disclosure)
+- Modify: `AGENTS.md` (crate inventory)
+
+**Note on the SDK-level `sdks/rust/CHANGELOG.md`**: that file is **not** touched. It is `motosan-ai`-crate-scoped — verified by inspecting commit `d008b96` (motosan-ai-oauth v0.1.0 PR), which did not modify it. OAuth crates each maintain their own per-crate CHANGELOG, per the release process documented in `llms.txt`.
+
+### Version bumps
 
 - [ ] **Step 1: Bump `motosan-ai-oauth` to `0.2.0`**
 
@@ -1196,9 +1212,245 @@ version = "0.1.1"
 
 Rationale: source touched but public API unchanged. Patch bump.
 
-- [ ] **Step 3: Add a section to `README.md`**
+### Per-crate CHANGELOG files
 
-Find the existing OAuth section (if any; otherwise place near the Anthropic provider docs). Append:
+These files do not currently exist (verified: `ls crates/{motosan-ai-oauth,codex-oauth}/CHANGELOG.md` returns "No such file or directory"). They are referenced by the release process in `llms.txt` and are created on the first version bump after `0.1.0`. This task creates all three.
+
+- [ ] **Step 3: Create `sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md`**
+
+```markdown
+# Changelog
+
+All notable changes to `motosan-ai-oauth` are documented in this file.
+
+## [0.2.0] - YYYY-MM-DD
+
+### Added
+- `TokenBodyFormat` enum (`Form` | `Json`) controlling the body encoding
+  used by `exchange_code` and `refresh_token`.
+- `OAuthConfig::callback_path` — the HTTP path the callback server matches
+  against. Defaults vary per provider config (codex/gemini: `/auth/callback`,
+  Anthropic: `/callback`).
+- `OAuthConfig::redirect_uri_host` — the host string used inside the
+  `redirect_uri` query parameter. Separate from the bind address (which is
+  always `127.0.0.1`) so providers like Anthropic that register their
+  redirect URI as `http://localhost:...` work without changing the listen
+  socket.
+- `OAuthConfig::token_body` — selects `TokenBodyFormat::Form` (existing
+  behavior) or `Json`.
+- `OAuthConfig::extra_auth_params` — replaces the previously hardcoded
+  `access_type=offline` query parameter with a config-driven list.
+- `anthropic` feature flag exposing `providers::anthropic::claude_pro_max()`.
+
+### Changed
+- **Breaking (for out-of-tree consumers constructing `OAuthConfig` literals
+  directly):** four new required fields on `OAuthConfig`. The built-in
+  provider configs (`providers::codex`, `providers::gemini`) are updated to
+  set values that preserve previous behavior; consumers using them are
+  unaffected.
+
+## [0.1.0] - 2026-04-20
+
+Initial release: generic PKCE OAuth login + refresh with built-in Codex
+and Gemini provider configs.
+```
+
+Replace `YYYY-MM-DD` with the date of the release commit when you tag.
+
+- [ ] **Step 4: Create `sdks/rust/crates/codex-oauth/CHANGELOG.md`**
+
+```markdown
+# Changelog
+
+All notable changes to `codex-oauth` are documented in this file.
+
+## [0.1.1] - YYYY-MM-DD
+
+### Changed
+- Internal: provider config updated for `motosan-ai-oauth` v0.2.0's
+  expanded `OAuthConfig` (new `callback_path`, `redirect_uri_host`,
+  `token_body`, `extra_auth_params` fields). Values preserve previous
+  Codex behavior (form-encoded token body, `/auth/callback` path,
+  `127.0.0.1` redirect host, `access_type=offline` auth param). Public
+  API of `codex-oauth` is unchanged.
+
+## [0.1.0] - 2026-04-19
+
+Initial release.
+```
+
+- [ ] **Step 5: Create `sdks/rust/crates/anthropic-oauth/CHANGELOG.md`**
+
+```markdown
+# Changelog
+
+All notable changes to `anthropic-oauth` are documented in this file.
+
+## [0.1.0] - YYYY-MM-DD
+
+Initial release. PKCE OAuth login and refresh for Anthropic Claude
+Pro/Max. The resulting `sk-ant-oat01-*` access token is consumed
+directly by `motosan-ai`'s `AnthropicProvider` (the setup-token code
+path applies Bearer auth + Claude Code identity headers
+automatically).
+
+See the project README for the ToS disclosure regarding use of
+Anthropic's Claude Code OAuth `client_id`.
+```
+
+### Publish workflow
+
+- [ ] **Step 6: Create `.github/workflows/publish-anthropic-oauth.yml`**
+
+Mirror `.github/workflows/publish-codex-oauth.yml` exactly:
+
+```yaml
+name: publish-anthropic-oauth
+
+on:
+  push:
+    tags:
+      - "anthropic-oauth-v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/rust/crates/anthropic-oauth
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdks/rust/crates/anthropic-oauth
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish
+```
+
+### llms.txt updates
+
+`llms.txt` is the release-tooling source-of-truth. It already has a `## codex-oauth` section, an entry in the release-tag table, full Release Steps, and a CI Pipeline mention. Mirror all four for `anthropic-oauth`.
+
+- [ ] **Step 7: Add `## anthropic-oauth` section to `llms.txt`**
+
+Find the existing `## codex-oauth` block (currently around line 785, between the `---` after the Codex CLI notes and the `## Release` heading). Insert a new section **after** the closing `---` of `## codex-oauth`:
+
+````markdown
+---
+
+## anthropic-oauth
+
+Standalone crate for browser-based PKCE OAuth login against `claude.ai`. Returns an `sk-ant-oat01-*` access token usable with `motosan-ai`'s `AnthropicProvider` (which auto-detects the prefix and applies Claude Code identity headers).
+
+- crates.io: https://crates.io/crates/anthropic-oauth
+- Version: 0.1.0
+
+### Install
+
+```toml
+anthropic-oauth = "0.1"
+```
+
+### API
+
+```rust
+// Login (opens browser, listens on 127.0.0.1:53692, times out after 120s).
+// The redirect URI registered with Anthropic uses hostname "localhost"; the
+// bind address is still 127.0.0.1 — the OAuthConfig handles this split.
+let token = anthropic_oauth::login().await?;
+
+// Refresh
+let token = anthropic_oauth::refresh(&token.refresh_token).await?;
+
+// Expiry check
+if token.is_expired() { /* refresh */ }
+
+// Token fields (same shape as codex-oauth)
+token.access_token   // "sk-ant-oat01-..." — Bearer for Anthropic API
+token.refresh_token  // long-lived, use with refresh()
+token.expires_in     // lifetime in seconds
+token.issued_at      // Unix timestamp of issue time
+```
+
+`Token` implements `Serialize`/`Deserialize` for disk persistence.
+
+**ToS disclosure**: this crate uses the OAuth `client_id` registered by Anthropic's Claude Code CLI. The resulting access token authenticates as a Claude Code CLI session. Anthropic has not published this `client_id` for third-party use; using it for purposes other than running `claude` CLI may be subject to change, rate limited, or violate Anthropic's terms of service. See the project README for the full disclosure.
+````
+
+- [ ] **Step 8: Add `anthropic-oauth` row to the release-tag table in `llms.txt`**
+
+Find the table around the line that contains `| codex-oauth  | \`codex-oauth-vX.Y.Z\`  | \`codex-oauth-v0.1.0\`  |` and add a row below it:
+
+```
+| anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |
+```
+
+(Column alignment may need a couple of extra spaces — match the table's existing style; markdown doesn't care about exact spacing.)
+
+- [ ] **Step 9: Add `### Release Steps (anthropic-oauth)` block to `llms.txt`**
+
+Mirror the existing `### Release Steps (codex-oauth)` block. Insert immediately after it:
+
+````markdown
+### Release Steps (anthropic-oauth)
+
+```bash
+# 1. Bump version
+#    sdks/rust/crates/anthropic-oauth/Cargo.toml → version = "0.1.1"
+
+# 2. Update CHANGELOG
+#    sdks/rust/crates/anthropic-oauth/CHANGELOG.md → ## [0.1.1] - YYYY-MM-DD
+
+# 3. Commit
+git add sdks/rust/crates/anthropic-oauth/Cargo.toml sdks/rust/crates/anthropic-oauth/CHANGELOG.md
+git commit -m "chore: release anthropic-oauth-v0.1.1"
+
+# 4. Tag + push (triggers publish-anthropic-oauth.yml → crates.io)
+git tag -a anthropic-oauth-v0.1.1 -m "anthropic-oauth-v0.1.1 — summary"
+git push origin main anthropic-oauth-v0.1.1
+```
+````
+
+- [ ] **Step 10: Add `publish-anthropic-oauth.yml` to the CI Pipeline bullet list in `llms.txt`**
+
+Find the `### CI Pipeline` section. There is a bullet list documenting each publish workflow. Add a line below the `publish-codex-oauth.yml` bullet:
+
+```markdown
+- **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+```
+
+- [ ] **Step 11: Bump in-line `motosan-ai-oauth` version reference in `llms.txt`**
+
+Around line 548 there is a code snippet showing:
+
+```
+motosan-ai-oauth = { version = "0.1", features = ["gemini"] }
+```
+
+Update to `version = "0.2"`. If there are other `motosan-ai-oauth = "0.1"` references in the file, update each.
+
+Verify with:
+
+```bash
+grep -n 'motosan-ai-oauth.*=.*"0\.' llms.txt
+```
+
+All matches should now show `"0.2"`.
+
+### User-facing docs
+
+- [ ] **Step 12: Add Anthropic OAuth section to top-level `README.md`**
+
+Find an appropriate insertion point (near the existing setup-token example around line 87 of `README.md` — search for `sk-ant-oat01`). Insert:
 
 ````markdown
 ### Anthropic OAuth (Claude Pro/Max)
@@ -1235,54 +1487,43 @@ If you have an API key (`sk-ant-api03-*`), prefer that path — it does not
 require this crate.
 ````
 
-- [ ] **Step 4: Update `AGENTS.md`**
+This is a new precedent (`codex-oauth` currently has no README section). Approved by the spec; revisit whether to backfill a `codex-oauth` README section in a follow-up.
 
-Add `crates/anthropic-oauth` next to the existing `crates/codex-oauth` entry (search for "codex-oauth" — the format should be obvious).
+- [ ] **Step 13: Update `AGENTS.md`**
 
-- [ ] **Step 5: Add `sdks/rust/CHANGELOG.md` entry**
+Open `AGENTS.md`. Search for `codex-oauth`. Mirror the existing `codex-oauth` entry/entries with a parallel `anthropic-oauth` entry. The exact wording depends on the section ("Crate inventory", "Releasing", etc.) — copy the surrounding format and adapt.
 
-Find the latest entry (currently `0.15.3`) and add a new section above it. The exact next version depends on the `motosan-ai` crate's own changes, not these OAuth crates — but the CHANGELOG should note the OAuth changes:
+### Finalize
 
-```markdown
-## [Unreleased]
-
-### Added
-- `anthropic-oauth` crate: PKCE login + refresh for Anthropic Claude Pro/Max.
-  Returns a token usable with the existing `AnthropicProvider` setup-token
-  path. See README for ToS disclosure.
-- `motosan-ai-oauth` v0.2.0: `OAuthConfig` gained `callback_path`,
-  `redirect_uri_host`, `token_body`, and `extra_auth_params` fields, plus a
-  new `TokenBodyFormat` enum. **Breaking** for out-of-tree consumers
-  constructing `OAuthConfig` literals.
-
-### Changed
-- `codex-oauth` v0.1.1: internal — provider config now sets the four new
-  `OAuthConfig` fields with values preserving current behavior. Public API
-  unchanged.
-```
-
-- [ ] **Step 6: Format**
+- [ ] **Step 14: Format**
 
 ```bash
 cargo fmt --all
 ```
 
-(No code changed here, but harmless to run; ensures the docs commit doesn't accidentally include stale formatting from earlier tasks.)
+(No `.rs` changed here, but harmless. Catches any stray formatting drift from earlier tasks.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 15: Commit**
 
 ```bash
-git add README.md AGENTS.md sdks/rust/CHANGELOG.md \
-        sdks/rust/crates/motosan-ai-oauth/Cargo.toml \
-        sdks/rust/crates/codex-oauth/Cargo.toml
-git commit -m "docs: anthropic-oauth README/ToS + version bumps
+git add sdks/rust/crates/motosan-ai-oauth/Cargo.toml \
+        sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md \
+        sdks/rust/crates/codex-oauth/Cargo.toml \
+        sdks/rust/crates/codex-oauth/CHANGELOG.md \
+        sdks/rust/crates/anthropic-oauth/CHANGELOG.md \
+        .github/workflows/publish-anthropic-oauth.yml \
+        llms.txt README.md AGENTS.md
+git commit -m "docs: anthropic-oauth release tooling + README/ToS
 
-motosan-ai-oauth: 0.1.0 -> 0.2.0 (breaking OAuthConfig change)
-codex-oauth: 0.1.0 -> 0.1.1 (source-only follow-up)
-anthropic-oauth: introduces at 0.1.0 (set in Task 6)
-
-README gains an Anthropic OAuth section with explicit ToS
-disclosure. AGENTS.md crate inventory updated."
+- motosan-ai-oauth: 0.1.0 -> 0.2.0 (breaking OAuthConfig change)
+- codex-oauth: 0.1.0 -> 0.1.1 (source-only follow-up)
+- anthropic-oauth: 0.1.0 initial release
+- Per-crate CHANGELOG.md files created (none existed prior).
+- llms.txt updated with anthropic-oauth section, release-tag entry,
+  Release Steps, and CI Pipeline mention.
+- New publish-anthropic-oauth.yml workflow mirrors codex-oauth's.
+- README.md gains an Anthropic OAuth section with explicit ToS
+  disclosure. AGENTS.md crate inventory updated."
 ```
 
 ---
@@ -1345,7 +1586,10 @@ async fn live_login_returns_setup_token() {
 cargo test -p anthropic-oauth --test login_live 2>&1 | tail -10
 ```
 
-Expected: `running 0 tests` (since the single test is `#[ignore]`'d) but the test target compiles cleanly.
+Expected: the test target compiles cleanly. The summary line reads
+`test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out`.
+The `1 ignored` is what proves the `#[ignore]` test was discovered (i.e., it
+compiled) but was correctly skipped.
 
 - [ ] **Step 3: Run the test manually (engineer action, not automated)**
 
@@ -1394,12 +1638,16 @@ Expected: all green.
 - [ ] **Step 2: Verify the regression gates from the spec**
 
 ```bash
-cargo test -p motosan-ai-oauth 2>&1 | grep "test result"
+cargo test -p motosan-ai-oauth --all-features 2>&1 | grep "test result"
 cargo test -p codex-oauth 2>&1 | grep "test result"
-cargo test -p motosan-ai --test anthropic_oauth_usage 2>&1 | grep "test result"
+cargo test -p motosan-ai --features anthropic --test anthropic_oauth_usage 2>&1 | grep "test result"
 ```
 
-Expected: each line `test result: ok. ... 0 failed`.
+Expected: each line `test result: ok. ... 0 failed` with at least 1 passed
+on the `anthropic_oauth_usage` line. **Critical**: the `--features anthropic`
+flag on the third command is required — without it, `#![cfg(feature = "anthropic")]`
+at the top of `tests/anthropic_oauth_usage.rs` strips the entire file to
+zero tests, producing a misleading green `0 passed; 0 failed`.
 
 - [ ] **Step 3: Push the branch and open a PR**
 
@@ -1454,5 +1702,5 @@ The plan covers every section of the spec:
 - **Architecture Change 4** (`anthropic-oauth` crate): Task 6.
 - **Error Handling**: no new variants; covered by reusing existing `Error` enum. No dedicated task — verified by the existing error-mapping behavior in `exchange.rs::post_token`.
 - **Testing matrix**: every row mapped — unit `lib.rs` tests (Tasks 1, 2), unit `exchange.rs` mockito (Task 4), unit `server.rs` (Task 3), unit `providers/anthropic.rs` (Task 5), integration mockito (Task 6), live `#[ignore]` (Task 8), regression gates (Task 9 Step 2).
-- **Documentation**: README + AGENTS + CHANGELOG (Task 7); `llms.txt` deliberately not touched here because release-time edits are owned by a separate release process per `CLAUDE.md`.
-- **Versioning**: minor / patch / new — Task 7.
+- **Documentation**: README + AGENTS + per-crate CHANGELOGs + `llms.txt` (release tooling SSOT) + new `publish-anthropic-oauth.yml` GitHub workflow — Task 7. `sdks/rust/CHANGELOG.md` is intentionally **not** touched: it is scoped to the `motosan-ai` crate, as verified by commit `d008b96` (motosan-ai-oauth v0.1.0 PR, which did not modify it).
+- **Versioning**: minor / patch / new — Task 7. Per-crate CHANGELOG files created in the same task; previously these did not exist for any of the three crates.
