@@ -545,7 +545,7 @@ Billing: pay-per-token. Free tier available but rate-limited. Default model `gem
 
 ```rust
 // Cargo.toml: features = ["gemini-code-assist"]
-// Also: motosan-ai-oauth = { version = "0.1", features = ["gemini"] }
+// Also: motosan-ai-oauth = { version = "0.2", features = ["gemini"] }
 
 use motosan_ai_oauth::{refresh, providers::gemini};
 
@@ -818,6 +818,46 @@ token.issued_at      // Unix timestamp of issue time
 
 ---
 
+## anthropic-oauth
+
+Standalone crate for browser-based PKCE OAuth login against `claude.ai`. Returns an `sk-ant-oat01-*` access token usable with `motosan-ai`'s `AnthropicProvider` (which auto-detects the prefix and applies Claude Code identity headers).
+
+- crates.io: https://crates.io/crates/anthropic-oauth
+- Version: 0.1.0
+
+### Install
+
+```toml
+anthropic-oauth = "0.1"
+```
+
+### API
+
+```rust
+// Login (opens browser, listens on 127.0.0.1:53692, times out after 120s).
+// The redirect URI registered with Anthropic uses hostname "localhost"; the
+// bind address is still 127.0.0.1 — the OAuthConfig handles this split.
+let token = anthropic_oauth::login().await?;
+
+// Refresh
+let token = anthropic_oauth::refresh(&token.refresh_token).await?;
+
+// Expiry check
+if token.is_expired() { /* refresh */ }
+
+// Token fields (same shape as codex-oauth)
+token.access_token   // "sk-ant-oat01-..." — Bearer for Anthropic API
+token.refresh_token  // long-lived, use with refresh()
+token.expires_in     // lifetime in seconds
+token.issued_at      // Unix timestamp of issue time
+```
+
+`Token` implements `Serialize`/`Deserialize` for disk persistence.
+
+**ToS disclosure**: this crate uses the OAuth `client_id` registered by Anthropic's Claude Code CLI. The resulting access token authenticates as a Claude Code CLI session. Anthropic has not published this `client_id` for third-party use; using it for purposes other than running `claude` CLI may be subject to change, rate limited, or violate Anthropic's terms of service. See the project README for the full disclosure.
+
+---
+
 ## Release
 
 Python and Rust SDKs are versioned and released **independently**.
@@ -829,6 +869,7 @@ Python and Rust SDKs are versioned and released **independently**.
 | Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
 | Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
 | codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
+| anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |
 
 ### Release Steps (Python)
 
@@ -896,12 +937,31 @@ git tag -a codex-oauth-v0.1.1 -m "codex-oauth-v0.1.1 — summary"
 git push origin main codex-oauth-v0.1.1
 ```
 
+### Release Steps (anthropic-oauth)
+
+```bash
+# 1. Bump version
+#    sdks/rust/crates/anthropic-oauth/Cargo.toml → version = "0.1.1"
+
+# 2. Update CHANGELOG
+#    sdks/rust/crates/anthropic-oauth/CHANGELOG.md → ## [0.1.1] - YYYY-MM-DD
+
+# 3. Commit
+git add sdks/rust/crates/anthropic-oauth/Cargo.toml sdks/rust/crates/anthropic-oauth/CHANGELOG.md
+git commit -m "chore: release anthropic-oauth-v0.1.1"
+
+# 4. Tag + push (triggers publish-anthropic-oauth.yml → crates.io)
+git tag -a anthropic-oauth-v0.1.1 -m "anthropic-oauth-v0.1.1 — summary"
+git push origin main anthropic-oauth-v0.1.1
+```
+
 ### CI Pipeline
 
 Tag push triggers GitHub Actions:
 - **publish-python.yml**: `uv build` → `pypa/gh-action-pypi-publish` (secret: `PYPI_API_TOKEN`)
 - **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 - **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+- **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 
 All Rust workflows support `workflow_dispatch` for manual trigger.
 
