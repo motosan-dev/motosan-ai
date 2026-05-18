@@ -27,7 +27,8 @@ The repo already has the building blocks needed to add this in Rust:
 This spec describes adding an **`anthropic-oauth` crate** in the same shape,
 plus the minimal generalization of `motosan-ai-oauth` needed because the
 Anthropic OAuth flow diverges from the current shared crate's assumptions in
-four specific places.
+four specific places (callback path, redirect URI host, token request body
+format, and auth-URL extra parameters).
 
 ## Goals / Non-Goals
 
@@ -74,34 +75,38 @@ pub struct OAuthConfig {
 
     // === new fields ===
     pub callback_path: &'static str,
+    pub redirect_uri_host: &'static str,
     pub token_body: TokenBodyFormat,
     pub extra_auth_params: &'static [(&'static str, &'static str)],
-    pub state_strategy: StateStrategy,
 }
 
 pub enum TokenBodyFormat { Form, Json }
-pub enum StateStrategy { Random, EqualsVerifier }
 ```
 
 | Field | Why Anthropic needs to override |
 | --- | --- |
 | `callback_path` | Anthropic registers `redirect_uri = http://localhost:53692/callback`. The callback server's request matcher must use this path; today `/auth/callback` is hardcoded. |
-| `token_body` | Anthropic's `POST /v1/oauth/token` rejects `application/x-www-form-urlencoded`; it requires JSON. The shared `post_token` uses `.form(&params)`. |
+| `redirect_uri_host` | OAuth servers compare `redirect_uri` as a literal string. Anthropic's registered URI uses `localhost`; the shared crate currently builds the URI with `127.0.0.1` (`lib.rs::login`). The TCP listener still binds to `127.0.0.1` (the safer default that works without DNS); only the URI string sent to the auth server changes. pi-ai uses the same split. |
+| `token_body` | The shared `post_token` uses `.form(&params)`. pi-ai's reference Anthropic implementation sends `application/json`; we match that known-working path. Anthropic's endpoint may also accept form bodies, but we have not verified that. |
 | `extra_auth_params` | The current `build_auth_url` hardcodes `access_type=offline` (a Google-ism). Replacing it with a config-driven list lets Anthropic add its required `code=true` and Google keep its `access_type=offline`. |
-| `state_strategy` | Anthropic's stealth flow (mimicking Claude Code CLI) uses `state == verifier`. Independent random state may not be rejected by Anthropic today, but matching pi-ai's known-good pattern reduces the chance of future server-side fingerprinting breaking the flow. |
 
-### Change 2 — Generalize the three call sites
+**Note on `state` parameter** — pi-ai sends `state = verifier` (PKCE verifier reused as the OAuth state nonce) when talking to Anthropic. This is a coincidence of pi-ai's implementation, not an Anthropic server requirement: standard OAuth servers echo `state` back unchanged regardless of its value. The shared crate's existing `Random` state generation is fine for Anthropic; we do not need a `state_strategy` knob.
+
+### Change 2 — Generalize the call sites
 
 - `lib.rs::build_auth_url` — replace the hardcoded
   `.append_pair("access_type", "offline")` with iteration over
-  `config.extra_auth_params`. Derive `state` from `state_strategy` (Random
-  generates 16 random bytes; EqualsVerifier reuses the PKCE verifier).
-- `lib.rs::login` — pass `config.callback_path` into `server::bind` (or to
-  `wait_for_callback`).
+  `config.extra_auth_params`.
+- `lib.rs::login` — build `redirect_uri` from `config.redirect_uri_host`
+  instead of hardcoded `127.0.0.1`, and pass `config.callback_path` through to
+  the callback server.
 - `server.rs::is_callback_request` — accept the configured path; the function
   becomes `is_callback_request(request: &str, callback_path: &str) -> bool`.
+  The TCP listener bind address stays `127.0.0.1`.
 - `exchange.rs::post_token` — accept `body_format: TokenBodyFormat` and switch
-  between `.form(&params)` and `.json(&serde_json::Map<...>)`.
+  between `.form(&params)` and `.json(&map)` (where the JSON branch builds a
+  `HashMap<&str, &str>` or `serde_json::json!` value from the same param
+  tuples).
 
 ### Change 3 — Anthropic provider config
 
@@ -109,7 +114,7 @@ New file `crates/motosan-ai-oauth/src/providers/anthropic.rs`, gated behind a
 new `anthropic` feature on `motosan-ai-oauth`:
 
 ```rust
-use crate::{OAuthConfig, StateStrategy, TokenBodyFormat};
+use crate::{OAuthConfig, TokenBodyFormat};
 
 pub fn claude_pro_max() -> OAuthConfig {
     OAuthConfig {
@@ -127,16 +132,17 @@ pub fn claude_pro_max() -> OAuthConfig {
         ],
         redirect_port: Some(53692),
         callback_path: "/callback",
+        redirect_uri_host: "localhost",
         token_body: TokenBodyFormat::Json,
         extra_auth_params: &[("code", "true")],
-        state_strategy: StateStrategy::EqualsVerifier,
     }
 }
 ```
 
-**Source of `client_id`**: Anthropic's public Claude Code app registration. The
-same value is observable in any traffic capture of `claude` CLI authenticating,
-and is the value used by `@earendil-works/pi-ai`. Cited in code comment.
+**Source of `client_id`**: this value is extracted from the Claude Code CLI's
+own OAuth flow; the same value is used by `@earendil-works/pi-ai`. Anthropic
+has not published this client_id as a public app registration for third-party
+use — see the ToS disclosure in README. Cited in code comment.
 
 ### Change 4 — `crates/anthropic-oauth/` (new)
 
@@ -196,10 +202,10 @@ adjustment is needed.
 
 | Layer | What it asserts | Tool |
 | --- | --- | --- |
-| Unit (`lib.rs`) | `build_auth_url` honors `extra_auth_params`; under `StateStrategy::EqualsVerifier`, `state` query param equals the PKCE verifier | pure function tests |
+| Unit (`lib.rs`) | `build_auth_url` honors `extra_auth_params` (each tuple ends up as a query pair) and `redirect_uri_host` (URI string uses `localhost` vs `127.0.0.1` per config, while bind address stays `127.0.0.1`) | pure function tests |
 | Unit (`exchange.rs`) | `TokenBodyFormat::Json` produces a JSON body, `Form` produces a form body | mockito `match_body` |
-| Unit (`server.rs`) | `is_callback_request("/callback?code=...", "/callback")` is true; with default path it is false | pure function tests |
-| Unit (`providers/anthropic.rs`) | `client_id`, scopes, port, `callback_path`, `token_body`, `state_strategy` match expected values | mirrors `providers/codex.rs` tests |
+| Unit (`server.rs`) | `is_callback_request("/callback?code=...", "/callback")` is true; with default path `/auth/callback` it is false | pure function tests |
+| Unit (`providers/anthropic.rs`) | `client_id`, scopes, `redirect_port`, `callback_path`, `redirect_uri_host`, `token_body`, `extra_auth_params` match expected values | mirrors `providers/codex.rs` tests |
 | Integration (`anthropic-oauth`) | `refresh()` hits the mocked endpoint with a JSON body and decodes the response into a `Token` correctly | mockito |
 | Live (CI-excluded) | `#[ignore]`'d smoke test of `login()` that requires a real browser interaction | `cargo test --ignored login_live` |
 
@@ -233,13 +239,15 @@ provider tests and the `dummy_config()` fixture in `lib.rs` tests).
 
 Per the release checklist in `CLAUDE.md` / `llms.txt`:
 
-- `crates/motosan-ai-oauth`: **minor bump** — `OAuthConfig` grew two new
-  public enums (`TokenBodyFormat`, `StateStrategy`) and four required fields.
-  Out-of-tree consumers constructing `OAuthConfig` literals will need to add
-  the new fields. Document this in `CHANGELOG.md` under "Breaking changes if
-  you construct OAuthConfig directly".
+- `crates/motosan-ai-oauth`: **minor bump** — `OAuthConfig` grew one new
+  public enum (`TokenBodyFormat`) and four required fields (`callback_path`,
+  `redirect_uri_host`, `token_body`, `extra_auth_params`). Out-of-tree
+  consumers constructing `OAuthConfig` literals will need to add the new
+  fields. Document this in `CHANGELOG.md` under "Breaking changes if you
+  construct OAuthConfig directly".
 - `crates/codex-oauth`: **patch bump** — source touched (its `OAuthConfig`
-  literal gains four new fields) but the crate's public API is unchanged.
+  literal gains four new fields, with values that preserve current behavior)
+  but the crate's public API is unchanged.
 - `crates/anthropic-oauth`: **new crate**, initial version matches the
   current `codex-oauth` version at the time of release for consistency.
 
