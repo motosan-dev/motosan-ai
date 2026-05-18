@@ -78,8 +78,7 @@ mod tests {
     fn claude_pro_max_scopes_include_claude_code_session() {
         assert!(claude_pro_max()
             .scopes
-            .iter()
-            .any(|s| *s == "user:sessions:claude_code"));
+            .contains(&"user:sessions:claude_code"));
     }
 
     #[test]
