@@ -1,0 +1,19 @@
+[package]
+name = "anthropic-oauth"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+description = "OAuth login for Anthropic Claude Pro/Max (Claude Code session)"
+repository = "https://github.com/motosan-dev/motosan-ai"
+homepage = "https://github.com/motosan-dev/motosan-ai"
+documentation = "https://docs.rs/anthropic-oauth"
+keywords = ["anthropic", "claude", "oauth", "authentication"]
+categories = ["authentication", "api-bindings"]
+
+[dependencies]
+motosan-ai-oauth = { path = "../motosan-ai-oauth", features = ["anthropic"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+mockito = "1"
