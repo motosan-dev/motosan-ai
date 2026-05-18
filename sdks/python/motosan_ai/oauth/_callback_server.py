@@ -32,7 +32,7 @@ class BoundServer:
             self._thread.join(timeout=2.0)
 
 
-async def bind(port: int | None) -> BoundServer:
+async def bind(port: int | None, callback_path: str) -> BoundServer:
     loop = asyncio.get_running_loop()
     result: asyncio.Future[tuple[str, str]] = loop.create_future()
 
@@ -42,7 +42,7 @@ async def bind(port: int | None) -> BoundServer:
 
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path != "/auth/callback":
+            if parsed.path != callback_path:
                 self.send_response(404)
                 self.end_headers()
                 return

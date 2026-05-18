@@ -44,6 +44,7 @@ class OAuthConfig:
     token_url: str
     scopes: Sequence[str]
     redirect_port: int | None = None
+    callback_path: str = "/auth/callback"
 
 
 def save_token(token: Token, *, path: Path = DEFAULT_CACHE_PATH) -> None:
@@ -150,8 +151,8 @@ def _build_auth_url(config: OAuthConfig, challenge: str, state: str, redirect_ur
 async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = None) -> Token:
     pkce = Pkce.generate()
     state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode("ascii")
-    server = await bind(config.redirect_port)
-    redirect_uri = f"http://127.0.0.1:{server.port}/auth/callback"
+    server = await bind(config.redirect_port, config.callback_path)
+    redirect_uri = f"http://127.0.0.1:{server.port}{config.callback_path}"
     auth_url = _build_auth_url(config, pkce.challenge, state, redirect_uri)
 
     callback_task = asyncio.create_task(wait_for_callback(server))

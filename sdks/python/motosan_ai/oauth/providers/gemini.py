@@ -14,4 +14,5 @@ def gemini_config() -> OAuthConfig:
             "https://www.googleapis.com/auth/userinfo.email",
             "https://www.googleapis.com/auth/userinfo.profile",
         ),
+        callback_path="/auth/callback",
     )
