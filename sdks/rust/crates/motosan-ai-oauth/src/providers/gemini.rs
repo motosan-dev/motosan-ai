@@ -20,6 +20,7 @@ pub fn gemini() -> OAuthConfig {
             "https://www.googleapis.com/auth/userinfo.profile",
         ],
         redirect_port: None,
+        callback_path: "/auth/callback",
         redirect_uri_host: "127.0.0.1",
         extra_auth_params: &[("access_type", "offline")],
     }

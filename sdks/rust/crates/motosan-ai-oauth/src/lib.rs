@@ -25,6 +25,7 @@ pub struct OAuthConfig {
     pub token_url: &'static str,
     pub scopes: &'static [&'static str],
     pub redirect_port: Option<u16>,
+    pub callback_path: &'static str,
     pub redirect_uri_host: &'static str,
     pub extra_auth_params: &'static [(&'static str, &'static str)],
 }
@@ -52,11 +53,8 @@ pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
     let state = URL_SAFE_NO_PAD.encode(state_bytes);
 
     let server = server::bind(config.redirect_port).await?;
-    let redirect_uri = build_redirect_uri(
-        config.redirect_uri_host,
-        server.port,
-        "/auth/callback", // Task 3 will replace this with config.callback_path
-    );
+    let redirect_uri =
+        build_redirect_uri(config.redirect_uri_host, server.port, config.callback_path);
 
     let auth_url = build_auth_url(config, &pkce.challenge, &state, &redirect_uri);
 
@@ -65,7 +63,7 @@ pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
 
     let (code, returned_state) = tokio::time::timeout(
         std::time::Duration::from_secs(LOGIN_TIMEOUT_SECS),
-        server::wait_for_callback(server),
+        server::wait_for_callback(server, config.callback_path),
     )
     .await
     .map_err(|_| {
@@ -143,6 +141,7 @@ mod tests {
             token_url: "https://auth.example.com/oauth/token",
             scopes: &["openid", "profile"],
             redirect_port: None,
+            callback_path: "/auth/callback",
             redirect_uri_host: "127.0.0.1",
             extra_auth_params: &[],
         }
