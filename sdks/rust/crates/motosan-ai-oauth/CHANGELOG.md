@@ -33,6 +33,17 @@ All notable changes to `motosan-ai-oauth` are documented in this file.
   provider configs (`providers::codex`, `providers::gemini`) are updated to
   set values that preserve previous behavior; consumers using them are
   unaffected.
+- Token POST behavior aligned with `@earendil-works/pi-ai`'s reference impl
+  after empirical validation against `platform.claude.com/v1/oauth/token`:
+  - `state` is now echoed in the token-endpoint POST body (after `code`).
+    RFC 6749 §4.1.3 does not require this; most servers ignore extra
+    fields. Anthropic empirically requires it (a missing `state` field
+    returns HTTP 429 shaped as `rate_limit_error`). Codex/Gemini tolerate
+    the extra field.
+  - The previous `User-Agent: Mozilla/5.0 (compatible; motosan-ai-oauth)`
+    override is removed (reqwest's default is used instead — fake-Mozilla
+    UA strings can trip anti-abuse heuristics).
+  - `Accept: application/json` is now set explicitly on the token POST.
 
 ## [0.1.0] - 2026-04-20
 
