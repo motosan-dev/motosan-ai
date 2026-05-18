@@ -6,7 +6,7 @@
 //! client_id as a public app registration for third-party use — see the ToS
 //! disclosure in the top-level README.
 
-use crate::{OAuthConfig, TokenBodyFormat};
+use crate::{OAuthConfig, StateStrategy, TokenBodyFormat};
 
 pub fn claude_pro_max() -> OAuthConfig {
     OAuthConfig {
@@ -27,6 +27,10 @@ pub fn claude_pro_max() -> OAuthConfig {
         redirect_uri_host: "localhost",
         token_body: TokenBodyFormat::Json,
         extra_auth_params: &[("code", "true")],
+        // Anthropic's auth endpoint rejects random `state` values with
+        // "Invalid request format"; mimicking Claude Code CLI's behavior of
+        // reusing the PKCE verifier as the state nonce is what works.
+        state_strategy: StateStrategy::EqualsVerifier,
     }
 }
 
@@ -84,5 +88,14 @@ mod tests {
     #[test]
     fn claude_pro_max_auth_url_is_claude_ai() {
         assert!(claude_pro_max().auth_url.contains("claude.ai"));
+    }
+
+    #[test]
+    fn claude_pro_max_state_strategy_is_equals_verifier() {
+        // Anthropic's auth endpoint rejects random state values.
+        assert_eq!(
+            claude_pro_max().state_strategy,
+            StateStrategy::EqualsVerifier
+        );
     }
 }

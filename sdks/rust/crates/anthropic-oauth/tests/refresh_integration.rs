@@ -5,7 +5,7 @@
 //! calling `motosan_ai_oauth::refresh` directly with a mock-server config.
 
 use mockito::Matcher;
-use motosan_ai_oauth::{OAuthConfig, TokenBodyFormat};
+use motosan_ai_oauth::{OAuthConfig, StateStrategy, TokenBodyFormat};
 
 #[tokio::test]
 async fn refresh_posts_json_body_when_token_body_is_json() {
@@ -35,6 +35,7 @@ async fn refresh_posts_json_body_when_token_body_is_json() {
         redirect_uri_host: "localhost",
         token_body: TokenBodyFormat::Json,
         extra_auth_params: &[],
+        state_strategy: StateStrategy::Random,
     };
 
     let token = motosan_ai_oauth::refresh(&cfg, "OLD_REFRESH")

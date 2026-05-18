@@ -137,6 +137,7 @@ mod tests {
             redirect_uri_host: "127.0.0.1",
             token_body: TokenBodyFormat::Form,
             extra_auth_params: &[],
+            state_strategy: crate::StateStrategy::Random,
         };
         let token = exchange_code(&cfg, "AUTHCODE", "VERIFIER", "http://127.0.0.1/cb")
             .await
@@ -175,6 +176,7 @@ mod tests {
             redirect_uri_host: "127.0.0.1",
             token_body: TokenBodyFormat::Json,
             extra_auth_params: &[],
+            state_strategy: crate::StateStrategy::Random,
         };
         let token = exchange_code(&cfg, "AUTHCODE", "VERIFIER", "http://127.0.0.1/cb")
             .await

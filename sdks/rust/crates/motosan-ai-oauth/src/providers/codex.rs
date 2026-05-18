@@ -1,4 +1,4 @@
-use crate::{OAuthConfig, TokenBodyFormat};
+use crate::{OAuthConfig, StateStrategy, TokenBodyFormat};
 
 pub fn codex() -> OAuthConfig {
     OAuthConfig {
@@ -12,6 +12,7 @@ pub fn codex() -> OAuthConfig {
         redirect_uri_host: "127.0.0.1",
         token_body: TokenBodyFormat::Form,
         extra_auth_params: &[("access_type", "offline")],
+        state_strategy: StateStrategy::Random,
     }
 }
 

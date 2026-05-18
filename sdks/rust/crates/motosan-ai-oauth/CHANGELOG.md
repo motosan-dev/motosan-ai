@@ -19,11 +19,17 @@ All notable changes to `motosan-ai-oauth` are documented in this file.
   behavior) or `Json`.
 - `OAuthConfig::extra_auth_params` — replaces the previously hardcoded
   `access_type=offline` query parameter with a config-driven list.
+- `OAuthConfig::state_strategy` (`StateStrategy::Random` | `EqualsVerifier`)
+  — controls how the OAuth `state` CSRF nonce is derived. Anthropic's
+  `claude.ai/oauth/authorize` empirically rejects random state values with
+  "Invalid request format"; Anthropic uses `EqualsVerifier` (reuse PKCE
+  verifier as state), matching Claude Code CLI behavior. Codex/Gemini stay
+  on `Random`.
 - `anthropic` feature flag exposing `providers::anthropic::claude_pro_max()`.
 
 ### Changed
 - **Breaking (for out-of-tree consumers constructing `OAuthConfig` literals
-  directly):** four new required fields on `OAuthConfig`. The built-in
+  directly):** five new required fields on `OAuthConfig`. The built-in
   provider configs (`providers::codex`, `providers::gemini`) are updated to
   set values that preserve previous behavior; consumers using them are
   unaffected.

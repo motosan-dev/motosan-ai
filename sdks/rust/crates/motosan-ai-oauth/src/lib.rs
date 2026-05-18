@@ -17,6 +17,21 @@ pub enum TokenBodyFormat {
     Json,
 }
 
+/// How to derive the OAuth `state` CSRF nonce.
+///
+/// Most servers treat `state` as opaque and echo it back unchanged. Anthropic's
+/// `claude.ai/oauth/authorize` endpoint empirically rejects random `state`
+/// values with "Invalid request format"; setting `state` equal to the PKCE
+/// verifier (as the Claude Code CLI and `@earendil-works/pi-ai` both do) is
+/// accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateStrategy {
+    /// Generate a fresh random 16-byte base64url value. Standard OAuth.
+    Random,
+    /// Reuse the PKCE verifier as the state nonce. Required for Anthropic.
+    EqualsVerifier,
+}
+
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
     pub client_id: &'static str,
@@ -29,6 +44,7 @@ pub struct OAuthConfig {
     pub redirect_uri_host: &'static str,
     pub token_body: TokenBodyFormat,
     pub extra_auth_params: &'static [(&'static str, &'static str)],
+    pub state_strategy: StateStrategy,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -49,9 +65,14 @@ impl Token {
 pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
     let pkce = pkce::Pkce::generate();
 
-    let mut state_bytes = [0u8; 16];
-    rand::rng().fill_bytes(&mut state_bytes);
-    let state = URL_SAFE_NO_PAD.encode(state_bytes);
+    let state = match config.state_strategy {
+        StateStrategy::Random => {
+            let mut state_bytes = [0u8; 16];
+            rand::rng().fill_bytes(&mut state_bytes);
+            URL_SAFE_NO_PAD.encode(state_bytes)
+        }
+        StateStrategy::EqualsVerifier => pkce.verifier.clone(),
+    };
 
     let server = server::bind(config.redirect_port).await?;
     let redirect_uri =
@@ -146,6 +167,7 @@ mod tests {
             redirect_uri_host: "127.0.0.1",
             token_body: TokenBodyFormat::Form,
             extra_auth_params: &[],
+            state_strategy: StateStrategy::Random,
         }
     }
 
