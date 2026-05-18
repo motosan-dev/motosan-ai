@@ -98,7 +98,7 @@ pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
         return Err(Error::StateMismatch);
     }
 
-    exchange::exchange_code(config, &code, &pkce.verifier, &redirect_uri).await
+    exchange::exchange_code(config, &code, &state, &pkce.verifier, &redirect_uri).await
 }
 
 pub async fn refresh(config: &OAuthConfig, refresh_token: &str) -> Result<Token, Error> {

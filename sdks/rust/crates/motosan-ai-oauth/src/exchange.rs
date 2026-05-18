@@ -36,9 +36,10 @@ async fn post_token(
     fallback_refresh: Option<&str>,
 ) -> Result<Token, Error> {
     let client = reqwest::Client::new();
-    let req = client
-        .post(token_url)
-        .header("User-Agent", "Mozilla/5.0 (compatible; motosan-ai-oauth)");
+    // No custom User-Agent override — reqwest's default is safer than a
+    // "Mozilla/5.0..." string (which can look like a bot to anti-abuse
+    // systems). Accept: application/json matches pi-ai's reference impl.
+    let req = client.post(token_url).header("Accept", "application/json");
 
     let req = match body_format {
         crate::TokenBodyFormat::Form => req.form(&params),
@@ -65,12 +66,19 @@ async fn post_token(
 pub async fn exchange_code(
     config: &OAuthConfig,
     code: &str,
+    state: &str,
     verifier: &str,
     redirect_uri: &str,
 ) -> Result<Token, Error> {
+    // We include `state` in the token POST body to match pi-ai's reference
+    // implementation against Anthropic. Standard OAuth (RFC 6749 §4.1.3)
+    // does not require `state` on the token endpoint — most servers ignore
+    // extra fields — but Anthropic appears to validate it. Codex/Gemini
+    // tolerate the extra field.
     let mut params = vec![
         ("grant_type", "authorization_code"),
         ("code", code),
+        ("state", state),
         ("redirect_uri", redirect_uri),
         ("code_verifier", verifier),
         ("client_id", config.client_id),
@@ -119,6 +127,7 @@ mod tests {
             .match_body(Matcher::AllOf(vec![
                 Matcher::UrlEncoded("grant_type".into(), "authorization_code".into()),
                 Matcher::UrlEncoded("code".into(), "AUTHCODE".into()),
+                Matcher::UrlEncoded("state".into(), "STATE".into()),
                 Matcher::UrlEncoded("client_id".into(), "test-client".into()),
             ]))
             .with_status(200)
@@ -139,7 +148,7 @@ mod tests {
             extra_auth_params: &[],
             state_strategy: crate::StateStrategy::Random,
         };
-        let token = exchange_code(&cfg, "AUTHCODE", "VERIFIER", "http://127.0.0.1/cb")
+        let token = exchange_code(&cfg, "AUTHCODE", "STATE", "VERIFIER", "http://127.0.0.1/cb")
             .await
             .expect("ok");
         assert_eq!(token.access_token, "AT");
@@ -157,7 +166,7 @@ mod tests {
             // Matcher::JsonString compares parsed JSON, so key order in the
             // serialized HashMap does not matter.
             .match_body(Matcher::JsonString(
-                r#"{"grant_type":"authorization_code","code":"AUTHCODE","redirect_uri":"http://127.0.0.1/cb","code_verifier":"VERIFIER","client_id":"test-client"}"#
+                r#"{"grant_type":"authorization_code","code":"AUTHCODE","state":"STATE","redirect_uri":"http://127.0.0.1/cb","code_verifier":"VERIFIER","client_id":"test-client"}"#
                 .into(),
             ))
             .with_status(200)
@@ -178,7 +187,7 @@ mod tests {
             extra_auth_params: &[],
             state_strategy: crate::StateStrategy::Random,
         };
-        let token = exchange_code(&cfg, "AUTHCODE", "VERIFIER", "http://127.0.0.1/cb")
+        let token = exchange_code(&cfg, "AUTHCODE", "STATE", "VERIFIER", "http://127.0.0.1/cb")
             .await
             .expect("ok");
         assert_eq!(token.access_token, "AT");
