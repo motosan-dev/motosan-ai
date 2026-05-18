@@ -868,6 +868,7 @@ Python and Rust SDKs are versioned and released **independently**.
 |--------------|-----------------------|-----------------------|
 | Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
 | Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
+| motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | `motosan-ai-oauth-v0.2.0` |
 | codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
 | anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |
 
@@ -919,6 +920,27 @@ git tag -a rust-v0.4.1 -m "rust-v0.4.1 — summary"
 git push origin main rust-v0.4.1
 ```
 
+### Release Steps (motosan-ai-oauth)
+
+```bash
+# 1. Bump version
+#    sdks/rust/crates/motosan-ai-oauth/Cargo.toml → version = "0.2.0"
+
+# 2. Update CHANGELOG
+#    sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md → ## [0.2.0] - YYYY-MM-DD
+
+# 3. Commit
+git add sdks/rust/crates/motosan-ai-oauth/Cargo.toml sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md
+git commit -m "chore: release motosan-ai-oauth-v0.2.0"
+
+# 4. Tag + push (triggers publish-motosan-ai-oauth.yml → crates.io)
+git tag -a motosan-ai-oauth-v0.2.0 -m "motosan-ai-oauth-v0.2.0 — summary"
+git push origin main motosan-ai-oauth-v0.2.0
+```
+
+Publish `motosan-ai-oauth` before publishing wrapper crates (`codex-oauth`,
+`anthropic-oauth`) that depend on its new version.
+
 ### Release Steps (codex-oauth)
 
 ```bash
@@ -960,6 +982,7 @@ git push origin main anthropic-oauth-v0.1.1
 Tag push triggers GitHub Actions:
 - **publish-python.yml**: `uv build` → `pypa/gh-action-pypi-publish` (secret: `PYPI_API_TOKEN`)
 - **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+- **publish-motosan-ai-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 - **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 - **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 
