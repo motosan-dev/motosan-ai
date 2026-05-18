@@ -46,20 +46,6 @@ class OAuthConfig:
     redirect_port: int | None = None
 
 
-def google_gemini_config() -> OAuthConfig:
-    return OAuthConfig(
-        client_id="681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com",
-        client_secret="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",
-        auth_url="https://accounts.google.com/o/oauth2/auth",
-        token_url="https://oauth2.googleapis.com/token",
-        scopes=(
-            "https://www.googleapis.com/auth/cloud-platform",
-            "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",
-        ),
-    )
-
-
 def save_token(token: Token, *, path: Path = DEFAULT_CACHE_PATH) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

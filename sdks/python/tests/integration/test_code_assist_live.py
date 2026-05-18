@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from motosan_ai.oauth import DEFAULT_CACHE_PATH, ensure_fresh_token, google_gemini_config
+from motosan_ai.oauth import DEFAULT_CACHE_PATH, ensure_fresh_token, gemini_config
 from motosan_ai.providers.gemini_code_assist import GeminiCodeAssistProvider
 from motosan_ai.types import ChatRequest, Message
 
@@ -30,7 +30,7 @@ pytestmark = [
 
 @pytest.fixture
 async def provider() -> GeminiCodeAssistProvider:
-    token = await ensure_fresh_token(google_gemini_config())
+    token = await ensure_fresh_token(gemini_config())
     assert _PROJECT is not None
     return GeminiCodeAssistProvider(access_token=token.access_token, project_id=_PROJECT)
 

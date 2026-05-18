@@ -6,11 +6,11 @@ import httpx
 import pytest
 import respx
 
-from motosan_ai.oauth.google import (
+from motosan_ai.oauth import (
     Token,
     ensure_fresh_token,
     exchange_code,
-    google_gemini_config,
+    gemini_config,
     load_cached_token,
     login,
     refresh_token,
@@ -21,7 +21,7 @@ from motosan_ai.oauth.google import (
 @respx.mock
 @pytest.mark.asyncio
 async def test_exchange_code_posts_to_token_url():
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     route = respx.post(cfg.token_url).mock(
         return_value=httpx.Response(
             200,
@@ -51,7 +51,7 @@ async def test_exchange_code_posts_to_token_url():
 async def test_exchange_code_400_raises():
     from motosan_ai.error import AuthError
 
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     respx.post(cfg.token_url).mock(
         return_value=httpx.Response(400, json={"error": "invalid_grant"})
     )
@@ -62,7 +62,7 @@ async def test_exchange_code_400_raises():
 @respx.mock
 @pytest.mark.asyncio
 async def test_refresh_token_uses_refresh_grant_type():
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     route = respx.post(cfg.token_url).mock(
         return_value=httpx.Response(
             200, json={"access_token": "ya29.refreshed", "expires_in": 3600}
@@ -77,7 +77,7 @@ async def test_refresh_token_uses_refresh_grant_type():
 @respx.mock
 @pytest.mark.asyncio
 async def test_refresh_token_uses_returned_refresh_when_present():
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     respx.post(cfg.token_url).mock(
         return_value=httpx.Response(
             200,
@@ -95,7 +95,7 @@ async def test_refresh_token_uses_returned_refresh_when_present():
 @respx.mock
 @pytest.mark.asyncio
 async def test_login_full_flow_with_mocked_browser_and_callback():
-    cfg = google_gemini_config()
+    cfg = gemini_config()
 
     async def fake_open_and_callback(auth_url: str, redirect_uri: str) -> None:
         import asyncio as _asyncio
@@ -124,14 +124,14 @@ async def test_login_surfaces_mock_browser_errors_immediately():
         raise RuntimeError("browser helper exploded")
 
     with pytest.raises(AuthError, match="browser helper exploded"):
-        await login(google_gemini_config(), _open_browser=failing_browser)
+        await login(gemini_config(), _open_browser=failing_browser)
 
 
 @pytest.mark.asyncio
 async def test_login_rejects_state_mismatch():
     from motosan_ai.error import AuthError
 
-    cfg = google_gemini_config()
+    cfg = gemini_config()
 
     async def fire_wrong_state(auth_url: str, redirect_uri: str) -> None:
         import asyncio as _asyncio
@@ -149,7 +149,7 @@ async def test_login_rejects_state_mismatch():
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_fresh_token_returns_cached_when_valid(tmp_path):
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     cache = tmp_path / "tokens.json"
     fresh = Token("ok", "r", None, 3600, int(time.time()))
     save_token(fresh, path=cache)
@@ -160,7 +160,7 @@ async def test_ensure_fresh_token_returns_cached_when_valid(tmp_path):
 @respx.mock
 @pytest.mark.asyncio
 async def test_ensure_fresh_token_refreshes_when_expired(tmp_path):
-    cfg = google_gemini_config()
+    cfg = gemini_config()
     cache = tmp_path / "tokens.json"
     save_token(Token("old", "ref", None, 10, 0), path=cache)
     respx.post(cfg.token_url).mock(
@@ -176,4 +176,4 @@ async def test_ensure_fresh_token_raises_when_no_cache(tmp_path):
     from motosan_ai.error import AuthError
 
     with pytest.raises(AuthError, match="login"):
-        await ensure_fresh_token(google_gemini_config(), cache_path=tmp_path / "missing.json")
+        await ensure_fresh_token(gemini_config(), cache_path=tmp_path / "missing.json")
