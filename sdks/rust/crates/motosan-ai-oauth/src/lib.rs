@@ -25,6 +25,7 @@ pub struct OAuthConfig {
     pub token_url: &'static str,
     pub scopes: &'static [&'static str],
     pub redirect_port: Option<u16>,
+    pub redirect_uri_host: &'static str,
     pub extra_auth_params: &'static [(&'static str, &'static str)],
 }
 
@@ -51,7 +52,11 @@ pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
     let state = URL_SAFE_NO_PAD.encode(state_bytes);
 
     let server = server::bind(config.redirect_port).await?;
-    let redirect_uri = format!("http://127.0.0.1:{}/auth/callback", server.port);
+    let redirect_uri = build_redirect_uri(
+        config.redirect_uri_host,
+        server.port,
+        "/auth/callback", // Task 3 will replace this with config.callback_path
+    );
 
     let auth_url = build_auth_url(config, &pkce.challenge, &state, &redirect_uri);
 
@@ -78,6 +83,10 @@ pub async fn login(config: &OAuthConfig) -> Result<Token, Error> {
 
 pub async fn refresh(config: &OAuthConfig, refresh_token: &str) -> Result<Token, Error> {
     exchange::refresh_token(config, refresh_token).await
+}
+
+pub(crate) fn build_redirect_uri(host: &str, port: u16, path: &str) -> String {
+    format!("http://{host}:{port}{path}")
 }
 
 pub(crate) fn build_auth_url(
@@ -134,6 +143,7 @@ mod tests {
             token_url: "https://auth.example.com/oauth/token",
             scopes: &["openid", "profile"],
             redirect_port: None,
+            redirect_uri_host: "127.0.0.1",
             extra_auth_params: &[],
         }
     }
@@ -190,6 +200,17 @@ mod tests {
         };
         let url = build_auth_url(&config, "c", "s", "http://127.0.0.1:1234/auth/callback");
         assert!(!url.contains("access_type="));
+    }
+
+    #[test]
+    fn build_auth_url_uses_redirect_uri_host_in_uri() {
+        // The redirect_uri is built by login(); we test the helper that constructs it.
+        // The host substring comes from config.redirect_uri_host, not from the bind addr.
+        let uri = build_redirect_uri("localhost", 53692, "/callback");
+        assert_eq!(uri, "http://localhost:53692/callback");
+
+        let uri = build_redirect_uri("127.0.0.1", 1455, "/auth/callback");
+        assert_eq!(uri, "http://127.0.0.1:1455/auth/callback");
     }
 
     #[test]

@@ -8,6 +8,7 @@ pub fn codex() -> OAuthConfig {
         token_url: "https://auth.openai.com/oauth/token",
         scopes: &["openid", "profile", "email", "offline_access"],
         redirect_port: Some(1455),
+        redirect_uri_host: "127.0.0.1",
         extra_auth_params: &[("access_type", "offline")],
     }
 }
