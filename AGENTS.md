@@ -11,6 +11,7 @@ Rust v0.15.3 (crates.io) · Python v0.10.0 (PyPI)
 | Type definitions (source of truth) | `specs/types.md` |
 | Rust SDK entry point | `sdks/rust/src/lib.rs` → `client.rs` |
 | Python SDK entry point | `sdks/python/motosan_ai/client.py` |
+| OAuth helper crates | `sdks/rust/crates/motosan-ai-oauth/`, `sdks/rust/crates/codex-oauth/`, `sdks/rust/crates/anthropic-oauth/` |
 | Provider implementations | `sdks/rust/src/providers/`, `sdks/python/motosan_ai/providers/` |
 | HTTP providers | Rust: `sdks/rust/src/providers/gemini.rs` (feature `gemini`), `sdks/rust/src/providers/gemini_code_assist.rs` (feature `gemini-code-assist`); Python: `sdks/python/motosan_ai/providers/gemini.py`, `gemini_code_assist.py` |
 | CLI backends | Rust: `sdks/rust/src/providers/claude_code/`, `codex_cli/`, `gemini_cli/`; Python: `sdks/python/motosan_ai/providers/claude_code.py`, `codex_cli.py`, `gemini_cli.py` |
@@ -18,7 +19,7 @@ Rust v0.15.3 (crates.io) · Python v0.10.0 (PyPI)
 | Python format/lint config | `sdks/python/ruff.toml` |
 | Unified formatter config | `treefmt.toml` |
 | CI workflows | `.github/workflows/ci-rust.yml`, `ci-python.yml` |
-| Release workflows | `.github/workflows/publish-rust.yml`, `publish-python.yml` |
+| Release workflows | `.github/workflows/publish-rust.yml`, `publish-python.yml`, `publish-motosan-ai-oauth.yml`, `publish-codex-oauth.yml`, `publish-anthropic-oauth.yml` |
 | Dev shell & scripts | `devshell/default.nix`, `devshell/scripts.nix` |
 | API reference for LLMs | `llms.txt` |
 
@@ -76,6 +77,6 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 
 ## Releasing
 
-Tag `rust-vX.Y.Z` triggers `publish-rust.yml` → crates.io. Tag `python-vX.Y.Z` triggers `publish-python.yml` → PyPI.
+Tag `rust-vX.Y.Z` triggers `publish-rust.yml` → crates.io. Tag `python-vX.Y.Z` triggers `publish-python.yml` → PyPI. OAuth helper crates use per-crate tags (`motosan-ai-oauth-vX.Y.Z`, `codex-oauth-vX.Y.Z`, `anthropic-oauth-vX.Y.Z`). Publish `motosan-ai-oauth` before wrapper crates that depend on its new version.
 
 Update before tagging: CHANGELOGs, version in `Cargo.toml`/`pyproject.toml`, `AGENTS.md`, `llms.txt`, `skills/motosan-ai/SKILL.md`.

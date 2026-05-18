@@ -92,6 +92,39 @@ let client = Client::builder()
 let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
+### Anthropic OAuth (Claude Pro/Max)
+
+The `anthropic-oauth` crate lets you obtain an Anthropic OAuth token tied to a
+Claude Pro/Max subscription. The resulting `sk-ant-oat01-*` token is consumed
+directly by `AnthropicProvider`, which auto-detects the prefix and applies the
+Claude Code identity headers.
+
+```rust
+use anthropic_oauth;
+use motosan_ai::providers::anthropic::AnthropicProvider;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let token = anthropic_oauth::login().await?;
+    let provider = AnthropicProvider::new(&token.access_token, None, None);
+    // Use `provider` as usual.
+    Ok(())
+}
+```
+
+**⚠️ Important ToS disclosure**
+
+This crate uses the OAuth `client_id` registered by Anthropic's Claude Code CLI.
+The resulting access token authenticates your requests **as a Claude Code CLI
+session**, not as an API-key holder. Anthropic has not published this
+`client_id` as a public app registration for third-party use; using it for
+purposes other than running `claude` CLI may be subject to change, may be rate
+limited, and may violate Anthropic's terms of service. You are responsible for
+ensuring your usage complies with Anthropic's terms.
+
+If you have an API key (`sk-ant-api03-*`), prefer that path — it does not
+require this crate.
+
 ```rust
 // 3. Claude Code CLI via unified Client::builder() (since v0.11.0)
 // Requires: cargo add motosan-ai --features claude-code

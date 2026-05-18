@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "sdks/rust",
+  "sdks/rust/crates/anthropic-oauth",
   "sdks/rust/crates/codex-oauth",
   "sdks/rust/crates/motosan-ai-oauth",
 ]

@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai-oauth"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -15,6 +15,7 @@ categories = ["authentication", "api-bindings"]
 default = []
 codex = []
 gemini = []
+anthropic = []
 
 [dependencies]
 thiserror = "2"
@@ -34,3 +35,4 @@ tokio = { version = "1", features = [
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }
+mockito = "1"

@@ -34,14 +34,17 @@ pub async fn bind(port: Option<u16>) -> Result<BoundServer, Error> {
 
 /// Wait for one /auth/callback?code=...&state=... request.
 /// Returns (code, state). Ignores other requests (e.g. favicon).
-pub async fn wait_for_callback(server: BoundServer) -> Result<(String, String), Error> {
+pub async fn wait_for_callback(
+    server: BoundServer,
+    callback_path: &str,
+) -> Result<(String, String), Error> {
     let BoundServer { listener, .. } = server;
     loop {
         let (mut stream, _) = listener.accept().await?;
         let buf = read_headers(&mut stream).await?;
         let request = String::from_utf8_lossy(&buf);
 
-        if !is_callback_request(&request) {
+        if !is_callback_request(&request, callback_path) {
             let _ = stream
                 .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
                 .await;
@@ -78,7 +81,7 @@ async fn read_headers(stream: &mut tokio::net::TcpStream) -> Result<Vec<u8>, Err
     Ok(buf)
 }
 
-fn is_callback_request(request: &str) -> bool {
+fn is_callback_request(request: &str, callback_path: &str) -> bool {
     let path = request
         .lines()
         .next()
@@ -86,7 +89,7 @@ fn is_callback_request(request: &str) -> bool {
         .split_whitespace()
         .nth(1)
         .unwrap_or("");
-    path.starts_with("/auth/callback") && path.contains("code=")
+    path.starts_with(callback_path) && path.contains("code=")
 }
 
 fn parse_callback(request: &str) -> Result<(String, String), Error> {
@@ -165,15 +168,33 @@ mod tests {
 
     #[test]
     fn non_callback_path_is_not_callback() {
-        assert!(!is_callback_request(&get("/favicon.ico")));
-        assert!(!is_callback_request(&get("/")));
+        assert!(!is_callback_request(&get("/favicon.ico"), "/auth/callback"));
+        assert!(!is_callback_request(&get("/"), "/auth/callback"));
     }
 
     #[test]
     fn callback_path_with_code_is_callback() {
-        assert!(is_callback_request(&get(
-            "/auth/callback?code=abc&state=xyz"
-        )));
+        assert!(is_callback_request(
+            &get("/auth/callback?code=abc&state=xyz"),
+            "/auth/callback"
+        ));
+    }
+
+    #[test]
+    fn anthropic_callback_path_is_callback() {
+        assert!(is_callback_request(
+            &get("/callback?code=abc&state=xyz"),
+            "/callback"
+        ));
+    }
+
+    #[test]
+    fn auth_callback_path_does_not_match_anthropic_request() {
+        // A request to /callback must not be accepted when callback_path is /auth/callback.
+        assert!(!is_callback_request(
+            &get("/callback?code=abc&state=xyz"),
+            "/auth/callback"
+        ));
     }
 
     #[tokio::test]
