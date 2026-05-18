@@ -15,6 +15,7 @@ categories = ["authentication", "api-bindings"]
 default = []
 codex = []
 gemini = []
+anthropic = []
 
 [dependencies]
 thiserror = "2"
