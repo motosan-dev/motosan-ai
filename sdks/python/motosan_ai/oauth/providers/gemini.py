@@ -15,4 +15,6 @@ def gemini_config() -> OAuthConfig:
             "https://www.googleapis.com/auth/userinfo.profile",
         ),
         callback_path="/auth/callback",
+        redirect_uri_host="127.0.0.1",
+        extra_auth_params=(("access_type", "offline"),),
     )
