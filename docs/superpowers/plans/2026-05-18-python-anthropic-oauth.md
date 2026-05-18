@@ -91,7 +91,7 @@ Expected: all pass. Record the pass count — Task 1 must end with the same coun
 
 - [ ] **Step 2: Create `_flow.py` as a verbatim move of the generic code**
 
-Create `sdks/python/motosan_ai/oauth/_flow.py` containing the **exact current contents of `oauth/google.py` EXCEPT the `google_gemini_config` function**. Concretely: copy `google.py` lines 1–47 (imports through the `OAuthConfig` dataclass) and lines 62–229 (`save_token` through `ensure_fresh_token`), skipping lines 49–60 (the `google_gemini_config` function and its surrounding blank lines).
+Create `sdks/python/motosan_ai/oauth/_flow.py` containing the **exact current contents of `oauth/google.py` EXCEPT the `google_gemini_config` function**. `google.py` is 228 lines; the `google_gemini_config` function spans lines 49–60. Concretely: copy lines 1–48 (imports through the `OAuthConfig` dataclass and the blank lines after it) and lines 61 through end-of-file (`save_token` through `ensure_fresh_token`), skipping lines 49–60. `ruff format` in Step 11 normalizes any blank-line spacing afterward.
 
 Do not change any code in the moved content. The result is `_flow.py` with: `Token`, `OAuthConfig`, `save_token`, `load_cached_token`, `_post_token`, `exchange_code`, `refresh_token`, `OpenBrowserFn`, `_build_auth_url`, `login`, `ensure_fresh_token`, `DEFAULT_CACHE_PATH`, `_EXPIRY_BUFFER_SECS`, `_LOGIN_TIMEOUT_SECS`.
 
@@ -1307,10 +1307,10 @@ are responsible for compliance. If you have an `sk-ant-api*` key, prefer it.
 
 - [ ] **Step 4: Add a CHANGELOG entry**
 
-In `sdks/python/CHANGELOG.md`, add a new section directly below the `# Changelog` header block (above the most recent existing version entry). Use the next version number — a minor bump from the current `0.11.0`, i.e. `0.12.0`:
+In `sdks/python/CHANGELOG.md`, add a new section directly above the most recent existing version entry (`## [0.11.0] - 2026-04-27`). Match the file's existing header style — `## [VERSION] - DATE`. Use the next version (`0.12.0`, a minor bump from `0.11.0`) and today's date:
 
 ```markdown
-## [0.12.0]
+## [0.12.0] - 2026-05-18
 
 ### Added
 - Anthropic Claude Pro/Max OAuth: `motosan_ai.oauth.claude_pro_max_config()`
@@ -1336,15 +1336,23 @@ In `sdks/python/pyproject.toml`, change `version = "0.11.0"` to `version = "0.12
 
 - [ ] **Step 6: Update `llms.txt`**
 
-In `llms.txt`, find the `motosan_ai.oauth` reference (around line 197, in the `GeminiCodeAssist` entry — it mentions "`motosan_ai.oauth` PKCE flow in Python"). No structural change is needed there, but add a brief note after the Python SDK's OAuth mention that Anthropic Claude Pro/Max OAuth is now supported via `motosan_ai.oauth.claude_pro_max_config()`. If the file has a dedicated Python OAuth section, mirror the `gemini_config` rename there. Concretely: search `llms.txt` for `google_gemini_config` and `oauth` — update any `google_gemini_config` occurrence to `gemini_config`, and where Python OAuth providers are listed, add `claude_pro_max_config`.
+`llms.txt` does **not** name any OAuth config function — verified: `grep -n "google_gemini_config" llms.txt` returns nothing, and there is no dedicated Python OAuth section. The only relevant mention is line ~197 in the `GeminiCodeAssist` entry: "...`motosan_ai.oauth` PKCE flow in Python...". So there is no rename to do.
 
-Verify:
+The single edit: extend that sentence (or add a following sentence) in the `GeminiCodeAssist` entry's vicinity to note Anthropic OAuth support. Find the line containing `motosan_ai.oauth` PKCE flow in Python` and append, in the same area:
 
-```bash
-grep -n "google_gemini_config" llms.txt
+```
+Python Anthropic Claude Pro/Max OAuth is available via `motosan_ai.oauth.claude_pro_max_config()` + `login()` (returns an `sk-ant-oat01-*` token).
 ```
 
-Expected: no matches after the edit.
+Place it as a standalone sentence at the end of the `GeminiCodeAssist` paragraph, or as a new short line right after it — whichever reads cleanly in context. This is the only `llms.txt` change.
+
+Verify the edit landed:
+
+```bash
+grep -n "claude_pro_max_config" llms.txt
+```
+
+Expected: at least one match (the line just added).
 
 - [ ] **Step 7: Run the full Python gate**
 
@@ -1367,12 +1375,13 @@ git commit -m "docs(python-oauth): live test, README/ToS, v0.12.0
 
 - Skipped-by-default live login smoke test (mirrors the Rust
   #[ignore]'d login_live test).
-- README: gemini_config rename + an Anthropic OAuth example with
-  the ToS disclosure.
+- README: gemini_config rename in the example + an Anthropic OAuth
+  example with the ToS disclosure.
 - CHANGELOG: 0.12.0 entry (breaking: google_gemini_config rename,
   exchange_code state param).
 - pyproject: 0.11.0 -> 0.12.0.
-- llms.txt: gemini_config rename + claude_pro_max_config mention."
+- llms.txt: note Anthropic OAuth support in the GeminiCodeAssist
+  entry."
 ```
 
 - [ ] **Step 9: Push and open the PR**
