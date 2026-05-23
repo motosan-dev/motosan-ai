@@ -470,3 +470,53 @@ async fn thinking_block_start_then_immediate_stop_emits_nothing_yet() {
     );
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn thinking_delta_events_emitted_in_order() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"Let me \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"think...\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut thinking_chunks: Vec<String> = Vec::new();
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        if ev.event_type == StreamEventType::ThinkingDelta {
+            thinking_chunks.push(ev.content);
+        }
+    }
+
+    assert!(done_seen, "stream must terminate");
+    assert_eq!(
+        thinking_chunks,
+        vec!["Let me ".to_string(), "think...".to_string()],
+        "ThinkingDelta events must arrive in order with exact content"
+    );
+    mock.assert_async().await;
+}

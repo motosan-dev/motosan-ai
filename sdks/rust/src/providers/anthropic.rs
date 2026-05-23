@@ -1007,6 +1007,31 @@ impl Stream for AnthropicStreamAdapter {
                                     }
                                     continue;
                                 }
+                                Some("thinking_delta") => {
+                                    // The thinking text lives in `delta.thinking`,
+                                    // NOT `delta.text`. Accumulate into the buffer
+                                    // (so content_block_stop can emit ThinkingDone
+                                    // with the full text in Task 4) and forward as
+                                    // a ThinkingDelta event.
+                                    let text = delta
+                                        .get("thinking")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or_default();
+                                    if text.is_empty() {
+                                        continue;
+                                    }
+                                    if let Some(buf) = self.current_thinking_buf.as_mut() {
+                                        buf.push_str(text);
+                                    }
+                                    return Poll::Ready(Some(StreamEvent::thinking_delta(text)));
+                                }
+                                Some("signature_delta") => {
+                                    // Cryptographic signature for re-feeding thinking
+                                    // blocks. Not surfaced in the streaming API (the
+                                    // non-streaming ChatResponse.thinking field is
+                                    // also signature-less). Silently consume.
+                                    continue;
+                                }
                                 _ => {
                                     // text_delta or untyped delta with "text" field
                                     let text = delta
