@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.15.5] — 2026-05-23
+
+### Fixed
+
+- **Anthropic provider sends `display: "summarized"` in the thinking config.** Without it the OAuth product surface (`sk-ant-oat01-*` tokens issued by Claude Code subscriptions) silently defaults the thinking display to `"omitted"` for all models — Anthropic accepts the request but returns zero `thinking_delta` SSE events. With the explicit `summarized` the OAuth tier behaves like direct API key callers and streams thinking content per-delta. Patch covers both non-streaming and streaming OAuth body builders (`sdks/rust/src/providers/anthropic.rs`). Verified end-to-end against `claude-sonnet-4-6` via a Claude Pro OAuth token.
+
 ## [rust-0.14.0] — 2026-04-21
 
 ### Breaking (Rust only)

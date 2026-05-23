@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.12.0 · Rust 0.15.4
+- Python 0.12.0 · Rust 0.15.5
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.15.4", features = ["anthropic"] }
+motosan-ai = { version = "0.15.5", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
