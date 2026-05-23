@@ -395,26 +395,16 @@ async fn live_collect_stream_records_max_tokens_on_chat_response() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-#[ignore = "live API; run with `cargo test -p motosan-ai --features anthropic --test anthropic_live live_anthropic_streaming_thinking_emits_thinking_events -- --ignored` and ANTHROPIC_API_KEY set"]
-async fn live_anthropic_streaming_thinking_emits_thinking_events() {
-    let api_key = match std::env::var("ANTHROPIC_API_KEY") {
-        Ok(k) if !k.is_empty() => k,
-        _ => {
-            eprintln!("skipping: ANTHROPIC_API_KEY not set");
-            return;
-        }
+async fn live_stream_thinking() {
+    let Some(client) = client() else {
+        eprintln!("ANTHROPIC_API_KEY not set, skipping");
+        return;
     };
-
-    let client = Client::builder()
-        .provider(Provider::Anthropic)
-        .api_key(api_key)
-        .build()
-        .expect("client");
 
     // Use a model + budget that reliably produces thinking output.
     // claude-sonnet-4-5 with 4000 budget tokens is a known-good baseline;
     // adjust if Anthropic deprecates it.
-    let req = ChatRequest::builder()
+    let request = ChatRequest::builder()
         .model("claude-sonnet-4-5")
         .message(Message::user(
             "Think step-by-step about whether 17 is prime, then answer yes or no.",
@@ -423,7 +413,7 @@ async fn live_anthropic_streaming_thinking_emits_thinking_events() {
         .max_tokens(2048)
         .build();
 
-    let mut stream = client.stream_with(req).await.expect("stream start");
+    let mut stream = client.stream_with(request).await.expect("stream failed");
 
     let mut thinking_chunks = 0usize;
     let mut thinking_done_text: Option<String> = None;
@@ -477,4 +467,5 @@ async fn live_anthropic_streaming_thinking_emits_thinking_events() {
             );
         }
     }
+    cooldown().await;
 }
