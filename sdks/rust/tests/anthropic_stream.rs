@@ -639,3 +639,117 @@ async fn thinking_done_not_emitted_for_non_thinking_block_stop() {
     );
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn redacted_thinking_block_is_silently_consumed() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"encrypted_blob_xyz\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"text\":\"answer\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut events: Vec<StreamEventType> = Vec::new();
+    let mut content = String::new();
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        events.push(ev.event_type.clone());
+        if ev.event_type == StreamEventType::Text {
+            content.push_str(&ev.content);
+        }
+    }
+
+    assert!(done_seen);
+    assert_eq!(content, "answer");
+    assert!(
+        !events.contains(&StreamEventType::ThinkingDelta),
+        "redacted_thinking must not produce ThinkingDelta events"
+    );
+    assert!(
+        !events.contains(&StreamEventType::ThinkingDone),
+        "redacted_thinking must not produce a ThinkingDone event"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn orphan_thinking_delta_without_start_does_not_crash() {
+    // Malformed/unexpected stream: a thinking_delta arrives without a
+    // preceding content_block_start. Defensive Task-3 code emits the
+    // event without crashing or polluting the accumulator.
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"orphan\"}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut saw_thinking_delta = false;
+    let mut saw_thinking_done = false;
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        match ev.event_type {
+            StreamEventType::ThinkingDelta => {
+                saw_thinking_delta = true;
+                assert_eq!(ev.content, "orphan");
+            }
+            StreamEventType::ThinkingDone => saw_thinking_done = true,
+            _ => {}
+        }
+    }
+
+    assert!(done_seen);
+    assert!(
+        saw_thinking_delta,
+        "orphan ThinkingDelta should still be emitted"
+    );
+    assert!(
+        !saw_thinking_done,
+        "no thinking block was opened or closed; no ThinkingDone expected"
+    );
+    mock.assert_async().await;
+}
