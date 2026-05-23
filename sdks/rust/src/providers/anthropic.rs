@@ -811,6 +811,7 @@ impl ProviderImpl for AnthropicProvider {
             pending: std::collections::VecDeque::new(),
             current_tool_id: None,
             current_stop_reason: None,
+            current_thinking_buf: None,
         };
 
         Ok(Box::pin(adapter))
@@ -835,6 +836,17 @@ struct AnthropicStreamAdapter {
     /// terminal `message_stop` event so callers see the reason in the
     /// final `done` `StreamEvent`.
     current_stop_reason: Option<crate::types::StopReason>,
+    /// Accumulator for the in-flight thinking block, if any.
+    ///
+    /// - `None` = not currently inside a `thinking` content block.
+    /// - `Some(buf)` = open thinking block; each `thinking_delta` appends
+    ///   to `buf`, and `content_block_stop` emits a `ThinkingDone` event
+    ///   carrying `buf.clone()` and resets to `None`.
+    ///
+    /// `redacted_thinking` blocks are silently consumed and do **not**
+    /// open this accumulator (we don't surface redacted content as
+    /// thinking deltas).
+    current_thinking_buf: Option<String>,
 }
 
 impl Stream for AnthropicStreamAdapter {
@@ -938,17 +950,37 @@ impl Stream for AnthropicStreamAdapter {
                         "content_block_start" => {
                             let block = payload.get("content_block");
                             if let Some(block) = block {
-                                if block.get("type").and_then(Value::as_str) == Some("tool_use") {
-                                    let id =
-                                        block.get("id").and_then(Value::as_str).unwrap_or_default();
-                                    let name = block
-                                        .get("name")
-                                        .and_then(Value::as_str)
-                                        .unwrap_or_default();
-                                    self.current_tool_id = Some(id.to_string());
-                                    return Poll::Ready(Some(StreamEvent::tool_call_start(
-                                        id, name,
-                                    )));
+                                let block_type =
+                                    block.get("type").and_then(Value::as_str).unwrap_or("");
+                                match block_type {
+                                    "tool_use" => {
+                                        let id = block
+                                            .get("id")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or_default();
+                                        let name = block
+                                            .get("name")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or_default();
+                                        self.current_tool_id = Some(id.to_string());
+                                        return Poll::Ready(Some(StreamEvent::tool_call_start(
+                                            id, name,
+                                        )));
+                                    }
+                                    "thinking" => {
+                                        // Open the thinking accumulator. Deltas append
+                                        // to it; content_block_stop emits ThinkingDone
+                                        // with the full text and clears it (Task 4).
+                                        // No event is emitted at start — the loop-side
+                                        // event protocol does not have a ThinkingStart.
+                                        self.current_thinking_buf = Some(String::new());
+                                    }
+                                    "redacted_thinking" => {
+                                        // Silently consume; we do not surface redacted
+                                        // content. The block_stop will be a no-op
+                                        // because current_thinking_buf stays None.
+                                    }
+                                    _ => {}
                                 }
                             }
                             continue;

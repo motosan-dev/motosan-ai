@@ -417,3 +417,56 @@ async fn anthropic_stream_propagates_unknown_stop_reason_as_other() {
     let done = anthropic_stream_with_message_delta_stop_reason("something_new").await;
     assert_eq!(done.stop_reason, Some(StopReason::Other));
 }
+
+#[tokio::test]
+async fn thinking_block_start_then_immediate_stop_emits_nothing_yet() {
+    // Pre-Task-3/4 state check: opening and immediately closing a thinking
+    // block with no deltas must not crash and must not leak any spurious
+    // events. After Task 4 the closing block will emit ThinkingDone(""),
+    // and this test will be updated then.
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"text\":\"ok\"}}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut text_seen = String::new();
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        if ev.event_type == StreamEventType::Text {
+            text_seen.push_str(&ev.content);
+        }
+    }
+
+    assert!(done_seen, "must terminate");
+    assert_eq!(
+        text_seen, "ok",
+        "text after the thinking block must survive"
+    );
+    mock.assert_async().await;
+}
