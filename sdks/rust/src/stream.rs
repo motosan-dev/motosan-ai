@@ -88,6 +88,11 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
                 });
                 current_tc_args.clear();
             }
+            StreamEventType::ThinkingDelta | StreamEventType::ThinkingDone => {
+                // Placeholder; real handling lands in Task 6 of the
+                // anthropic-thinking-stream-events plan. Do not commit
+                // this past Task 6.
+            }
         }
     }
 
