@@ -520,3 +520,122 @@ async fn thinking_delta_events_emitted_in_order() {
     );
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn thinking_done_emitted_with_full_text_after_deltas() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"A \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"B \"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"C\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"sig...\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"text\":\"answer\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut labels: Vec<String> = Vec::new();
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        match ev.event_type {
+            StreamEventType::ThinkingDelta => labels.push(format!("td:{}", ev.content)),
+            StreamEventType::ThinkingDone => labels.push(format!("tD:{}", ev.content)),
+            StreamEventType::Text => labels.push(format!("t:{}", ev.content)),
+            _ => {}
+        }
+    }
+
+    assert!(done_seen, "stream must terminate");
+    assert_eq!(
+        labels,
+        vec![
+            "td:A ".to_string(),
+            "td:B ".to_string(),
+            "td:C".to_string(),
+            "tD:A B C".to_string(),
+            "t:answer".to_string(),
+        ],
+        "Per-turn order: ThinkingDelta* -> ThinkingDone(full) -> Text*"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn thinking_done_not_emitted_for_non_thinking_block_stop() {
+    // Regression guard: a content_block_stop that closes a tool_use or
+    // text block must NOT emit a stray ThinkingDone. Only triggers when
+    // current_thinking_buf was Some.
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"text\":\"hi\"}}\n\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut saw_thinking_done = false;
+    let mut done_seen = false;
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        if ev.event_type == StreamEventType::ThinkingDone {
+            saw_thinking_done = true;
+        }
+    }
+
+    assert!(done_seen);
+    assert!(
+        !saw_thinking_done,
+        "no thinking block was opened; no ThinkingDone expected"
+    );
+    mock.assert_async().await;
+}

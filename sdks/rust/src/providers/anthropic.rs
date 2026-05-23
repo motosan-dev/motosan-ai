@@ -1049,6 +1049,16 @@ impl Stream for AnthropicStreamAdapter {
                             if let Some(id) = self.current_tool_id.take() {
                                 return Poll::Ready(Some(StreamEvent::tool_call_end_with_id(id)));
                             }
+                            if let Some(buf) = self.current_thinking_buf.take() {
+                                // Closing a thinking block: emit ThinkingDone with
+                                // the full concatenated text. Note we emit even if
+                                // buf is empty — consumers can distinguish "thinking
+                                // block existed but produced nothing" from "no
+                                // thinking block" by the presence/absence of the
+                                // event. This matches the contract documented on
+                                // StreamEventType::ThinkingDone.
+                                return Poll::Ready(Some(StreamEvent::thinking_done(buf)));
+                            }
                             continue;
                         }
                         "message_stop" => {
