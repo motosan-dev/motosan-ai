@@ -389,3 +389,92 @@ async fn live_collect_stream_records_max_tokens_on_chat_response() {
 
     cooldown().await;
 }
+
+// ---------------------------------------------------------------------------
+// Live streaming-thinking test
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+#[ignore = "live API; run with `cargo test -p motosan-ai --features anthropic --test anthropic_live live_anthropic_streaming_thinking_emits_thinking_events -- --ignored` and ANTHROPIC_API_KEY set"]
+async fn live_anthropic_streaming_thinking_emits_thinking_events() {
+    let api_key = match std::env::var("ANTHROPIC_API_KEY") {
+        Ok(k) if !k.is_empty() => k,
+        _ => {
+            eprintln!("skipping: ANTHROPIC_API_KEY not set");
+            return;
+        }
+    };
+
+    let client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key(api_key)
+        .build()
+        .expect("client");
+
+    // Use a model + budget that reliably produces thinking output.
+    // claude-sonnet-4-5 with 4000 budget tokens is a known-good baseline;
+    // adjust if Anthropic deprecates it.
+    let req = ChatRequest::builder()
+        .model("claude-sonnet-4-5")
+        .message(Message::user(
+            "Think step-by-step about whether 17 is prime, then answer yes or no.",
+        ))
+        .thinking(4000)
+        .max_tokens(2048)
+        .build();
+
+    let mut stream = client.stream_with(req).await.expect("stream start");
+
+    let mut thinking_chunks = 0usize;
+    let mut thinking_done_text: Option<String> = None;
+    let mut answer = String::new();
+    let mut done_seen = false;
+
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        match ev.event_type {
+            StreamEventType::ThinkingDelta => {
+                thinking_chunks += 1;
+            }
+            StreamEventType::ThinkingDone => {
+                thinking_done_text = Some(ev.content.clone());
+            }
+            StreamEventType::Text => {
+                answer.push_str(&ev.content);
+            }
+            _ => {}
+        }
+    }
+
+    assert!(done_seen, "stream must terminate with done");
+    assert!(
+        thinking_chunks > 0,
+        "Anthropic should have emitted at least one ThinkingDelta for a step-by-step prompt"
+    );
+    assert!(
+        thinking_done_text
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false),
+        "ThinkingDone must carry the full concatenated thinking text"
+    );
+    assert!(
+        !answer.is_empty(),
+        "the model must produce a final answer after thinking"
+    );
+    // Sanity: thinking content should not leak into the answer.
+    if let Some(t) = thinking_done_text.as_deref() {
+        // First 30 chars of thinking should not appear verbatim in answer
+        // (loose check; thinking is reasoning, answer is conclusion).
+        let probe = t.chars().take(30).collect::<String>();
+        if !probe.is_empty() {
+            assert!(
+                !answer.contains(&probe),
+                "thinking content leaked into answer — bug in adapter"
+            );
+        }
+    }
+}

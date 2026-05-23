@@ -644,6 +644,40 @@ pub enum StreamEventType {
     ToolCallArgs,
     ToolCallEnd,
     Usage,
+    /// A partial extended-thinking delta from the LLM, emitted as the
+    /// model reasons before producing its final answer. The `content`
+    /// field of the parent [`StreamEvent`] carries the delta text.
+    /// Currently only the Anthropic provider emits this (sourced from
+    /// the SSE `content_block_delta { type: "thinking_delta" }` event).
+    /// Other providers never emit it. Consumers can render these live;
+    /// the high-level [`collect_stream`](crate::stream::collect_stream)
+    /// concatenates them into [`ChatResponse::thinking`].
+    ///
+    /// # Forward compatibility
+    ///
+    /// `StreamEventType` is intentionally not `#[non_exhaustive]` so
+    /// callers can rely on exhaustive matching for the current variants,
+    /// but the set may grow as more providers gain streaming-thinking
+    /// wire formats (e.g. signature/re-feed metadata, structured block
+    /// boundaries, per-block effort hints). New thinking-related variants
+    /// will be additive (`ThinkingSignature`, `ThinkingStart`, etc.) —
+    /// never repurposing `ThinkingDelta`/`ThinkingDone`. **Consumers that
+    /// match on `StreamEventType` should always include a `_ =>` arm**
+    /// so future patch releases adding new variants do not break their
+    /// build. The same rule applies to [`ThinkingDone`](Self::ThinkingDone).
+    ThinkingDelta,
+    /// Marks the end of a thinking content block, carrying the full
+    /// concatenated thinking text in the parent [`StreamEvent`]'s
+    /// `content` field. Always preceded by zero or more
+    /// [`ThinkingDelta`](Self::ThinkingDelta) events for the same block,
+    /// and always precedes any [`Text`](Self::Text) events for the
+    /// final answer. Sourced from Anthropic's `content_block_stop`
+    /// event when the corresponding `content_block_start` was a
+    /// `thinking` block.
+    ///
+    /// See [`ThinkingDelta`](Self::ThinkingDelta) for the forward-
+    /// compatibility contract (include `_ =>` when matching).
+    ThinkingDone,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -808,6 +842,41 @@ impl StreamEvent {
             tool_call_name: None,
             tool_call_args_delta: None,
             event_type: StreamEventType::ToolCallEnd,
+            usage: None,
+            stop_reason: None,
+        }
+    }
+
+    /// Build a `ThinkingDelta` event carrying a partial extended-thinking
+    /// text fragment. Used by the Anthropic stream adapter when it
+    /// receives a `content_block_delta { type: "thinking_delta" }` SSE
+    /// event. See [`StreamEventType::ThinkingDelta`].
+    pub fn thinking_delta(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::ThinkingDelta,
+            usage: None,
+            stop_reason: None,
+        }
+    }
+
+    /// Build a `ThinkingDone` event carrying the full concatenated
+    /// thinking text for a just-closed thinking block. Used by the
+    /// Anthropic stream adapter on `content_block_stop` when the
+    /// corresponding `content_block_start` opened a `thinking` block.
+    /// See [`StreamEventType::ThinkingDone`].
+    pub fn thinking_done(content: impl Into<String>) -> Self {
+        Self {
+            content: content.into(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::ThinkingDone,
             usage: None,
             stop_reason: None,
         }
@@ -1099,5 +1168,62 @@ mod capabilities_tests {
         let caps = ProviderCapabilities::full();
         assert!(caps.supports_image);
         assert!(caps.supports_document);
+    }
+}
+
+#[cfg(test)]
+mod stream_event_thinking_tests {
+    use super::*;
+
+    #[test]
+    fn stream_event_type_has_thinking_variants() {
+        // Compile-time exhaustive guard: any addition/removal will require updating.
+        let _all: [StreamEventType; 7] = [
+            StreamEventType::Text,
+            StreamEventType::ToolCallStart,
+            StreamEventType::ToolCallArgs,
+            StreamEventType::ToolCallEnd,
+            StreamEventType::Usage,
+            StreamEventType::ThinkingDelta,
+            StreamEventType::ThinkingDone,
+        ];
+    }
+
+    #[test]
+    fn stream_event_thinking_delta_constructor_sets_fields() {
+        let ev = StreamEvent::thinking_delta("Let me think...");
+        assert_eq!(ev.content, "Let me think...");
+        assert_eq!(ev.event_type, StreamEventType::ThinkingDelta);
+        assert!(!ev.done);
+        assert!(ev.tool_call_id.is_none());
+        assert!(ev.usage.is_none());
+        assert!(ev.stop_reason.is_none());
+    }
+
+    #[test]
+    fn stream_event_thinking_done_constructor_sets_fields() {
+        let ev = StreamEvent::thinking_done("complete thought");
+        assert_eq!(ev.content, "complete thought");
+        assert_eq!(ev.event_type, StreamEventType::ThinkingDone);
+        assert!(!ev.done);
+        assert!(ev.tool_call_id.is_none());
+        assert!(ev.usage.is_none());
+        assert!(ev.stop_reason.is_none());
+    }
+
+    #[test]
+    fn stream_event_type_thinking_delta_serializes_snake_case() {
+        let s = serde_json::to_string(&StreamEventType::ThinkingDelta).unwrap();
+        assert_eq!(s, "\"thinking_delta\"");
+        let d: StreamEventType = serde_json::from_str("\"thinking_delta\"").unwrap();
+        assert_eq!(d, StreamEventType::ThinkingDelta);
+    }
+
+    #[test]
+    fn stream_event_type_thinking_done_serializes_snake_case() {
+        let s = serde_json::to_string(&StreamEventType::ThinkingDone).unwrap();
+        assert_eq!(s, "\"thinking_done\"");
+        let d: StreamEventType = serde_json::from_str("\"thinking_done\"").unwrap();
+        assert_eq!(d, StreamEventType::ThinkingDone);
     }
 }
