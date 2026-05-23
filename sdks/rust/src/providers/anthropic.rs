@@ -327,9 +327,18 @@ impl AnthropicRequestBuilder {
         let max_tokens = self.req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
         body["max_tokens"] = json!(max_tokens);
         if let Some(ref thinking) = self.req.thinking {
+            // Explicit `display: "summarized"` is required for the OAuth
+            // (sk-ant-oat01-*) tier to actually emit `thinking_delta` SSE
+            // events. Without it the OAuth flow defaults to
+            // `display: "omitted"` regardless of model — Anthropic's docs
+            // claim this default is model-dependent, but empirically the
+            // Claude Code product surface forces `omitted` on OAuth
+            // requests that don't opt in. Matches earendil-works/pi at
+            // `packages/ai/src/providers/anthropic.ts:950+968`.
             body["thinking"] = json!({
                 "type": "enabled",
                 "budget_tokens": thinking.budget_tokens,
+                "display": "summarized",
             });
         }
         {
@@ -678,9 +687,14 @@ impl ProviderImpl for AnthropicProvider {
                 body["temperature"] = json!(temperature);
             }
             if let Some(ref thinking) = req.thinking {
+                // See parallel non-streaming block above for why `display`
+                // is explicitly set. Without it, the OAuth tier silently
+                // defaults to `display: "omitted"` and the resulting SSE
+                // stream contains only `signature_delta` (no `thinking_delta`).
                 body["thinking"] = json!({
                     "type": "enabled",
                     "budget_tokens": thinking.budget_tokens,
+                    "display": "summarized",
                 });
             }
             {

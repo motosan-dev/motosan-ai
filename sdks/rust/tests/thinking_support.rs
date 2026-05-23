@@ -13,7 +13,7 @@ async fn thinking_config_serializes_as_enabled() {
         .mock("POST", "/v1/messages")
         .match_header("x-api-key", "test-key")
         .match_body(Matcher::Regex(
-            r#""thinking"\s*:\s*\{\s*"budget_tokens"\s*:\s*8000\s*,\s*"type"\s*:\s*"enabled"\s*\}"#
+            r#""thinking"\s*:\s*\{\s*"budget_tokens"\s*:\s*8000\s*,\s*"display"\s*:\s*"summarized"\s*,\s*"type"\s*:\s*"enabled"\s*\}"#
                 .to_string(),
         ))
         .with_status(200)
