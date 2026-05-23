@@ -40,6 +40,12 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut cache_creation_input_tokens: Option<u32> = None;
     let mut cache_read_input_tokens: Option<u32> = None;
     let mut explicit_stop_reason: Option<StopReason> = None;
+    // Thinking accumulation. `thinking_delta_buf` collects every
+    // ThinkingDelta as a fallback in case the provider does not emit
+    // ThinkingDone. `thinking_done_buf` holds the explicit final text
+    // from the most recent ThinkingDone and takes priority on assembly.
+    let mut thinking_delta_buf = String::new();
+    let mut thinking_done_buf: Option<String> = None;
 
     while let Some(event) = stream.next().await {
         if event.done {
@@ -88,10 +94,16 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
                 });
                 current_tc_args.clear();
             }
-            StreamEventType::ThinkingDelta | StreamEventType::ThinkingDone => {
-                // Placeholder; real handling lands in Task 6 of the
-                // anthropic-thinking-stream-events plan. Do not commit
-                // this past Task 6.
+            StreamEventType::ThinkingDelta => {
+                thinking_delta_buf.push_str(&event.content);
+            }
+            StreamEventType::ThinkingDone => {
+                // ThinkingDone carries the full text. Prefer it over the
+                // delta accumulator when available — the provider knows
+                // the authoritative concatenation. Also clear the delta
+                // buffer so a second thinking block starts fresh.
+                thinking_done_buf = Some(event.content.clone());
+                thinking_delta_buf.clear();
             }
         }
     }
@@ -102,9 +114,16 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         None => StopReason::ToolUse,
     };
 
+    let thinking = match thinking_done_buf {
+        Some(text) if !text.is_empty() => Some(text),
+        Some(_) => None, // explicit empty thinking block -> treat as none
+        None if !thinking_delta_buf.is_empty() => Some(thinking_delta_buf),
+        None => None,
+    };
+
     ChatResponse {
         content,
-        thinking: None,
+        thinking,
         model: String::new(),
         usage: Usage {
             input_tokens,
@@ -114,5 +133,65 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         },
         stop_reason,
         tool_calls,
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+))]
+mod thinking_collect_tests {
+    use super::*;
+    use crate::types::StreamEvent;
+    use tokio_stream::iter;
+
+    #[tokio::test]
+    async fn collect_stream_accumulates_thinking_into_response_thinking() {
+        let events = vec![
+            StreamEvent::thinking_delta("Let me "),
+            StreamEvent::thinking_delta("think..."),
+            StreamEvent::thinking_done("Let me think..."),
+            StreamEvent::text("Answer: "),
+            StreamEvent::text("42"),
+            StreamEvent::done(),
+        ];
+        let stream: BoxStream = Box::pin(iter(events));
+        let resp = collect_stream(stream).await;
+        assert_eq!(resp.content, "Answer: 42");
+        assert_eq!(
+            resp.thinking.as_deref(),
+            Some("Let me think..."),
+            "thinking field must come from ThinkingDone (or accumulated deltas if no Done)"
+        );
+    }
+
+    #[tokio::test]
+    async fn collect_stream_no_thinking_keeps_thinking_none() {
+        let events = vec![StreamEvent::text("hello"), StreamEvent::done()];
+        let stream: BoxStream = Box::pin(iter(events));
+        let resp = collect_stream(stream).await;
+        assert_eq!(resp.content, "hello");
+        assert!(resp.thinking.is_none());
+    }
+
+    #[tokio::test]
+    async fn collect_stream_falls_back_to_accumulated_deltas_if_no_done() {
+        // Defensive: if a provider somehow emits ThinkingDelta but skips
+        // ThinkingDone, collect_stream still produces a thinking field
+        // from the accumulated deltas.
+        let events = vec![
+            StreamEvent::thinking_delta("A "),
+            StreamEvent::thinking_delta("B"),
+            StreamEvent::text("ok"),
+            StreamEvent::done(),
+        ];
+        let stream: BoxStream = Box::pin(iter(events));
+        let resp = collect_stream(stream).await;
+        assert_eq!(resp.thinking.as_deref(), Some("A B"));
+        assert_eq!(resp.content, "ok");
     }
 }
