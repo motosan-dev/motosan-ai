@@ -2,6 +2,24 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [0.15.4] - 2026-05-23
+
+### Added
+
+- **`StreamEventType::ThinkingDelta` and `StreamEventType::ThinkingDone`** plus matching `StreamEvent::thinking_delta(...)` / `StreamEvent::thinking_done(...)` constructors. (`sdks/rust/src/types.rs`.) Variant count goes 5 → 7. **Wire-breaking** for any downstream that does an exhaustive `match event.event_type { ... }` on `StreamEventType` without a `_ =>` arm; internal `collect_stream` and `codex_cli` test updated. Pre-1.0 we ship as patch.
+- **Anthropic streaming thinking support.** `AnthropicStreamAdapter` (`sdks/rust/src/providers/anthropic.rs`) gains a `current_thinking_buf: Option<String>` accumulator. `content_block_start { type: "thinking" }` opens it. `content_block_delta { type: "thinking_delta", thinking: "..." }` accumulates the text **from `delta.thinking`** (a previous bug-by-omission read `delta.text` and silently dropped these) and emits `StreamEvent::thinking_delta`. `content_block_stop` for a thinking block emits `StreamEvent::thinking_done` carrying the full concatenated text and clears the accumulator. `signature_delta` and `redacted_thinking` blocks are silently consumed — no streaming surface for cryptographic re-feed signatures or redacted content, matching the non-streaming `ChatResponse.thinking` field's shape.
+- **`collect_stream` populates `ChatResponse.thinking`** from accumulated `ThinkingDelta`s, preferring `ThinkingDone`'s authoritative payload when present. Streaming and non-streaming Anthropic responses now produce the same `ChatResponse.thinking: Option<String>` shape. (`sdks/rust/src/stream.rs`.)
+
+### Notes
+
+- Fourteen new tests across `types.rs`, `tests/anthropic_stream.rs`, and `src/stream.rs` lock the behavior in: variant existence + serde round-trip; constructor field shape; SSE → event mapping for thinking-only / thinking-then-text / redacted_thinking / orphan-delta / signature-delta cases; collect_stream accumulation including the `ThinkingDelta`-without-`ThinkingDone` fallback path.
+- New `#[ignore]`'d live test `live_anthropic_streaming_thinking_emits_thinking_events` in `tests/anthropic_live.rs` hits the real API with `thinking(4000)` and asserts stream terminates, ThinkingDelta count > 0, ThinkingDone non-empty, answer non-empty, no content leak.
+- Python SDK unchanged — Anthropic streaming thinking on the Python side is a separate plan (per `CLAUDE.md` "No FFI or shared code between SDKs"). Other providers (OpenAI, Gemini, MiniMax, Ollama, Codex CLI, Claude Code CLI) do not emit `StreamEventType::ThinkingDelta`/`ThinkingDone` — only Anthropic currently has a wire format for streaming extended thinking.
+
+### Consumer impact
+
+- Unblocks `motosan-agent-loop` v0.21.4's `TODO(thinking-stream)` markers at `src/motosan_ai_impl.rs:171` and `:346` — once that crate bumps its `motosan-ai` dep to `^0.15.4` and wires the two new arms, `CoreEvent::ThinkingChunk`/`ThinkingDone` will flow end-to-end from Anthropic SSE to consumers (capo TUI).
+
 ## [0.15.3] - 2026-05-17
 
 ### Fixed
