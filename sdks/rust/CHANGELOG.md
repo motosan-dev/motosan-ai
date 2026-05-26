@@ -2,6 +2,13 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## 0.16.0 — 2026-05-26
+
+BREAKING:
+- motosan-agent-tool dep bumped to 0.4. Consumers using --features agent-tool must bump their tool dep alongside.
+
+NOTE: No public SDK signature changed at the type level. Bump reflects transitive crate identity change.
+
 ## [0.15.5] - 2026-05-23
 
 ### Fixed

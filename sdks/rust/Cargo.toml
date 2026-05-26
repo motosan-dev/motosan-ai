@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.15.5"
+version = "0.16.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -75,7 +75,7 @@ serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
 
-motosan-agent-tool = { version = "0.3", optional = true }
+motosan-agent-tool = { path = "../../../motosan-agent-tool", optional = true }
 bytes = { version = "1", optional = true }
 reqwest = { version = "0.12", optional = true, features = [
   "json",
@@ -96,3 +96,87 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
 tokio-stream = "0.1"
 mockito = "1"
+
+# Integration tests with provider-specific feature requirements. This keeps
+# `cargo test --features agent-tool` focused on SDK/tool compatibility instead
+# of compiling/running provider suites whose crate-level cfg would otherwise
+# still produce test binaries.
+[[test]]
+name = "anthropic_chat"
+required-features = ["anthropic"]
+
+[[test]]
+name = "anthropic_minimax_routing"
+required-features = ["minimax"]
+
+[[test]]
+name = "anthropic_oauth_usage"
+required-features = ["anthropic"]
+
+[[test]]
+name = "anthropic_stream"
+required-features = ["anthropic"]
+
+[[test]]
+name = "collect_stream"
+required-features = ["anthropic"]
+
+[[test]]
+name = "mcp_servers"
+required-features = ["anthropic"]
+
+[[test]]
+name = "ollama_http_autoswitch"
+required-features = ["ollama"]
+
+[[test]]
+name = "ollama_integration"
+required-features = ["ollama"]
+
+[[test]]
+name = "ollama_native_integration"
+required-features = ["ollama_native"]
+
+[[test]]
+name = "ollama_native_provider"
+required-features = ["ollama_native"]
+
+[[test]]
+name = "ollama_provider"
+required-features = ["ollama"]
+
+[[test]]
+name = "openai_provider"
+required-features = ["openai"]
+
+[[test]]
+name = "openai_retry"
+required-features = ["openai"]
+
+[[test]]
+name = "thinking_support"
+required-features = ["anthropic"]
+
+[[test]]
+name = "tool_choice_anthropic"
+required-features = ["anthropic"]
+
+[[test]]
+name = "tool_choice_openai"
+required-features = ["openai"]
+
+[[test]]
+name = "tool_use_integration"
+required-features = ["anthropic"]
+
+[[test]]
+name = "vision_anthropic"
+required-features = ["anthropic"]
+
+[[test]]
+name = "vision_gemini"
+required-features = ["gemini"]
+
+[[test]]
+name = "vision_openai"
+required-features = ["openai"]
