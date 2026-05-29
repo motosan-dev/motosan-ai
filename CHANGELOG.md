@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.17.0] — 2026-05-29
+
+### Breaking (Rust only)
+
+- **`motosan-agent-tool` dep bumped to 0.5** (M10 D-M10-4). `ToolDef` gained a required `internal_name: String` field. The `From<Tool> for ToolDef` conversion in `tool_compat.rs` now routes through `ToolDef::new(...)`, which sets `internal_name = name` automatically — the motosan-ai SDK has no host-side namespace concept, so the public `name` is the right identifier on both axes. `Tool ↔ ToolDef` round-trips remain lossless. Consumers of `motosan-ai` Rust SDK with `--features agent-tool` must bump their `motosan-agent-tool` dep alongside.
+
+See [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md) for the canonical Rust SDK changelog with full per-release detail.
+
 ## [rust-0.16.0] — 2026-05-26
 
 ### Breaking (Rust only)

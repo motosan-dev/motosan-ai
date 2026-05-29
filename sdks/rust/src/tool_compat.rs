@@ -18,13 +18,16 @@ impl From<ToolDef> for Tool {
 #[cfg(feature = "agent-tool")]
 impl From<Tool> for ToolDef {
     fn from(t: Tool) -> Self {
-        Self {
-            name: t.name,
-            description: t.description.unwrap_or_default(),
-            input_schema: t
-                .input_schema
+        // Use the constructor so `internal_name` is derived from `name`
+        // automatically. The motosan-ai SDK has no host-side namespace
+        // concept, so the public `name` is the right identifier on both
+        // axes — matching ToolDef::new's default behavior (M10 D-M10-4).
+        ToolDef::new(
+            t.name,
+            t.description.unwrap_or_default(),
+            t.input_schema
                 .unwrap_or_else(|| serde_json::json!({"type":"object"})),
-        }
+        )
     }
 }
 
@@ -37,6 +40,7 @@ mod tests {
     fn test_tool_from_tooldef() {
         let def = ToolDef {
             name: "get_weather".into(),
+            internal_name: "get_weather".into(),
             description: "Fetch current weather".into(),
             input_schema: json!({"type": "object", "properties": {"city": {"type": "string"}}}),
         };
