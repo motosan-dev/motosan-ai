@@ -165,13 +165,15 @@ async fn live_tool_use_single_turn() {
     let request = ChatRequest::builder()
         .message(Message::user("What's the weather in Tokyo? Use the tool."))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get current weather for a city".to_string()),
-            input_schema: Some(json!({
-                "type": "object",
-                "properties": {"city": {"type": "string", "description": "City name"}},
-                "required": ["city"]
-            })),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get current weather for a city".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"city": {"type": "string", "description": "City name"}},
+                    "required": ["city"]
+                }),
+            },
             cache: false,
         }])
         .build();
@@ -202,13 +204,15 @@ async fn live_tool_use_multi_turn() {
     };
 
     let tools = vec![Tool {
-        name: "get_weather".to_string(),
-        description: Some("Get current weather for a city".to_string()),
-        input_schema: Some(json!({
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"]
-        })),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "get_weather".to_string(),
+            description: "Get current weather for a city".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }),
+        },
         cache: false,
     }];
 
@@ -265,13 +269,15 @@ async fn live_stream_tool_use() {
     let request = ChatRequest::builder()
         .message(Message::user("Use the calculate tool to compute 2+2."))
         .tools(vec![Tool {
-            name: "calculate".to_string(),
-            description: Some("Calculate a math expression".to_string()),
-            input_schema: Some(json!({
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "calculate".to_string(),
+                description: "Calculate a math expression".to_string(),
+                input_schema: json!({
                 "type": "object",
                 "properties": {"expression": {"type": "string", "description": "Math expression"}},
                 "required": ["expression"]
-            })),
+            }),
+            },
             cache: false,
         }])
         .build();

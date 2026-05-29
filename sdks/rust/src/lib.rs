@@ -7,9 +7,6 @@ pub mod stream;
 pub mod think_stripper;
 pub mod types;
 
-#[cfg(feature = "agent-tool")]
-pub mod tool_compat;
-
 #[cfg(feature = "claude-code")]
 pub use providers::claude_code;
 #[cfg(feature = "claude-code")]

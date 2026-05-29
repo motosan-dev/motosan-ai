@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.17.1"
+version = "0.18.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -56,7 +56,6 @@ gemini-code-assist = [
   "dep:tokio-stream",
   "dep:tokio",
 ]
-agent-tool = ["dep:motosan-agent-tool"]
 full = [
   "anthropic",
   "openai",
@@ -75,7 +74,7 @@ serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
 
-motosan-agent-tool = { path = "../../../motosan-agent-tool", version = "0.5.0", optional = true }
+motosan-agent-primitives = { path = "../../../motosan-agent-primitives", version = "0.3.0" }
 bytes = { version = "1", optional = true }
 reqwest = { version = "0.12", optional = true, features = [
   "json",
@@ -97,10 +96,6 @@ tokio = { version = "1", features = ["macros", "rt"] }
 tokio-stream = "0.1"
 mockito = "1"
 
-# Integration tests with provider-specific feature requirements. This keeps
-# `cargo test --features agent-tool` focused on SDK/tool compatibility instead
-# of compiling/running provider suites whose crate-level cfg would otherwise
-# still produce test binaries.
 [[test]]
 name = "anthropic_chat"
 required-features = ["anthropic"]

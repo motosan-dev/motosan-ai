@@ -84,9 +84,11 @@ fn chat_request_serialization_includes_tool_choice_when_set() {
     let request = ChatRequest::builder()
         .message(Message::user("hello"))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get weather".to_string()),
-            input_schema: None,
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
             cache: false,
         }])
         .tool_choice(ToolChoice::Tool {

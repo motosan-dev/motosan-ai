@@ -121,9 +121,11 @@ async fn ollama_chat_with_tool_calls() {
     let request = ChatRequest::builder()
         .message(Message::user("weather?"))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get weather by city".to_string()),
-            input_schema: Some(json!({"type":"object","properties":{"city":{"type":"string"}}})),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get weather by city".to_string(),
+                input_schema: json!({"type":"object","properties":{"city":{"type":"string"}}}),
+            },
             cache: false,
         }])
         .build();

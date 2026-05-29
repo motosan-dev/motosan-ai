@@ -395,11 +395,11 @@ async fn openai_stream_emits_tool_call_events() {
     let request = ChatRequest::builder()
         .message(Message::user("weather in Taipei?"))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get weather".to_string()),
-            input_schema: Some(
-                json!({"type": "object", "properties": {"city": {"type": "string"}}}),
-            ),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                input_schema: json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            },
             cache: false,
         }])
         .build();

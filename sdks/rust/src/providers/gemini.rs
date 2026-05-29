@@ -198,11 +198,9 @@ impl GeminiProvider {
                     .map(|t| {
                         let mut decl = json!({
                             "name": t.name,
-                            "description": t.description.as_deref().unwrap_or(""),
+                            "description": t.description,
                         });
-                        if let Some(ref schema) = t.input_schema {
-                            decl["parameters"] = schema.clone();
-                        }
+                        decl["parameters"] = t.input_schema.clone();
                         decl
                     })
                     .collect();
@@ -609,9 +607,11 @@ mod tests {
     #[test]
     fn tool_choice_required_maps_to_any() {
         let tool = Tool {
-            name: "search".to_string(),
-            description: Some("Search".to_string()),
-            input_schema: Some(json!({"type": "object", "properties": {}})),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "search".to_string(),
+                description: "Search".to_string(),
+                input_schema: json!({"type": "object", "properties": {}}),
+            },
             cache: false,
         };
         let req = ChatRequest::builder()
@@ -626,9 +626,11 @@ mod tests {
     #[test]
     fn tool_choice_none_removes_tools() {
         let tool = Tool {
-            name: "search".to_string(),
-            description: None,
-            input_schema: None,
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "search".to_string(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
             cache: false,
         };
         let req = ChatRequest::builder()
@@ -738,15 +740,19 @@ mod tests {
     fn multiple_tools_become_function_declarations() {
         let tools = vec![
             Tool {
-                name: "search".into(),
-                description: Some("Search".into()),
-                input_schema: None,
+                schema: motosan_agent_primitives::ToolSchema {
+                    name: "search".into(),
+                    description: "Search".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                },
                 cache: false,
             },
             Tool {
-                name: "calc".into(),
-                description: Some("Calculate".into()),
-                input_schema: None,
+                schema: motosan_agent_primitives::ToolSchema {
+                    name: "calc".into(),
+                    description: "Calculate".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                },
                 cache: false,
             },
         ];
@@ -766,9 +772,11 @@ mod tests {
         let schema =
             json!({"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]});
         let tool = Tool {
-            name: "search".into(),
-            description: None,
-            input_schema: Some(schema.clone()),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "search".into(),
+                description: String::new(),
+                input_schema: schema.clone(),
+            },
             cache: false,
         };
         let req = ChatRequest::builder()
@@ -785,9 +793,11 @@ mod tests {
     #[test]
     fn tool_choice_auto_maps_to_auto_mode() {
         let tool = Tool {
-            name: "t".into(),
-            description: None,
-            input_schema: None,
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "t".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
             cache: false,
         };
         let req = ChatRequest::builder()
@@ -802,9 +812,11 @@ mod tests {
     #[test]
     fn tool_choice_specific_tool_sets_allowed_function_names() {
         let tool = Tool {
-            name: "special".into(),
-            description: None,
-            input_schema: None,
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "special".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
             cache: false,
         };
         let req = ChatRequest::builder()

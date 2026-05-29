@@ -371,10 +371,11 @@ impl AnthropicRequestBuilder {
             let mut all_tools: Vec<Value> = Vec::new();
             if let Some(tools) = self.req.tools {
                 for tool in tools {
+                    let schema = tool.schema;
                     let mut obj = json!({
-                        "name": tool.name,
-                        "description": tool.description.unwrap_or_default(),
-                        "input_schema": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                        "name": schema.name,
+                        "description": schema.description,
+                        "input_schema": schema.input_schema,
                     });
                     if tool.cache {
                         obj["cache_control"] = json!({"type": "ephemeral"});
@@ -724,10 +725,11 @@ impl ProviderImpl for AnthropicProvider {
                 let mut all_tools: Vec<Value> = Vec::new();
                 if let Some(tools) = req.tools {
                     for t in tools {
+                        let schema = t.schema;
                         let mut obj = json!({
-                            "name": t.name,
-                            "description": t.description.unwrap_or_default(),
-                            "input_schema": t.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                            "name": schema.name,
+                            "description": schema.description,
+                            "input_schema": schema.input_schema,
                         });
                         if t.cache {
                             obj["cache_control"] = json!({"type": "ephemeral"});
