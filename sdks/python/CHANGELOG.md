@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.12.1] - 2026-05-29
+
+### Added
+- Live Opus 4.8 adaptive-thinking regression test (`tests/integration/test_anthropic_live.py::test_live_opus_4_8_adaptive_thinking`). Verified with an `sk-ant-oat01-*` OAuth token.
+
+### Changed
+- Anthropic extended thinking for Opus 4.8/4.7/4.6 now follows pi's adaptive-thinking shape (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) instead of the older budget-token shape. OAuth requests using adaptive thinking also omit the legacy `interleaved-thinking` beta header, matching pi's handling.
+- Budget-based Anthropic thinking now sends `display: "summarized"` so Python matches Rust/pi behavior for OAuth thinking streams.
+
 ## [0.12.0] - 2026-05-18
 
 ### Added

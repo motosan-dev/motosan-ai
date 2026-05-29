@@ -165,7 +165,7 @@ if !tail.is_empty() {
 ## Provider-Specific Streaming Notes
 
 - **Anthropic**: `tool_call_id` comes on `content_block_start`, NOT on `content_block_delta` — SDK normalizes this so `tool_call_args` events may or may not carry `tool_call_id` depending on the provider. Use `tool_call_start`'s id as the canonical id.
-- **Anthropic OAuth**: `chat()` auto-redirects to `stream()` (streaming required for OAuth). SDK collects stream result into `ChatResponse` transparently.
+- **Anthropic OAuth**: `chat()` auto-redirects to `stream()` (streaming required for OAuth). SDK collects stream result into `ChatResponse` transparently. Budget-based thinking sends `display: "summarized"`; Opus 4.8/4.7/4.6 use adaptive thinking and omit the legacy `interleaved-thinking` beta header.
 - **MiniMax**: May emit reasoning text before tool calls — ThinkStripper handles this automatically.
 - **Ollama**: Streaming uses NDJSON (not SSE). SDK handles the format difference transparently.
 - **OpenAI**: Standard SSE streaming. `tool_call_id` is present on all tool-related events.

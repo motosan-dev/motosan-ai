@@ -31,9 +31,10 @@ _OAUTH_BETAS = [
     "claude-code-20250219",
     "oauth-2025-04-20",
     "fine-grained-tool-streaming-2025-05-14",
-    "interleaved-thinking-2025-05-14",
 ]
+_INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 _MCP_BETA = "mcp-client-2025-11-20"
+_ADAPTIVE_THINKING_MODELS = {"claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"}
 _STOP_REASON_MAP = {
     "end_turn": StopReason.end_turn,
     "max_tokens": StopReason.max_tokens,
@@ -45,6 +46,24 @@ _STOP_REASON_MAP = {
 
 def _with_cache_control(block: dict[str, Any]) -> dict[str, Any]:
     return {**block, "cache_control": {"type": "ephemeral"}}
+
+
+def _model_uses_adaptive_thinking(model: str) -> bool:
+    return model in _ADAPTIVE_THINKING_MODELS
+
+
+def _apply_thinking_config(body: dict[str, Any], model: str, budget_tokens: int) -> None:
+    if _model_uses_adaptive_thinking(model):
+        # Pi marks Opus 4.8/4.7/4.6 as forceAdaptiveThinking: use Anthropic's
+        # adaptive shape instead of the older budget-token shape.
+        body["thinking"] = {"type": "adaptive", "display": "summarized"}
+        body["output_config"] = {"effort": "high"}
+    else:
+        body["thinking"] = {
+            "type": "enabled",
+            "budget_tokens": budget_tokens,
+            "display": "summarized",
+        }
 
 
 def _usage_from_dict(usage: dict[str, Any] | None) -> Usage:
@@ -75,7 +94,7 @@ class AnthropicProvider(BaseProvider):
     def _endpoint(self) -> str:
         return f"{self.base_url}/v1/messages"
 
-    def _headers(self, *, has_mcp: bool = False) -> dict[str, str]:
+    def _headers(self, *, has_mcp: bool = False, adaptive_thinking: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {
             "anthropic-version": _ANTHROPIC_VERSION,
             "content-type": "application/json",
@@ -86,6 +105,8 @@ class AnthropicProvider(BaseProvider):
             headers["user-agent"] = "claude-code/1.0.33"
             headers["x-app"] = "cli"
             betas.extend(_OAUTH_BETAS)
+            if not adaptive_thinking:
+                betas.append(_INTERLEAVED_THINKING_BETA)
         else:
             headers["x-api-key"] = self.api_key
         if has_mcp:
@@ -214,11 +235,10 @@ class AnthropicProvider(BaseProvider):
             body["system"] = plain_system
 
         if request.thinking is not None:
-            body["temperature"] = 1.0
-            body["thinking"] = {
-                "type": "enabled",
-                "budget_tokens": request.thinking.budget_tokens,
-            }
+            model = str(body["model"])
+            if not _model_uses_adaptive_thinking(model):
+                body["temperature"] = 1.0
+            _apply_thinking_config(body, model, request.thinking.budget_tokens)
         elif request.temperature is not None:
             body["temperature"] = request.temperature
 
@@ -305,9 +325,14 @@ class AnthropicProvider(BaseProvider):
             )
 
         body = self._build_body(request)
+        adaptive_thinking = (body.get("thinking") or {}).get("type") == "adaptive"
         try:
             resp = await self._http.post(
-                self._endpoint(), headers=self._headers(has_mcp=self._has_mcp(request)), json=body
+                self._endpoint(),
+                headers=self._headers(
+                    has_mcp=self._has_mcp(request), adaptive_thinking=adaptive_thinking
+                ),
+                json=body,
             )
         except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
@@ -349,12 +374,15 @@ class AnthropicProvider(BaseProvider):
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         self.validate_request(request)
         body = self._build_body(request, stream=True)
+        adaptive_thinking = (body.get("thinking") or {}).get("type") == "adaptive"
         try:
             resp = await self._http.send(
                 self._http.build_request(
                     "POST",
                     self._endpoint(),
-                    headers=self._headers(has_mcp=self._has_mcp(request)),
+                    headers=self._headers(
+                        has_mcp=self._has_mcp(request), adaptive_thinking=adaptive_thinking
+                    ),
                     json=body,
                 ),
                 stream=True,

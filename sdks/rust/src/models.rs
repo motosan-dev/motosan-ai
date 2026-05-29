@@ -3,6 +3,7 @@ pub const DEFAULT_OPENAI_MODEL: &str = "gpt-5.3-codex";
 pub const DEFAULT_OLLAMA_MODEL: &str = "llama3.2";
 
 pub const ANTHROPIC_MODELS: &[&str] = &[
+    "claude-opus-4-8",
     "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5-20251001",

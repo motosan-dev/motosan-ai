@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.12.0 · Rust 0.17.0
+- Python 0.12.1 · Rust 0.17.1
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.17.0", features = ["anthropic"] }
+motosan-ai = { version = "0.17.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -49,7 +49,7 @@ motosan-ai = { version = "0.17.0", features = ["anthropic"] }
 | Gemini    | Python: `gemini-2.5-flash` · Rust: `gemini-2.0-flash` |
 | GeminiCodeAssist | `gemini-2.5-flash` |
 
-Override per client or per request.
+Override per client or per request. Anthropic's model catalog includes `claude-opus-4-8`; use it as an override when you want Opus. For Opus 4.8/4.7/4.6, `thinking` uses Anthropic adaptive thinking (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) and OAuth adaptive-thinking requests omit the legacy `interleaved-thinking` beta header, matching pi.
 
 ---
 
@@ -120,7 +120,14 @@ async for event in client.stream(
 from motosan_ai import ChatRequest
 
 # Full ChatRequest passthrough; request.model falls back to client.model.
-req = ChatRequest.builder().message(Message.user("Hi")).thinking(1024).build()
+# Opus 4.8/4.7/4.6 thinking is sent as adaptive thinking.
+req = (
+    ChatRequest.builder()
+    .message(Message.user("Hi"))
+    .model("claude-opus-4-8")
+    .thinking(1024)
+    .build()
+)
 resp = await client.chat_with(req)
 
 async for event in client.stream_with(req):
@@ -215,7 +222,7 @@ use motosan_ai::ChatRequest;
 let request = ChatRequest::builder()
     .messages(vec![Message::user("Hello")])
     .system("You are helpful")
-    .model("claude-sonnet-4-6")
+    .model("claude-opus-4-8")
     .temperature(0.7)
     .max_tokens(1024)
     .tools(vec![...])

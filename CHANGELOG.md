@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.17.1 / python-0.12.1] — 2026-05-29
+
+### Added
+
+- Anthropic model catalog now includes `claude-opus-4-8`.
+- Rust and Python live Opus 4.8 adaptive-thinking regression tests. Verified live with an `sk-ant-oat01-*` OAuth token.
+
+### Changed
+
+- Anthropic extended thinking for Opus 4.8/4.7/4.6 now follows pi's adaptive-thinking shape (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) instead of the older budget-token shape. OAuth adaptive-thinking requests omit the legacy `interleaved-thinking` beta header, matching pi.
+- Python budget-based Anthropic thinking now also sends `display: "summarized"`, matching Rust/pi OAuth thinking-stream behavior.
+
 ## [rust-0.17.0] — 2026-05-29
 
 ### Breaking (Rust only)

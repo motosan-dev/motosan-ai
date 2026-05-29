@@ -32,7 +32,11 @@ async def test_chat_with_passes_thinking_to_provider(monkeypatch):
     req = ChatRequest.builder().message(Message.user("hi")).thinking(2048).build()
     await client.chat_with(req)
     body = json.loads(route.calls[0].request.content)
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert body["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 2048,
+        "display": "summarized",
+    }
 
 
 @respx.mock

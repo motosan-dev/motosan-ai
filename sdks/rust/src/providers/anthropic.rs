@@ -10,7 +10,8 @@ use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
 use crate::types::{
     ChatRequest, ChatResponse, ContentBlock, DocumentSource, ImageSource, McpToolConfig,
-    ProviderCapabilities, Role, StopReason, StreamEvent, SystemBlock, ToolCall, ToolChoice,
+    ProviderCapabilities, Role, StopReason, StreamEvent, SystemBlock, ThinkingConfig, ToolCall,
+    ToolChoice,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -74,13 +75,15 @@ impl AnthropicProvider {
         }
     }
 
-    fn build_beta_header(has_mcp: bool, is_oauth: bool) -> Option<String> {
+    fn build_beta_header(has_mcp: bool, is_oauth: bool, adaptive_thinking: bool) -> Option<String> {
         let mut betas = vec![];
         if is_oauth {
             betas.push("claude-code-20250219");
             betas.push("oauth-2025-04-20");
             betas.push("fine-grained-tool-streaming-2025-05-14");
-            betas.push("interleaved-thinking-2025-05-14");
+            if !adaptive_thinking {
+                betas.push("interleaved-thinking-2025-05-14");
+            }
         }
         if has_mcp {
             betas.push("mcp-client-2025-11-20");
@@ -96,8 +99,9 @@ impl AnthropicProvider {
         request: reqwest::RequestBuilder,
         has_mcp: bool,
         is_oauth: bool,
+        adaptive_thinking: bool,
     ) -> reqwest::RequestBuilder {
-        match Self::build_beta_header(has_mcp, is_oauth) {
+        match Self::build_beta_header(has_mcp, is_oauth, adaptive_thinking) {
             Some(header) => request.header("anthropic-beta", header),
             None => request,
         }
@@ -185,6 +189,33 @@ fn serialize_mcp_tool_config(config: &McpToolConfig) -> Value {
             "mcp_server_name": mcp_server_name,
             "denied_tools": denied_tools,
         }),
+    }
+}
+
+fn model_uses_adaptive_thinking(model: &str) -> bool {
+    matches!(
+        model,
+        "claude-opus-4-8" | "claude-opus-4-7" | "claude-opus-4-6"
+    )
+}
+
+fn apply_thinking_config(body: &mut Value, model: &str, thinking: &ThinkingConfig) {
+    if model_uses_adaptive_thinking(model) {
+        // Pi marks Opus 4.8/4.7/4.6 as `forceAdaptiveThinking`: Anthropic chooses
+        // the thinking budget adaptively and rejects the older budget-token
+        // shape. Preserve the summarized display default so OAuth callers
+        // still receive `thinking_delta` events.
+        body["thinking"] = json!({
+            "type": "adaptive",
+            "display": "summarized",
+        });
+        body["output_config"] = json!({"effort": "high"});
+    } else {
+        body["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": thinking.budget_tokens,
+            "display": "summarized",
+        });
     }
 }
 
@@ -318,29 +349,24 @@ impl AnthropicRequestBuilder {
                 body["system"] = json!(system_prompt);
             }
         }
-        // When thinking is enabled, Anthropic requires temperature=1.0.
-        if self.req.thinking.is_some() {
-            body["temperature"] = json!(1.0);
-        } else if let Some(temperature) = self.req.temperature {
-            body["temperature"] = json!(temperature);
-        }
-        let max_tokens = self.req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
-        body["max_tokens"] = json!(max_tokens);
         if let Some(ref thinking) = self.req.thinking {
+            if !model_uses_adaptive_thinking(&model) {
+                // Budget-based extended thinking requires temperature=1.0.
+                body["temperature"] = json!(1.0);
+            }
             // Explicit `display: "summarized"` is required for the OAuth
             // (sk-ant-oat01-*) tier to actually emit `thinking_delta` SSE
             // events. Without it the OAuth flow defaults to
             // `display: "omitted"` regardless of model — Anthropic's docs
             // claim this default is model-dependent, but empirically the
             // Claude Code product surface forces `omitted` on OAuth
-            // requests that don't opt in. Matches earendil-works/pi at
-            // `packages/ai/src/providers/anthropic.ts:950+968`.
-            body["thinking"] = json!({
-                "type": "enabled",
-                "budget_tokens": thinking.budget_tokens,
-                "display": "summarized",
-            });
+            // requests that don't opt in. Matches earendil-works/pi.
+            apply_thinking_config(&mut body, &model, thinking);
+        } else if let Some(temperature) = self.req.temperature {
+            body["temperature"] = json!(temperature);
         }
+        let max_tokens = self.req.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS);
+        body["max_tokens"] = json!(max_tokens);
         {
             let mut all_tools: Vec<Value> = Vec::new();
             if let Some(tools) = self.req.tools {
@@ -439,6 +465,7 @@ impl ProviderImpl for AnthropicProvider {
         let has_mcp = req.mcp_servers.as_ref().is_some_and(|s| !s.is_empty())
             || req.mcp_tool_configs.as_ref().is_some_and(|c| !c.is_empty());
         let body = AnthropicRequestBuilder::new(req, self.model.clone(), is_oauth).build();
+        let adaptive_thinking = body["thinking"]["type"].as_str() == Some("adaptive");
         let mut attempt = 0;
         let payload: Value;
         loop {
@@ -447,7 +474,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
-            let request = Self::apply_beta_header(request, has_mcp, is_oauth);
+            let request = Self::apply_beta_header(request, has_mcp, is_oauth, adaptive_thinking);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {
@@ -681,21 +708,17 @@ impl ProviderImpl for AnthropicProvider {
                 "stream": true,
                 "system": oauth_system_blocks,
             });
-            if req.thinking.is_some() {
-                body["temperature"] = json!(1.0);
-            } else if let Some(temperature) = req.temperature {
-                body["temperature"] = json!(temperature);
-            }
             if let Some(ref thinking) = req.thinking {
+                if !model_uses_adaptive_thinking(&model) {
+                    body["temperature"] = json!(1.0);
+                }
                 // See parallel non-streaming block above for why `display`
                 // is explicitly set. Without it, the OAuth tier silently
                 // defaults to `display: "omitted"` and the resulting SSE
                 // stream contains only `signature_delta` (no `thinking_delta`).
-                body["thinking"] = json!({
-                    "type": "enabled",
-                    "budget_tokens": thinking.budget_tokens,
-                    "display": "summarized",
-                });
+                apply_thinking_config(&mut body, &model, thinking);
+            } else if let Some(temperature) = req.temperature {
+                body["temperature"] = json!(temperature);
             }
             {
                 let mut all_tools: Vec<Value> = Vec::new();
@@ -774,6 +797,7 @@ impl ProviderImpl for AnthropicProvider {
                 .stream(true)
                 .build()
         };
+        let adaptive_thinking = body["thinking"]["type"].as_str() == Some("adaptive");
         let mut attempt = 0;
         let response = loop {
             let request = self
@@ -781,7 +805,7 @@ impl ProviderImpl for AnthropicProvider {
                 .post(self.endpoint())
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
-            let request = Self::apply_beta_header(request, has_mcp, is_oauth);
+            let request = Self::apply_beta_header(request, has_mcp, is_oauth, adaptive_thinking);
             let response = match self.apply_auth(request).send().await {
                 Ok(response) => response,
                 Err(error) => {

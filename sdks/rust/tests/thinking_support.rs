@@ -5,6 +5,7 @@ use motosan_ai::providers::anthropic::AnthropicProvider;
 use motosan_ai::providers::ProviderImpl;
 use motosan_ai::{ChatRequest, Message, ThinkingConfig};
 use serde_json::json;
+use tokio_stream::StreamExt;
 
 #[tokio::test]
 async fn thinking_config_serializes_as_enabled() {
@@ -49,6 +50,82 @@ async fn thinking_config_serializes_as_enabled() {
     );
 
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn opus_4_8_thinking_uses_adaptive_shape() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .match_body(Matcher::Regex(
+            r#""model"\s*:\s*"claude-opus-4-8""#.to_string(),
+        ))
+        .match_body(Matcher::Regex(
+            r#""thinking"\s*:\s*\{\s*"display"\s*:\s*"summarized"\s*,\s*"type"\s*:\s*"adaptive"\s*\}"#.to_string(),
+        ))
+        .match_body(Matcher::Regex(
+            r#""output_config"\s*:\s*\{\s*"effort"\s*:\s*"high"\s*\}"#.to_string(),
+        ))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "claude-opus-4-8",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .model("claude-opus-4-8")
+        .thinking(8000)
+        .build();
+
+    let response = provider.chat(request).await.expect("chat response");
+    assert_eq!(response.model, "claude-opus-4-8");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn oauth_opus_4_8_adaptive_thinking_skips_interleaved_beta() {
+    let mut server = mockito::Server::new_async().await;
+    let expected_beta =
+        "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14";
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("authorization", "Bearer sk-ant-oat01-fake")
+        .match_header("anthropic-beta", expected_beta)
+        .match_body(Matcher::Regex(
+            r#""thinking"\s*:\s*\{\s*"display"\s*:\s*"summarized"\s*,\s*"type"\s*:\s*"adaptive"\s*\}"#.to_string(),
+        ))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("sk-ant-oat01-fake", None, Some(server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .model("claude-opus-4-8")
+        .thinking(8000)
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let done = stream.next().await.expect("done event");
+    assert!(done.done);
+    mock.assert_async().await;
+}
+
+#[test]
+fn anthropic_model_catalog_includes_opus_4_8() {
+    assert!(motosan_ai::ANTHROPIC_MODELS.contains(&"claude-opus-4-8"));
 }
 
 #[tokio::test]

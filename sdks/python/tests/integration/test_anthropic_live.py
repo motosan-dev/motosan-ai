@@ -230,6 +230,28 @@ async def test_live_vision(anthropic_provider):
     await _cooldown()
 
 
+async def test_live_opus_4_8_adaptive_thinking():
+    client = Client(provider=Provider.anthropic, api_key=API_KEY, model="claude-opus-4-8")
+    req = ChatRequest(
+        messages=[
+            Message.user("Compute 37 * 43. Think thoroughly, then answer with the final integer.")
+        ],
+        thinking=ThinkingConfig(budget_tokens=1024),
+        max_tokens=2048,
+    )
+
+    events = []
+    async for event in client.stream_with(req):
+        events.append(event)
+        if event.done:
+            break
+
+    assert any(event.done for event in events)
+    assert any(event.event_type == "thinking" and event.content for event in events)
+    assert "".join(event.content for event in events if event.event_type == "text").strip()
+    await _cooldown()
+
+
 async def test_live_thinking(anthropic_provider):
     req = ChatRequest(
         messages=[Message.user("What is 13 * 17? Think step by step.")],

@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-motosan-ai = { version = "0.15.3", features = ["anthropic"] }
+motosan-ai = { version = "0.17.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
@@ -31,12 +31,14 @@ use motosan_ai::{Client, Provider, RetryPolicy};
 let client = Client::builder()
     .provider(Provider::Anthropic)                   // required
     .api_key(std::env::var("ANTHROPIC_API_KEY")?)    // required
-    .model("claude-sonnet-4-6")                      // optional (uses provider default)
+    .model("claude-opus-4-8")                        // optional override (default: claude-sonnet-4-6)
     .retry_policy(RetryPolicy::new().max_retries(5)) // optional
     .build()?;  // -> Result<Client, MotosanError>
 ```
 
 Provider variants: `Provider::Anthropic` | `Provider::OpenAI` | `Provider::Minimax` | `Provider::Ollama`
+
+Anthropic Opus 4.8/4.7/4.6 use adaptive thinking when `.thinking(...)` is set (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`), matching pi. Other thinking-capable Claude models use the budget-token shape.
 
 ### Provider-specific builder methods
 
@@ -81,7 +83,7 @@ use motosan_ai::ChatRequest;
 let request = ChatRequest::builder()
     .messages(vec![Message::user("Hello")])
     .system("You are a helpful assistant.")
-    .model("claude-sonnet-4-6")
+    .model("claude-opus-4-8")
     .temperature(0.7)
     .max_tokens(1024)
     .tools(vec![...])  // see tool-use.md

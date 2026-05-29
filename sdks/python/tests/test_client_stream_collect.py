@@ -214,7 +214,11 @@ async def test_client_stream_collect_with_passes_thinking(monkeypatch):
     req = ChatRequest.builder().message(Message.user("hi")).thinking(2048).build()
     await client.stream_collect_with(req)
     body = json.loads(route.calls[0].request.content)
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 2048}
+    assert body["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 2048,
+        "display": "summarized",
+    }
 
 
 def test_collect_stream_exported_from_top_level():

@@ -195,7 +195,10 @@ print(response.content)
 from motosan_ai import Client
 
 client = Client.anthropic(api_key="sk-ant-...", model="claude-sonnet-4-6")
+opus = Client.anthropic(api_key="sk-ant-...", model="claude-opus-4-8")
 ```
+
+For Opus 4.8/4.7/4.6, `ThinkingConfig` uses Anthropic adaptive thinking (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) instead of the older budget-token shape, matching pi. Budget-based models still send `display: "summarized"` for OAuth thinking streams.
 
 ### OpenAI
 

@@ -26,15 +26,15 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.15.3 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.9.3 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.17.1 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.12.1 |
 
 ## Install
 
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.15.3", features = ["anthropic"] }
+motosan-ai = { version = "0.17.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
@@ -59,6 +59,8 @@ pip install "motosan-ai[full]"   # all Python HTTP providers
 | Claude Code CLI | (CLI default) | `claude-code` | built-in (`ClaudeCodeClient`) |
 | Codex CLI | (CLI default) | `codex-cli` | built-in (`CodexCliClient`) |
 | Gemini CLI | (CLI default) | `gemini-cli` | built-in (`GeminiCliClient`) |
+
+Anthropic's default remains `claude-sonnet-4-6`; override with `claude-opus-4-8` when you want the latest Opus tier. For Opus 4.8/4.7/4.6, `ChatRequest.thinking` uses Anthropic's adaptive-thinking wire shape (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) matching pi.
 
 > **OpenAI-compatible providers** (Groq, DeepSeek, Together, self-hosted proxies, etc.) work via the `openai` feature with a custom chat URL — pass the full endpoint you want POSTed:
 >
@@ -194,7 +196,7 @@ let response = client.chat(vec![Message::user("Hello")]).await?;
 - **ThinkStripper** — auto-strips `<think>` reasoning blocks from streaming output
 - **Retry** — configurable exponential backoff with jitter and `Retry-After` support
 - **Stream Read Timeout** — configurable per-chunk timeout to prevent SSE hanging
-- **Extended Thinking** — first-class support for Anthropic thinking mode
+- **Extended Thinking** — first-class support for Anthropic thinking mode; Opus 4.8/4.7/4.6 use adaptive thinking with summarized display
 - **MCP** — server-side MCP support in `ChatRequest`
 - **Python Gemini HTTP** — native `GeminiProvider` via `Client.gemini()` / `Provider.gemini` with text, vision, tools, streaming, and `GEMINI_API_KEY` support
 - **Python Gemini Code Assist** — `GeminiCodeAssistProvider` / `Provider.gemini_code_assist` targets `cloudcode-pa.googleapis.com` with OAuth bearer tokens, Code Assist envelope wrapping, stream usage caching accounting, and `motosan_ai.oauth` PKCE helpers.

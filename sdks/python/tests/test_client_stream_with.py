@@ -30,7 +30,11 @@ async def test_stream_with_passes_thinking_to_provider(monkeypatch):
     events = [event async for event in client.stream_with(req)]
     assert any(event.content == "hi" for event in events)
     body = json.loads(route.calls[0].request.content)
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert body["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1024,
+        "display": "summarized",
+    }
 
 
 @respx.mock

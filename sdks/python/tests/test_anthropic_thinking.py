@@ -38,7 +38,63 @@ async def test_thinking_serialized_in_body(provider):
     await provider.chat(req)
 
     body = json.loads(route.calls[0].request.content)
-    assert body["thinking"] == {"type": "enabled", "budget_tokens": 4096}
+    assert body["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 4096,
+        "display": "summarized",
+    }
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_opus_4_8_thinking_uses_adaptive_shape(provider):
+    route = respx.post("https://mock.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "model": "claude-opus-4-8",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}],
+            },
+        )
+    )
+    req = ChatRequest(
+        messages=[Message.user("solve")],
+        model="claude-opus-4-8",
+        thinking=ThinkingConfig(budget_tokens=4096),
+    )
+    await provider.chat(req)
+
+    body = json.loads(route.calls[0].request.content)
+    assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert body["output_config"] == {"effort": "high"}
+    assert "temperature" not in body
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_oauth_opus_4_8_adaptive_thinking_skips_interleaved_beta():
+    oauth_provider = AnthropicProvider("sk-ant-oat01-fake", base_url="https://mock.anthropic.com")
+    route = respx.post("https://mock.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            text=_sse_lines({"type": "message_stop"}),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    req = ChatRequest(
+        messages=[Message.user("solve")],
+        model="claude-opus-4-8",
+        thinking=ThinkingConfig(budget_tokens=4096),
+    )
+    events = [event async for event in oauth_provider.stream(req)]
+
+    assert events[-1].done
+    beta = route.calls[0].request.headers["anthropic-beta"]
+    assert "oauth-2025-04-20" in beta
+    assert "fine-grained-tool-streaming-2025-05-14" in beta
+    assert "interleaved-thinking-2025-05-14" not in beta
 
 
 @respx.mock

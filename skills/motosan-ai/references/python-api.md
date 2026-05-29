@@ -31,7 +31,7 @@ from motosan_ai import Client
 
 # Factory methods (read env var automatically)
 client = Client.anthropic()                           # ANTHROPIC_API_KEY
-client = Client.anthropic(model="claude-opus-4-6")    # override model
+client = Client.anthropic(model="claude-opus-4-8")    # override model
 client = Client.openai(model="gpt-4o")                # OPENAI_API_KEY
 client = Client.minimax()                              # MINIMAX_API_KEY
 client = Client.ollama(model="llama3.2")               # local, no key needed
@@ -109,7 +109,9 @@ resp = await client.chat_with(req)
 
 Use when you need fields not exposed by `chat()` kwargs: `thinking`,
 `tool_choice`, `mcp_servers`, `system_blocks`, `stop_sequences`. If
-`request.model` is unset, `client.model` is used.
+`request.model` is unset, `client.model` is used. Anthropic Opus 4.8/4.7/4.6
+use adaptive thinking when `thinking` is set (`thinking.type = "adaptive"`,
+summarized display, `output_config.effort = "high"`), matching pi.
 
 ### `stream_with(request)` — full ChatRequest streaming
 

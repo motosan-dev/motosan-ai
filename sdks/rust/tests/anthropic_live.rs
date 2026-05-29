@@ -395,6 +395,54 @@ async fn live_collect_stream_records_max_tokens_on_chat_response() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+async fn live_opus_4_8_adaptive_thinking() {
+    let Some(key) = api_key() else {
+        eprintln!("ANTHROPIC_API_KEY not set, skipping");
+        return;
+    };
+
+    let client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key(key)
+        .model("claude-opus-4-8")
+        .build()
+        .expect("client build");
+
+    let request = ChatRequest::builder()
+        .message(Message::user(
+            "Compute 37 * 43. Think thoroughly, then answer with the final integer.",
+        ))
+        .thinking(1024)
+        .max_tokens(2048)
+        .build();
+
+    let mut stream = client.stream_with(request).await.expect("stream failed");
+    let mut thinking_chunks = 0usize;
+    let mut answer = String::new();
+    let mut done_seen = false;
+
+    while let Some(ev) = stream.next().await {
+        if ev.done {
+            done_seen = true;
+            break;
+        }
+        match ev.event_type {
+            StreamEventType::ThinkingDelta => thinking_chunks += 1,
+            StreamEventType::Text => answer.push_str(&ev.content),
+            _ => {}
+        }
+    }
+
+    assert!(done_seen, "stream must terminate with done");
+    assert!(
+        thinking_chunks > 0,
+        "Opus 4.8 adaptive thinking should emit ThinkingDelta events"
+    );
+    assert!(!answer.trim().is_empty(), "expected final answer text");
+    cooldown().await;
+}
+
+#[tokio::test]
 async fn live_stream_thinking() {
     let Some(client) = client() else {
         eprintln!("ANTHROPIC_API_KEY not set, skipping");

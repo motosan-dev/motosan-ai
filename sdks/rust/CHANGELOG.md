@@ -2,6 +2,15 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## 0.17.1 — 2026-05-29
+
+### Added
+- Anthropic model catalog now includes `claude-opus-4-8`.
+- Live Opus 4.8 adaptive-thinking regression test (`tests/anthropic_live.rs::live_opus_4_8_adaptive_thinking`). Verified with an `sk-ant-oat01-*` OAuth token.
+
+### Changed
+- Anthropic extended thinking for Opus 4.8/4.7/4.6 now follows pi's adaptive-thinking shape (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) instead of the older budget-token shape. OAuth requests using adaptive thinking also omit the legacy `interleaved-thinking` beta header, matching pi's handling.
+
 ## 0.17.0 — 2026-05-29
 
 BREAKING:

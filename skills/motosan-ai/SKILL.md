@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.12.0 / Rust 0.15.5
+Multi-provider LLM SDK — Python 0.12.1 / Rust 0.17.1
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI
 
@@ -20,7 +20,7 @@ pip install "motosan-ai[anthropic,openai,gemini]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.15.5", features = ["anthropic"] }
+motosan-ai = { version = "0.17.1", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
@@ -49,6 +49,8 @@ codex-oauth = "0.1"
 | Ollama    | `llama3.2`               |
 | Gemini    | `gemini-2.5-flash`       |
 | Gemini Code Assist | `gemini-2.5-flash` |
+
+Anthropic catalog includes `claude-opus-4-8` as an override. For Opus 4.8/4.7/4.6, `thinking` uses Anthropic adaptive thinking (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`) and OAuth adaptive-thinking requests omit the legacy `interleaved-thinking` beta header, matching pi.
 
 ## Minimal Example
 
@@ -122,7 +124,7 @@ if token.is_expired() { /* refresh */ }
 - **Stream `done` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with `done == true`, even when the upstream provider closes without `[DONE]` and without any `finish_reason` chunk. Callers can rely on `if event.done { break; }` to terminate cleanly. The terminal event carries `stop_reason: Option<StopReason>` when the provider reports one (Anthropic/MiniMax `message_delta.stop_reason`, OpenAI `choices[0].finish_reason`); `None` otherwise. `collect_stream` honors the explicit reason and only falls back to a tool-calls heuristic when none was reported.
 - **`ChatRequest`**: Use builder pattern in Rust (`ChatRequest::builder().messages(...).build()`), dataclass in Python
 - **ThinkStripper**: Applied automatically in all `stream()` / `stream_with()` calls — no manual setup needed
-- **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens
+- **Anthropic OAuth**: Auto-detected by token prefix (`sk-ant-oat01*`), `chat()` auto-redirects to `stream()` for OAuth tokens. Budget-based thinking sends `display: "summarized"`; Opus 4.8/4.7/4.6 thinking uses adaptive mode and skips the legacy interleaved-thinking beta.
 - **Retry**: Enabled by default (3 retries, exponential backoff, jitter) for 429/5xx/timeout
 - **`ProviderCapabilities`**: Rust `ProviderImpl` and Python `BaseProvider` expose `capabilities` / `validate_request()` guardrails. Providers that support images/documents declare capabilities; clients/providers validate before HTTP. Capability table: Anthropic → `full()` (image + doc), OpenAI/Gemini/GeminiCodeAssist → `with_image()`, all others → `text_only()`.
 - **Gemini HTTP providers**: `GeminiProvider` is available in Rust (feature `gemini`) and Python (`Client.gemini()`, `Provider.gemini`, `GEMINI_API_KEY`) for `generativelanguage.googleapis.com`, API key auth, pay-per-token. Python default model is `gemini-2.5-flash`. `GeminiCodeAssistProvider` is available in Rust (feature `gemini-code-assist`) and Python v0.10.0 (`Client.gemini_code_assist()`, `Provider.gemini_code_assist`) for `cloudcode-pa.googleapis.com/v1internal`, OAuth Bearer token (`ya29.*`), requires GCP project ID, subscription billing. Python includes `motosan_ai.oauth` PKCE helpers and a 0600 token cache. **Critical**: For `GeminiProvider`, `Message.tool_result` / `Message::tool_result` must use the function name (not opaque call ID) as `tool_call_id` — Gemini API requires `functionResponse.name` = function name.
