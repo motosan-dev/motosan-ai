@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.17.1 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.18.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.12.1 |
 
 ## Install
@@ -34,7 +34,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.17.1", features = ["anthropic"] }
+motosan-ai = { version = "0.18.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
@@ -71,6 +71,15 @@ Anthropic's default remains `claude-sonnet-4-6`; override with `claude-opus-4-8`
 >     .openai_chat_url("https://api.groq.com/openai/v1/chat/completions")
 >     .build()?;
 > ```
+
+## Tool declarations (Rust)
+
+Rust `Tool` now composes `motosan_agent_primitives::ToolSchema`:
+`Tool { schema: ToolSchema { name, description, input_schema }, cache }`.
+`description` and `input_schema` are required. The old optional
+`agent-tool` feature and `ToolDef` compatibility conversions were removed;
+use `ChatRequest::builder().tool_schemas(&schemas)` when bridging from agent
+framework tool definitions.
 
 ## Backends (Rust)
 
