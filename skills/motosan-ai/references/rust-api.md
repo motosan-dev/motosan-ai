@@ -86,9 +86,11 @@ let request = ChatRequest::builder()
     .model("claude-opus-4-8")
     .temperature(0.7)
     .max_tokens(1024)
-    .tools(vec![...])  // see tool-use.md
+    .tools(vec![...])  // Vec<Tool>; Tool composes ToolSchema (0.18.0+) — see tool-use.md
     .provider_options(json!({"key": "val"}))  // provider escape hatch
     .build();
+// Bridging agent-side schemas: .tool_schemas(&[ToolSchema]) replaces the
+// removed .tool_defs(&[ToolDef]) (the agent-tool feature was dropped in 0.18.0).
 
 let resp = client.chat_with(request).await?;
 ```

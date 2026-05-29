@@ -17,21 +17,31 @@ tools = [Tool(
 )]
 ```
 
-**Rust:**
+**Rust (0.18.0+):** `Tool` composes `motosan_agent_primitives::ToolSchema`
+(re-exported as `motosan_ai::ToolSchema`) via `#[serde(flatten)]`.
+`description` and `input_schema` are required fields on `ToolSchema` — they
+are **no longer `Option`**:
 ```rust
-use motosan_ai::Tool;
+use motosan_ai::{Tool, ToolSchema};
 use serde_json::json;
 
-let tools = vec![Tool {
+let tools = vec![Tool::from(ToolSchema {
     name: "get_weather".into(),
-    description: Some("Get current weather for a city".into()),
-    input_schema: Some(json!({
+    description: "Get current weather for a city".into(),
+    input_schema: json!({
         "type": "object",
         "properties": {"city": {"type": "string"}},
         "required": ["city"]
-    })),
-}];
+    }),
+})];
 ```
+
+When bridging tools declared on the agent side, pass `ToolSchema`s straight
+through with `ChatRequest::builder().tool_schemas(&schemas)`. The old
+`tool_defs(&[ToolDef])` builder, the `agent-tool` feature, and the
+`motosan-agent-tool` dependency were all removed in 0.18.0; field reads on
+`Tool` still work through `Deref<Target = ToolSchema>`. (This is a Rust-only
+change — Python `Tool` is unchanged.)
 
 ## ToolCall Fields
 
