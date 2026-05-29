@@ -29,6 +29,7 @@ pub use models::{
     MINIMAX_MODELS, OPENAI_MODELS,
 };
 pub use providers::Provider;
+pub use motosan_agent_primitives::ToolSchema;
 pub use retry::RetryPolicy;
 #[cfg(any(
     feature = "anthropic",

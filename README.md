@@ -74,7 +74,8 @@ Anthropic's default remains `claude-sonnet-4-6`; override with `claude-opus-4-8`
 
 ## Tool declarations (Rust)
 
-Rust `Tool` now composes `motosan_agent_primitives::ToolSchema`:
+Rust `Tool` now composes `motosan_agent_primitives::ToolSchema`, re-exported as
+`motosan_ai::ToolSchema` for SDK callers:
 `Tool { schema: ToolSchema { name, description, input_schema }, cache }`.
 `description` and `input_schema` are required. The old optional
 `agent-tool` feature and `ToolDef` compatibility conversions were removed;

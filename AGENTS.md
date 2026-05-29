@@ -7,7 +7,8 @@ Rust v0.18.0 (local; crates.io latest may lag until release) · Python v0.12.1 (
 ## Current Rust Tool Schema Note
 
 Rust 0.18.0 removes the optional `agent-tool` feature. `types::Tool` now
-composes `motosan_agent_primitives::ToolSchema` with `#[serde(flatten)]` and
+composes `motosan_agent_primitives::ToolSchema` (also re-exported as
+`motosan_ai::ToolSchema`) with `#[serde(flatten)]` and
 `Deref<Target = ToolSchema>`; `ChatRequestBuilder::tool_defs` is replaced by
 `tool_schemas(&[ToolSchema])`.
 
