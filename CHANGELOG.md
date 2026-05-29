@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.16.0] — 2026-05-26
+
+### Breaking (Rust only)
+
+- **`motosan-agent-tool` dep bumped to 0.4**. Consumers of `motosan-ai` Rust SDK with `--features agent-tool` must bump their `motosan-agent-tool` dep alongside. No public SDK signature changed at the type level; the semver bump reflects the transitive crate identity change.
+
+See [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md) for the canonical Rust SDK changelog with full per-release detail.
+
 ## [rust-0.15.5] — 2026-05-23
 
 ### Fixed
