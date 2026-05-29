@@ -62,16 +62,18 @@ async fn live_minimax_tool_use_roundtrip() {
     };
 
     let tools = vec![Tool {
-        name: "add".to_string(),
-        description: Some("Add two integers".to_string()),
-        input_schema: Some(json!({
-            "type": "object",
-            "properties": {
-                "a": {"type": "integer"},
-                "b": {"type": "integer"}
-            },
-            "required": ["a", "b"]
-        })),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "add".to_string(),
+            description: "Add two integers".to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "a": {"type": "integer"},
+                    "b": {"type": "integer"}
+                },
+                "required": ["a", "b"]
+            }),
+        },
         cache: false,
     }];
 

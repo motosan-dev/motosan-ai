@@ -124,11 +124,11 @@ async fn ollama_native_tool_calls_generates_id() {
     let request = ChatRequest::builder()
         .message(Message::user("weather?"))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get weather".to_string()),
-            input_schema: Some(
-                json!({"type":"object","properties":{"location":{"type":"string"}}}),
-            ),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                input_schema: json!({"type":"object","properties":{"location":{"type":"string"}}}),
+            },
             cache: false,
         }])
         .build();
@@ -353,11 +353,11 @@ async fn ollama_native_stream_single_tool_call_emits_3_events() {
     let request = ChatRequest::builder()
         .message(Message::user("weather?"))
         .tools(vec![Tool {
-            name: "get_weather".to_string(),
-            description: Some("Get weather".to_string()),
-            input_schema: Some(
-                json!({"type": "object", "properties": {"city": {"type": "string"}}}),
-            ),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get weather".to_string(),
+                input_schema: json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+            },
             cache: false,
         }])
         .build();

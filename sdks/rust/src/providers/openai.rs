@@ -421,12 +421,13 @@ impl OpenAIRequestBuilder {
             let mapped_tools: Vec<Value> = tools
                 .into_iter()
                 .map(|tool| {
+                    let schema = tool.schema;
                     json!({
                         "type": "function",
                         "function": {
-                            "name": tool.name,
-                            "description": tool.description.unwrap_or_default(),
-                            "parameters": tool.input_schema.unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                            "name": schema.name,
+                            "description": schema.description,
+                            "parameters": schema.input_schema,
                         }
                     })
                 })

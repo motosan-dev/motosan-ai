@@ -2,7 +2,15 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.17.1 (crates.io) · Python v0.12.1 (PyPI)
+Rust v0.18.0 (local; crates.io latest may lag until release) · Python v0.12.1 (PyPI)
+
+## Current Rust Tool Schema Note
+
+Rust 0.18.0 removes the optional `agent-tool` feature. `types::Tool` now
+composes `motosan_agent_primitives::ToolSchema` (also re-exported as
+`motosan_ai::ToolSchema`) with `#[serde(flatten)]` and
+`Deref<Target = ToolSchema>`; `ChatRequestBuilder::tool_defs` is replaced by
+`tool_schemas(&[ToolSchema])`.
 
 ## Where To Find Things
 

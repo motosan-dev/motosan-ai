@@ -178,13 +178,15 @@ async fn live_stream_event_types() {
 async fn live_tool_use_single_turn() {
     let Some(p) = provider() else { return };
     let tool = Tool {
-        name: "get_weather".into(),
-        description: Some("Get weather for a city.".into()),
-        input_schema: Some(json!({
-            "type": "object",
-            "properties": {"city": {"type": "string"}},
-            "required": ["city"]
-        })),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "get_weather".into(),
+            description: "Get weather for a city.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"]
+            }),
+        },
         cache: false,
     };
     let req = ChatRequest::builder()

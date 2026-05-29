@@ -18,6 +18,8 @@ Provider logic goes in `providers/` only — never in `client.rs`/`client.py`. T
 
 Tool call field is `input`, not `args` or `params`. Everywhere, both SDKs.
 
+Rust `Tool` composes `motosan_agent_primitives::ToolSchema` (re-exported as `motosan_ai::ToolSchema`) since 0.18.0 — `description`/`input_schema` are required, NOT `Option`. The `agent-tool` feature and `motosan-agent-tool` dependency are gone; bridge agent tools with `ChatRequestBuilder::tool_schemas(&[ToolSchema])` (the old `tool_defs(&[ToolDef])` was removed). Rust-only change — Python `Tool` is unaffected.
+
 `ChatResponse.tool_calls` is always a list/Vec — never optional, never nullable.
 
 Anthropic and OpenAI serialize tool calls differently. Read `@specs/types.md` and the provider files before touching serialization. Mixing them up is the #1 source of bugs.

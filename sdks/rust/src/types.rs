@@ -1,6 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::ops::Deref;
 
 /// Configuration for extended thinking (Anthropic).
 ///
@@ -271,13 +272,29 @@ impl Message {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tool {
-    pub name: String,
-    pub description: Option<String>,
-    pub input_schema: Option<Value>,
-    /// When `true`, the Anthropic provider will attach `cache_control` to this
-    /// tool definition.  Non-Anthropic providers silently ignore this flag.
+    #[serde(flatten)]
+    pub schema: motosan_agent_primitives::ToolSchema,
+    /// When `true`, the Anthropic provider attaches `cache_control` to this
+    /// tool definition. Non-Anthropic providers ignore it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub cache: bool,
+}
+
+impl Deref for Tool {
+    type Target = motosan_agent_primitives::ToolSchema;
+
+    fn deref(&self) -> &motosan_agent_primitives::ToolSchema {
+        &self.schema
+    }
+}
+
+impl From<motosan_agent_primitives::ToolSchema> for Tool {
+    fn from(schema: motosan_agent_primitives::ToolSchema) -> Self {
+        Self {
+            schema,
+            cache: false,
+        }
+    }
 }
 
 /// Server-side MCP server transport type.
@@ -470,9 +487,9 @@ impl ChatRequestBuilder {
         self
     }
 
-    #[cfg(feature = "agent-tool")]
-    pub fn tool_defs(mut self, defs: &[motosan_agent_tool::ToolDef]) -> Self {
-        self.tools = Some(defs.iter().cloned().map(Tool::from).collect());
+    /// Register tool declarations from canonical [`motosan_agent_primitives::ToolSchema`]s.
+    pub fn tool_schemas(mut self, schemas: &[motosan_agent_primitives::ToolSchema]) -> Self {
+        self.tools = Some(schemas.iter().cloned().map(Tool::from).collect());
         self
     }
 
@@ -915,6 +932,27 @@ impl ProviderCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_composes_flattened_tool_schema_and_builder_accepts_schemas() {
+        let schema = motosan_agent_primitives::ToolSchema::new(
+            "get_weather",
+            "Fetch weather",
+            json!({"type":"object"}),
+        );
+        let tool = Tool::from(schema.clone());
+        assert_eq!(tool.schema, schema);
+        assert_eq!(tool.name, "get_weather");
+
+        let value = serde_json::to_value(&tool).unwrap();
+        assert_eq!(value["name"], "get_weather");
+        assert_eq!(value["description"], "Fetch weather");
+        assert!(value.get("schema").is_none());
+
+        let req = ChatRequest::builder().tool_schemas(&[schema]).build();
+        assert_eq!(req.tools.unwrap()[0].name, "get_weather");
+    }
 
     #[test]
     fn document_source_base64_serde_roundtrip() {

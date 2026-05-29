@@ -7,6 +7,7 @@ use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventT
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Client {
     provider: Provider,
     api_key: String,
@@ -1284,7 +1285,9 @@ mod think_stripper_stream_tests {
 
 #[cfg(test)]
 mod dispatch_validation_tests {
+    #[cfg(any(feature = "minimax", feature = "ollama_native"))]
     use super::*;
+    #[cfg(any(feature = "minimax", feature = "ollama_native"))]
     use crate::types::Message;
 
     #[cfg(feature = "ollama_native")]

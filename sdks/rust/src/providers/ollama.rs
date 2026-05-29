@@ -186,8 +186,8 @@ impl OllamaProvider {
                         "type": "function",
                         "function": {
                             "name": tool.name,
-                            "description": tool.description.clone().unwrap_or_default(),
-                            "parameters": tool.input_schema.clone().unwrap_or_else(|| json!({"type":"object","properties":{}})),
+                            "description": tool.description,
+                            "parameters": tool.input_schema,
                         }
                     })
                 })

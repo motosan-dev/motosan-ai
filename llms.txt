@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.12.1 · Rust 0.17.1
+- Python 0.12.1 · Rust 0.18.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.17.1", features = ["anthropic"] }
+motosan-ai = { version = "0.18.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -353,17 +353,24 @@ tools = [Tool(
 )]
 ```
 
-**Rust:**
+**Rust (0.18.0+):** `Tool` composes `motosan_agent_primitives::ToolSchema`
+(re-exported as `motosan_ai::ToolSchema`). `description` and `input_schema`
+are required fields on `ToolSchema` — no longer `Option`:
 ```rust
-use motosan_ai::Tool;
+use motosan_ai::{Tool, ToolSchema};
 use serde_json::json;
 
-let tools = vec![Tool {
+let tools = vec![Tool::from(ToolSchema {
     name: "get_weather".into(),
-    description: Some("Get weather for a city".into()),
-    input_schema: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]})),
-}];
+    description: "Get weather for a city".into(),
+    input_schema: json!({"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}),
+})];
 ```
+
+When bridging from agent-side declarations, pass `ToolSchema`s directly via
+`ChatRequest::builder().tool_schemas(&schemas)` — the old `tool_defs(&[ToolDef])`
+builder, the `agent-tool` feature, and the `motosan-agent-tool` dependency were
+all removed in 0.18.0.
 
 ### Multi-turn Tool Loop (Python)
 

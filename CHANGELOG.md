@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.18.0] — 2026-05-29
+
+### Breaking (Rust only)
+
+- **`Tool` now composes `motosan_agent_primitives::ToolSchema`** via `#[serde(flatten)]`. As a result `Tool::description` and `Tool::input_schema` are **no longer `Option`** — they are required fields sourced from `ToolSchema`. Field reads continue to work through `Deref<Target = ToolSchema>`; struct-literal callers must wrap those fields in `schema: ToolSchema { .. }` (or use `From<ToolSchema>`).
+- **Removed the `agent-tool` feature**, the optional `motosan-agent-tool` dependency, and the `tool_compat.rs` `ToolDef` compatibility conversions. The Rust SDK no longer depends on `motosan-agent-tool` at all.
+- **`ChatRequestBuilder::tool_defs(&[ToolDef])` replaced by `tool_schemas(&[ToolSchema])`.** Callers that previously passed `ToolDef`s now pass `ToolSchema`s (a `ToolDef` derefs to / exposes its `ToolSchema`).
+
+### Added
+
+- New dependency on **`motosan-agent-primitives`** for the canonical `ToolSchema` tool-declaration type, re-exported at the `motosan_ai` crate root.
+- `Deref<Target = ToolSchema>` and `From<ToolSchema>` for `Tool`.
+
+See [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md) for the canonical Rust SDK changelog with full per-release detail. This change is Rust-only — the Python SDK is unaffected.
+
 ## [rust-0.17.1 / python-0.12.1] — 2026-05-29
 
 ### Added

@@ -2,6 +2,21 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## 0.18.0 — 2026-05-29
+
+### Changed (BREAKING)
+- `Tool` now composes `motosan_agent_primitives::ToolSchema` via
+  `#[serde(flatten)]`; `description` and `input_schema` are no longer
+  optional fields.
+- Replaced `ChatRequestBuilder::tool_defs(&[ToolDef])` with
+  `tool_schemas(&[ToolSchema])`.
+- Removed the `agent-tool` feature, the optional `motosan-agent-tool`
+  dependency, and the `ToolDef` compatibility conversions.
+
+### Added
+- New dependency on `motosan-agent-primitives` for the canonical tool schema.
+- `Deref<Target = ToolSchema>` and `From<ToolSchema>` for `Tool`.
+
 ## 0.17.1 — 2026-05-29
 
 ### Added

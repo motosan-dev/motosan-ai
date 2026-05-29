@@ -150,9 +150,11 @@ async fn chat_sends_tool_declarations() {
         .await;
 
     let tool = Tool {
-        name: "search".into(),
-        description: None,
-        input_schema: None,
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "search".into(),
+            description: String::new(),
+            input_schema: serde_json::json!({"type":"object"}),
+        },
         cache: false,
     };
     let provider = GeminiProvider::new("key", None, Some(server.url()));

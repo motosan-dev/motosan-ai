@@ -227,9 +227,11 @@ async fn stream_collect_with_tool_calls() {
     let request = ChatRequest::builder()
         .message(Message::user("search for rust"))
         .tools(vec![Tool {
-            name: "search".to_string(),
-            description: Some("Search".to_string()),
-            input_schema: Some(json!({"type": "object", "properties": {"q": {"type": "string"}}})),
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "search".to_string(),
+                description: "Search".to_string(),
+                input_schema: json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+            },
             cache: false,
         }])
         .build();

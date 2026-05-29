@@ -171,15 +171,17 @@ async fn live_tool_use_single_turn() {
     };
 
     let tool = Tool {
-        name: "get_current_temperature".into(),
-        description: Some("Returns the current temperature for a given city.".into()),
-        input_schema: Some(json!({
-            "type": "object",
-            "properties": {
-                "city": {"type": "string", "description": "City name"}
-            },
-            "required": ["city"]
-        })),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "get_current_temperature".into(),
+            description: "Returns the current temperature for a given city.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name"}
+                },
+                "required": ["city"]
+            }),
+        },
         cache: false,
     };
 
@@ -216,16 +218,18 @@ async fn live_tool_use_multi_turn() {
     };
 
     let tool = Tool {
-        name: "add_numbers".into(),
-        description: Some("Adds two numbers together.".into()),
-        input_schema: Some(json!({
-            "type": "object",
-            "properties": {
-                "a": {"type": "number"},
-                "b": {"type": "number"}
-            },
-            "required": ["a", "b"]
-        })),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "add_numbers".into(),
+            description: "Adds two numbers together.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "a": {"type": "number"},
+                    "b": {"type": "number"}
+                },
+                "required": ["a", "b"]
+            }),
+        },
         cache: false,
     };
 

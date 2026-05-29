@@ -8,9 +8,11 @@ use serde_json::json;
 
 fn dummy_tool() -> Tool {
     Tool {
-        name: "get_weather".to_string(),
-        description: Some("Get weather info".to_string()),
-        input_schema: Some(json!({"type": "object", "properties": {"city": {"type": "string"}}})),
+        schema: motosan_agent_primitives::ToolSchema {
+            name: "get_weather".to_string(),
+            description: "Get weather info".to_string(),
+            input_schema: json!({"type": "object", "properties": {"city": {"type": "string"}}}),
+        },
         cache: false,
     }
 }
