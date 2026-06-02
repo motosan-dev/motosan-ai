@@ -28,8 +28,8 @@ pub use models::{
     ANTHROPIC_MODELS, DEFAULT_ANTHROPIC_MODEL, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL,
     MINIMAX_MODELS, OPENAI_MODELS,
 };
-pub use providers::Provider;
 pub use motosan_agent_primitives::ToolSchema;
+pub use providers::Provider;
 pub use retry::RetryPolicy;
 #[cfg(any(
     feature = "anthropic",

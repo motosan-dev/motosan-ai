@@ -2,6 +2,12 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## 0.19.0 — 2026-06-02
+
+### Changed
+- Bumped the public `motosan-agent-primitives` dependency to 0.4.0 so bridge
+  crates share the Reviewer-era primitive types. No SDK API shape changed.
+
 ## 0.18.0 — 2026-05-29
 
 ### Changed (BREAKING)
