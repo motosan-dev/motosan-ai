@@ -1144,6 +1144,37 @@ mod tests {
     }
 
     #[test]
+    fn cached_multimodal_user_message_serializes_cache_control_on_last_block() {
+        // The content_blocks (image/document/multimodal) user arm places
+        // cache_control on the LAST block. oauth does NOT branch this arm, so
+        // this pins oauth-invariance of the multimodal-user cache breakpoint.
+        // A single text block is enough to hit the content_blocks arm.
+        for oauth in [false, true] {
+            let req = ChatRequest::builder()
+                .message(
+                    crate::types::Message::user_with_blocks(vec![
+                        crate::types::ContentBlock::Text {
+                            text: "describe this".to_string(),
+                        },
+                    ])
+                    .with_cache(),
+                )
+                .build();
+            let body =
+                AnthropicRequestBuilder::new(req, "claude-opus-4-8".to_string(), oauth).build();
+
+            let msgs = body["messages"].as_array().expect("messages array");
+            let blocks = msgs
+                .last()
+                .expect("a message")["content"]
+                .as_array()
+                .expect("content blocks");
+            let cc = &blocks.last().expect("a content block")["cache_control"]["type"];
+            assert_eq!(cc, "ephemeral", "oauth={oauth}");
+        }
+    }
+
+    #[test]
     fn capabilities_are_full_by_default() {
         let p = AnthropicProvider::new("key", None, None);
         let caps = p.capabilities();
