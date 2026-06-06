@@ -54,11 +54,11 @@ describe('ClientBuilder', () => {
     expect(client).toBeInstanceOf(Client)
   })
 
-  it('supports minimaxEndpoint override', () => {
+  it('supports minimaxBaseUrl override', () => {
     const client = new ClientBuilder()
       .provider('minimax')
       .apiKey('test-key')
-      .minimaxEndpoint('https://custom.minimax.api/v1/chat')
+      .minimaxBaseUrl('https://custom.minimax.api/anthropic')
       .build()
     expect(client).toBeInstanceOf(Client)
   })
@@ -116,9 +116,13 @@ describe('Client capability validation (dispatch)', () => {
         async () =>
           new Response(
             JSON.stringify({
+              id: 'msg_1',
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Hi!' }],
               model: 'MiniMax-M2.7',
-              choices: [{ message: { content: 'Hi!' }, finish_reason: 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1 },
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 1, output_tokens: 1 },
             }),
             { status: 200 },
           ),

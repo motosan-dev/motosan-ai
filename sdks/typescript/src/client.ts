@@ -59,7 +59,7 @@ export class ClientBuilder {
   protected _retryPolicy: RetryPolicy = RetryPolicy.default()
   protected _streamReadTimeoutSecs?: number
   protected _anthropicBaseUrl?: string
-  protected _minimaxEndpoint?: string
+  protected _minimaxBaseUrl?: string
   protected _openaiAuthStyle: OpenAIAuthStyle = { kind: 'bearer' }
   protected _openaiChatUrl?: string
   protected _openaiResponsesFallback = false
@@ -95,8 +95,9 @@ export class ClientBuilder {
     return this
   }
 
-  minimaxEndpoint(u: string): this {
-    this._minimaxEndpoint = u
+  /** MiniMax Anthropic-compat BASE URL; the final URL is `{base}/v1/messages`. */
+  minimaxBaseUrl(u: string): this {
+    this._minimaxBaseUrl = u
     return this
   }
 
@@ -157,7 +158,7 @@ export class ClientBuilder {
       }
       return openai
     }
-    return new MinimaxProvider(apiKey, this._model, this._minimaxEndpoint).withRetryPolicy(
+    return new MinimaxProvider(apiKey, this._model, this._minimaxBaseUrl).withRetryPolicy(
       this._retryPolicy,
     )
   }
@@ -199,7 +200,7 @@ export class Client {
           provider: ProviderName | ProviderLike
           apiKey?: string
           model?: string
-          minimaxEndpoint?: string
+          minimaxBaseUrl?: string
         }
       | ProviderLike,
     streamReadTimeoutSecs?: number,
@@ -215,7 +216,7 @@ export class Client {
       provider: ProviderName | ProviderLike
       apiKey?: string
       model?: string
-      minimaxEndpoint?: string
+      minimaxBaseUrl?: string
     }
 
     if (typeof opts.provider !== 'string') {
@@ -234,7 +235,7 @@ export class Client {
     } else if (provider === 'openai') {
       this.provider = new OpenAIProvider(apiKey, opts.model)
     } else {
-      this.provider = new MinimaxProvider(apiKey, opts.model, opts.minimaxEndpoint)
+      this.provider = new MinimaxProvider(apiKey, opts.model, opts.minimaxBaseUrl)
     }
   }
 

@@ -1,168 +1,143 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_MINIMAX_MODEL } from '../src/models.js'
 import { MinimaxProvider } from '../src/providers/minimax.js'
+import { textOnly } from '../src/provider.js'
 import type { ChatRequest } from '../src/types.js'
 
-describe('minimax provider serialization', () => {
+function anthropicResponse(model = DEFAULT_MINIMAX_MODEL) {
+  return new Response(
+    JSON.stringify({
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'ok' }],
+      model,
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 5 },
+    }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  )
+}
+
+describe('MinimaxProvider (Anthropic-compat wire)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
   })
 
-  it('serializes messages via serializeOpenAiRequest and produces correct body', async () => {
-    let capturedBody: any
+  it('posts an Anthropic-wire body to the default {base}/v1/messages', async () => {
+    let url = ''
+    let headers: Record<string, string> = {}
+    let body: any
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_url: string, options?: RequestInit) => {
-        capturedBody = JSON.parse(String(options?.body ?? '{}'))
-        return new Response(
-          JSON.stringify({
-            id: 'cmpl_123',
-            model: DEFAULT_MINIMAX_MODEL,
-            choices: [
-              {
-                message: { role: 'assistant', content: 'ok' },
-                finish_reason: 'stop'
-              }
-            ],
-            usage: { prompt_tokens: 10, completion_tokens: 5 }
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        )
-      })
+      vi.fn(async (u: string, options?: RequestInit) => {
+        url = u
+        headers = (options?.headers as Record<string, string>) ?? {}
+        body = JSON.parse(String(options?.body ?? '{}'))
+        return anthropicResponse()
+      }),
     )
 
-    const provider = new MinimaxProvider('test-key')
+    const provider = new MinimaxProvider('mm-key')
     const request: ChatRequest = {
-      messages: [
-        { role: 'user', content: 'What is 2+2?' },
-        {
-          role: 'assistant',
-          content: '2+2=4',
-          toolCalls: [{ id: 'call_1', name: 'calculator', input: { expr: '2+2' } }]
-        },
-        { role: 'tool', toolCallId: 'call_1', content: '4' }
-      ],
-      system: 'You are a helpful assistant.',
-      temperature: 0.7,
+      messages: [{ role: 'user', content: 'What is 2+2?' }],
+      system: 'You are helpful.',
       maxTokens: 256,
-      tools: [
-        {
-          name: 'calculator',
-          description: 'Evaluate math',
-          inputSchema: { type: 'object', properties: { expr: { type: 'string' } } }
-        }
-      ]
     }
+    const response = await provider.chat(request)
 
-    await provider.chat(request)
+    // Default URL is the Anthropic-compat base + /v1/messages, NOT the legacy endpoint.
+    expect(url).toBe('https://api.minimax.io/anthropic/v1/messages')
+    expect(url).not.toContain('chatcompletion_v2')
 
-    // Verify the captured body has OpenAI wire format
-    expect(capturedBody.model).toBe(DEFAULT_MINIMAX_MODEL)
+    // x-api-key auth (NOT Authorization: Bearer), plus anthropic-version.
+    expect(headers['x-api-key']).toBe('mm-key')
+    expect('authorization' in headers).toBe(false)
+    expect(headers['anthropic-version']).toBe('2023-06-01')
 
-    // System message should be FIRST message in the array (OpenAI format)
-    expect(capturedBody.messages[0]).toEqual({
-      role: 'system',
-      content: 'You are a helpful assistant.'
-    })
+    // Anthropic wire body: top-level `system` string, default model, messages array.
+    expect(body.model).toBe(DEFAULT_MINIMAX_MODEL)
+    expect(body.system).toBe('You are helpful.')
+    expect(body.max_tokens).toBe(256)
+    expect(body.messages[0]).toEqual({ role: 'user', content: 'What is 2+2?' })
 
-    // User message comes next
-    expect(capturedBody.messages[1]).toEqual({
-      role: 'user',
-      content: 'What is 2+2?'
-    })
-
-    // Assistant message with tool_calls
-    const assistantMsg = capturedBody.messages[2]
-    expect(assistantMsg.role).toBe('assistant')
-    expect(assistantMsg.content).toBe('2+2=4')
-    expect(Array.isArray(assistantMsg.tool_calls)).toBe(true)
-    expect(assistantMsg.tool_calls[0]).toEqual({
-      id: 'call_1',
-      type: 'function',
-      function: {
-        name: 'calculator',
-        arguments: JSON.stringify({ expr: '2+2' })
-      }
-    })
-
-    // Tool result message
-    expect(capturedBody.messages[3]).toEqual({
-      role: 'tool',
-      tool_call_id: 'call_1',
-      content: '4'
-    })
-
-    // Tools array (flat OpenAI format)
-    expect(Array.isArray(capturedBody.tools)).toBe(true)
-    expect(capturedBody.tools[0]).toEqual({
-      type: 'function',
-      function: {
-        name: 'calculator',
-        description: 'Evaluate math',
-        parameters: { type: 'object', properties: { expr: { type: 'string' } } }
-      }
-    })
-
-    // Temperature and maxTokens
-    expect(capturedBody.temperature).toBe(0.7)
-    expect(capturedBody.max_tokens).toBe(256)
+    // Anthropic-style response parse.
+    expect(response.content).toBe('ok')
+    expect(response.stopReason).toBe('end_turn')
+    expect(response.usage.inputTokens).toBe(10)
+    expect(response.usage.outputTokens).toBe(5)
   })
 
-  it('respects custom endpoint and Bearer auth', async () => {
-    let capturedUrl: string = ''
-    let capturedHeaders: HeadersInit = {}
+  it('default model is MiniMax-M2.7', async () => {
+    let body: any
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: string, options?: RequestInit) => {
-        capturedUrl = url
-        capturedHeaders = options?.headers ?? {}
-        return new Response(
-          JSON.stringify({
-            id: 'cmpl_456',
-            model: 'test-model',
-            choices: [{ message: { role: 'assistant', content: 'test' }, finish_reason: 'stop' }],
-            usage: { prompt_tokens: 1, completion_tokens: 1 }
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } }
-        )
-      })
+      vi.fn(async (_u: string, options?: RequestInit) => {
+        body = JSON.parse(String(options?.body ?? '{}'))
+        return anthropicResponse()
+      }),
     )
-
-    const customEndpoint = 'https://custom.minimax.example/v1/api'
-    const provider = new MinimaxProvider('custom-key', 'custom-model', customEndpoint)
-
-    await provider.chat({
-      messages: [{ role: 'user', content: 'test' }]
-    })
-
-    expect(capturedUrl).toBe(customEndpoint)
-    expect((capturedHeaders as Record<string, string>).authorization).toBe('Bearer custom-key')
+    await new MinimaxProvider('mm-key').chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(body.model).toBe('MiniMax-M2.7')
+    expect(DEFAULT_MINIMAX_MODEL).toBe('MiniMax-M2.7')
   })
 
-  it('stream respects stream:true flag in body', async () => {
-    let capturedBody: any
+  it('respects a custom base URL → {custom}/v1/messages', async () => {
+    let url = ''
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_url: string, options?: RequestInit) => {
-        capturedBody = JSON.parse(String(options?.body ?? '{}'))
-        return new Response('', { status: 200, headers: { 'content-type': 'text/event-stream' } })
-      })
+      vi.fn(async (u: string) => {
+        url = u
+        return anthropicResponse()
+      }),
     )
+    const provider = new MinimaxProvider('mm-key', 'MiniMax-M2.7', 'https://proxy.example/anthropic')
+    await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(url).toBe('https://proxy.example/anthropic/v1/messages')
+  })
 
-    const provider = new MinimaxProvider('test-key')
-    const request: ChatRequest = {
-      messages: [{ role: 'user', content: 'test' }]
+  it('reports text-only capabilities', () => {
+    const provider = new MinimaxProvider('mm-key')
+    expect(provider.capabilities()).toEqual(textOnly())
+  })
+
+  it('streams via the Anthropic SSE adapter and posts stream:true', async () => {
+    let body: any
+    const sse =
+      'event: message_start\ndata: {"message":{"usage":{"input_tokens":1,"output_tokens":0}}}\n\n' +
+      'event: content_block_delta\ndata: {"delta":{"type":"text_delta","text":"hello"}}\n\n' +
+      'event: message_stop\ndata: {}\n\n'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_u: string, options?: RequestInit) => {
+        body = JSON.parse(String(options?.body ?? '{}'))
+        return new Response(sse, {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }),
+    )
+    const provider = new MinimaxProvider('mm-key')
+    const texts: string[] = []
+    for await (const e of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      if (e.eventType === 'text' && e.content) texts.push(e.content)
     }
+    expect(body.stream).toBe(true)
+    expect(texts.join('')).toBe('hello')
+  })
+})
 
-    // Consume the async generator without caring about the events
-    try {
-      for await (const _ of provider.stream(request)) {
-        break
-      }
-    } catch {
-      // Ignore stream parsing errors; we only care about the body
-    }
-
-    expect(capturedBody.stream).toBe(true)
+// Env-gated live test — skipped unless MINIMAX_API_KEY is set.
+const liveKey = process.env.MINIMAX_API_KEY
+const liveDescribe = liveKey ? describe : describe.skip
+liveDescribe('MinimaxProvider live', () => {
+  it('chats against the real MiniMax Anthropic-compat endpoint', async () => {
+    const provider = new MinimaxProvider(liveKey as string)
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: 'Reply with the single word: pong' }],
+      maxTokens: 16,
+    })
+    expect(typeof response.content).toBe('string')
+    expect(response.content.length).toBeGreaterThan(0)
   })
 })

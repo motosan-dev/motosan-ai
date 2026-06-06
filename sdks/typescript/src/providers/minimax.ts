@@ -1,218 +1,50 @@
-import {
-  isRetryableNetworkError,
-  isRetryableStatus,
-  NetworkError,
-  ProviderError,
-  mapHttpError,
-} from '../error.js'
+/**
+ * MiniMax provider. MiniMax exposes an Anthropic-compatible endpoint, so this
+ * is a thin delegate over an internal AnthropicProvider with text-only caps —
+ * mirroring Rust `build_minimax_provider` (client.rs:567-586), which builds an
+ * AnthropicProvider with `ProviderCapabilities::text_only()`.
+ *
+ * Wire: serializeAnthropicRequest → POST {base}/v1/messages, x-api-key auth,
+ * anthropic-version, Anthropic chat/SSE parsing — all inherited from
+ * AnthropicProvider. The constructor's `baseUrl` is the BASE (the final URL is
+ * `{base}/v1/messages`); default base `https://api.minimax.io/anthropic`
+ * (Rust client.rs:577).
+ */
 import { DEFAULT_MINIMAX_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
-import { serializeOpenAiRequest } from '../serialize/openai.js'
-import type { ChatRequest, ChatResponse, StreamEvent } from '../types.js'
+import { RetryPolicy } from '../retry.js'
+import type { BoxStream } from '../stream.js'
+import type { ChatRequest, ChatResponse } from '../types.js'
+import { AnthropicProvider } from './anthropic.js'
 
-function classifyHttpError(result: unknown): RetryClassification {
-  if (result instanceof Error) {
-    const error = result as { status?: number; retryAfterMs?: number }
-    const status = error.status
-    if (
-      (status !== undefined && isRetryableStatus(status)) ||
-      isRetryableNetworkError(result)
-    ) {
-      return { retryable: true, retryAfterMs: error.retryAfterMs }
-    }
-    throw result
-  }
-  return { retryable: false }
-}
+/** Default MiniMax Anthropic-compatible base URL (Rust client.rs:577). */
+export const DEFAULT_MINIMAX_BASE_URL = 'https://api.minimax.io/anthropic'
 
 export class MinimaxProvider {
-  private model: string
-  private endpoint: string
-  private retryPolicy: RetryPolicy
+  private readonly inner: AnthropicProvider
 
-  constructor(
-    private readonly apiKey: string,
-    model?: string,
-    endpoint?: string,
-    private readonly fetcher: typeof fetch = fetch
-  ) {
-    this.model = model ?? DEFAULT_MINIMAX_MODEL
-    this.endpoint = endpoint ?? 'https://api.minimax.chat/v1/text/chatcompletion_v2'
-    this.retryPolicy = RetryPolicy.default()
+  constructor(apiKey: string, model?: string, baseUrl?: string) {
+    this.inner = new AnthropicProvider(
+      apiKey,
+      model ?? DEFAULT_MINIMAX_MODEL,
+      baseUrl ?? DEFAULT_MINIMAX_BASE_URL,
+    )
   }
 
   withRetryPolicy(policy: RetryPolicy): this {
-    this.retryPolicy = policy
+    this.inner.withRetryPolicy(policy)
     return this
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
-    const resolvedModel = request.model ?? this.model
-    const body = serializeOpenAiRequest(request, resolvedModel)
-
-    try {
-      return await withRetry(
-        this.retryPolicy,
-        async () => {
-          const response = await this.fetcher(this.endpoint, {
-            method: 'POST',
-            headers: {
-              authorization: `Bearer ${this.apiKey}`,
-              'content-type': 'application/json',
-            },
-            body: JSON.stringify(body),
-          })
-
-          const text = await response.text()
-          let payload: any = {}
-          try {
-            payload = text ? JSON.parse(text) : {}
-          } catch {
-            payload = {}
-          }
-
-          if (!response.ok) {
-            const message = String(
-              payload?.error?.message ?? text ?? 'minimax request failed',
-            )
-            throw mapHttpError(response.status, message, response.headers.get('retry-after'))
-          }
-
-          const choice = payload?.choices?.[0] ?? {}
-          const msg = choice?.message ?? {}
-          const toolCalls = (msg?.tool_calls ?? []).map((tc: any) => {
-            const args = String(tc?.function?.arguments ?? '{}')
-            let parsed = {}
-            try {
-              parsed = JSON.parse(args)
-            } catch {
-              parsed = {}
-            }
-            return {
-              id: String(tc?.id ?? ''),
-              name: String(tc?.function?.name ?? ''),
-              input: parsed,
-            }
-          })
-
-          const stopReason: ChatResponse['stopReason'] =
-            choice?.finish_reason === 'tool_calls'
-              ? 'tool_use'
-              : choice?.finish_reason === 'length'
-                ? 'max_tokens'
-                : choice?.finish_reason === 'stop'
-                  ? 'stop'
-                  : 'other'
-
-          return {
-            content: String(msg?.content ?? ''),
-            toolCalls,
-            model: String(payload?.model ?? this.model),
-            usage: {
-              inputTokens: Number(payload?.usage?.prompt_tokens ?? 0),
-              outputTokens: Number(payload?.usage?.completion_tokens ?? 0),
-            },
-            stopReason,
-          }
-        },
-        classifyHttpError,
-      )
-    } catch (error) {
-      if (isRetryableNetworkError(error)) {
-        throw new NetworkError(String(error))
-      }
-      throw error
-    }
+  chat(request: ChatRequest): Promise<ChatResponse> {
+    return this.inner.chat(request)
   }
 
-  async *stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const resolvedModel = request.model ?? this.model
-    const body = serializeOpenAiRequest(request, resolvedModel)
-    body.stream = true
-
-    let attempt = 0
-    let response: Response
-    while (true) {
-      try {
-        response = await this.fetcher(this.endpoint, {
-          method: 'POST',
-          headers: {
-            authorization: `Bearer ${this.apiKey}`,
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify(body),
-        })
-      } catch (error) {
-        if (!isRetryableNetworkError(error) || attempt >= this.retryPolicy.maxRetries) {
-          throw new NetworkError(String(error))
-        }
-        attempt += 1
-        await new Promise((resolve) =>
-          setTimeout(resolve, this.retryPolicy.delayForAttempt(attempt)),
-        )
-        continue
-      }
-
-      if (response.ok) {
-        break
-      }
-
-      const text = await response.text()
-      const error = mapHttpError(
-        response.status,
-        text || 'minimax stream failed',
-        response.headers.get('retry-after'),
-      )
-      const retryable = isRetryableStatus(response.status)
-      if (!retryable || attempt >= this.retryPolicy.maxRetries) {
-        throw error
-      }
-      attempt += 1
-      const retryAfterMs = error.retryAfterMs
-      const delay = this.retryPolicy.respectRetryAfter
-        ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
-        : this.retryPolicy.delayForAttempt(attempt)
-      await new Promise((resolve) => setTimeout(resolve, delay))
-    }
-
-    if (!response.body) throw new ProviderError('Missing response body for stream')
-
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-      const parts = buffer.split('\n\n')
-      buffer = parts.pop() ?? ''
-
-      for (const part of parts) {
-        const line = part
-          .split('\n')
-          .find((l) => l.startsWith('data:'))
-          ?.slice(5)
-          .trim()
-        if (!line) continue
-        if (line === '[DONE]') {
-          yield { content: '', done: true, eventType: 'text' }
-          return
-        }
-        try {
-          const payload = JSON.parse(line)
-          const text = String(payload?.choices?.[0]?.delta?.content ?? '')
-          if (text) yield { content: text, done: false, eventType: 'text' }
-        } catch {
-          continue
-        }
-      }
-    }
-
-    yield { content: '', done: true, eventType: 'text' }
+  stream(request: ChatRequest): BoxStream {
+    return this.inner.stream(request)
   }
 
+  /** Text-only — images/documents rejected by validateRequest before any HTTP call. */
   capabilities(): ProviderCapabilities {
     return textOnly()
   }
