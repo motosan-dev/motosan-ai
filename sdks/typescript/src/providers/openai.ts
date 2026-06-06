@@ -150,9 +150,9 @@ export class OpenAIProvider {
       const chunk = typeof raw?.model_dump === 'function' ? raw.model_dump() : raw
       const choice = chunk?.choices?.[0]
       const text = String(choice?.delta?.content ?? '')
-      if (text) yield { content: text, done: false }
+      if (text) yield { content: text, done: false, eventType: 'text' }
       if (choice?.finish_reason) {
-        yield { content: '', done: true }
+        yield { content: '', done: true, eventType: 'text' }
         return
       }
     }

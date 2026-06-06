@@ -8,7 +8,7 @@ export type ProviderName = 'anthropic' | 'openai' | 'minimax'
 
 export interface ProviderLike {
   chat(request: ChatRequest): Promise<ChatResponse>
-  stream(request: ChatRequest): AsyncGenerator<StreamEvent>
+  stream(request: ChatRequest): AsyncIterable<StreamEvent>
 }
 
 export class Client {
@@ -50,7 +50,7 @@ export class Client {
     return this.provider.chat(request)
   }
 
-  stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ChatRequest): AsyncIterable<StreamEvent> {
     return this.provider.stream(request)
   }
 }
