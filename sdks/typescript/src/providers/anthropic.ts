@@ -2,6 +2,7 @@ import { ProviderError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
+import { fullCaps, type ProviderCapabilities } from '../provider.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
@@ -237,7 +238,7 @@ export class AnthropicProvider {
     }
   }
 
-  capabilities(): { supportsImage: boolean; supportsDocument: boolean } {
-    return { supportsImage: true, supportsDocument: true }
+  capabilities(): ProviderCapabilities {
+    return fullCaps()
   }
 }

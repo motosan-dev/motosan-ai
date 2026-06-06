@@ -1,6 +1,7 @@
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_OPENAI_MODEL } from '../models.js'
+import { withImage, type ProviderCapabilities } from '../provider.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import {
   doneEvent,
@@ -86,6 +87,10 @@ export class OpenAIProvider {
 
   stream(request: ChatRequest): BoxStream {
     return this.streamImpl(request)
+  }
+
+  capabilities(): ProviderCapabilities {
+    return withImage()
   }
 
   private async *streamImpl(request: ChatRequest) {

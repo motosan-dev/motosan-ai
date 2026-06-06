@@ -1,5 +1,6 @@
 import { NetworkError, ProviderError, mapHttpError } from '../error.js'
 import { DEFAULT_MINIMAX_MODEL } from '../models.js'
+import { textOnly, type ProviderCapabilities } from '../provider.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from '../types.js'
 
@@ -140,5 +141,9 @@ export class MinimaxProvider {
     }
 
     yield { content: '', done: true, eventType: 'text' }
+  }
+
+  capabilities(): ProviderCapabilities {
+    return textOnly()
   }
 }
