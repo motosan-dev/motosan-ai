@@ -415,4 +415,51 @@ describe('serializeAnthropicRequest', () => {
       expect(result.max_tokens).toBe(8192)
     })
   })
+
+  describe('tool_choice', () => {
+    const toolsReq = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      tools: [{ name: 'get_weather', description: 'w', inputSchema: { type: 'object' } }],
+    }
+
+    it("serializes auto as {type:'auto'}", () => {
+      const result = serializeAnthropicRequest(
+        { ...toolsReq, toolChoice: { type: 'auto' } },
+        'claude-opus-4',
+      )
+      expect(result.tool_choice).toEqual({ type: 'auto' })
+      expect(result.tools).toBeDefined()
+    })
+
+    it("serializes required as {type:'any'} (NOT 'required')", () => {
+      const result = serializeAnthropicRequest(
+        { ...toolsReq, toolChoice: { type: 'required' } },
+        'claude-opus-4',
+      )
+      expect(result.tool_choice).toEqual({ type: 'any' })
+    })
+
+    it('serializes none by REMOVING the tools array and emitting no tool_choice', () => {
+      const result = serializeAnthropicRequest(
+        { ...toolsReq, toolChoice: { type: 'none' } },
+        'claude-opus-4',
+      )
+      expect('tools' in result).toBe(false)
+      expect('tool_choice' in result).toBe(false)
+    })
+
+    it("serializes a named tool as {type:'tool', name}", () => {
+      const result = serializeAnthropicRequest(
+        { ...toolsReq, toolChoice: { type: 'tool', name: 'get_weather' } },
+        'claude-opus-4',
+      )
+      expect(result.tool_choice).toEqual({ type: 'tool', name: 'get_weather' })
+    })
+
+    it('omits tool_choice when not provided', () => {
+      const result = serializeAnthropicRequest(toolsReq, 'claude-opus-4')
+      expect('tool_choice' in result).toBe(false)
+      expect(result.tools).toBeDefined()
+    })
+  })
 })
