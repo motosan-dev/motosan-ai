@@ -8,7 +8,7 @@ import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
 import { fullCaps, type ProviderCapabilities } from '../provider.js'
 import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
-import { serializeAnthropicRequest } from '../serialize/anthropic.js'
+import { modelUsesAdaptiveThinking, serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
   doneWithStopReason,
@@ -30,6 +30,37 @@ import type {
 } from '../types.js'
 
 const ANTHROPIC_VERSION = '2023-06-01'
+
+/**
+ * Build the `anthropic-beta` header value. Mirrors Rust `build_beta_header`
+ * (anthropic.rs:78-99): comma-joined (no spaces), `undefined` when empty.
+ * The OAuth betas are wired for the future setup-token path; in M4 callers
+ * pass `isOauth=false`, so only the MCP beta can appear on the x-api-key path.
+ */
+export function buildBetaHeader(
+  hasMcp: boolean,
+  isOauth: boolean,
+  adaptiveThinking: boolean,
+): string | undefined {
+  const betas: string[] = []
+  if (isOauth) {
+    betas.push('claude-code-20250219')
+    betas.push('oauth-2025-04-20')
+    betas.push('fine-grained-tool-streaming-2025-05-14')
+    if (!adaptiveThinking) {
+      betas.push('interleaved-thinking-2025-05-14')
+    }
+  }
+  if (hasMcp) {
+    betas.push('mcp-client-2025-11-20')
+  }
+  return betas.length === 0 ? undefined : betas.join(',')
+}
+
+/** Whether a request carries any MCP config. Mirrors Rust anthropic.rs:466-467. */
+function requestHasMcp(req: ChatRequest): boolean {
+  return (req.mcpServers?.length ?? 0) > 0 || (req.mcpToolConfigs?.length ?? 0) > 0
+}
 
 function parseStopReason(reason: unknown): StopReason {
   switch (reason) {
@@ -106,19 +137,35 @@ export class AnthropicProvider {
     return this
   }
 
-  private headers(): Record<string, string> {
+  private headers(extra?: Record<string, string>): Record<string, string> {
     return {
       'x-api-key': this.apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
       'content-type': 'application/json',
+      ...(extra ?? {}),
     }
   }
 
+  /**
+   * Build per-request headers including the beta header when applicable.
+   * isOauth is always false in M4 (no setup-token path in TS).
+   * adaptiveThinking is read off the serialized body, matching Rust
+   * (anthropic.rs:469/802) — it only affects the OAuth-only interleaved beta.
+   */
+  private requestHeaders(req: ChatRequest, body: Record<string, any>): Record<string, string> {
+    const hasMcp = requestHasMcp(req)
+    const adaptiveThinking = body?.thinking?.type === 'adaptive'
+    const beta = buildBetaHeader(hasMcp, false, adaptiveThinking)
+    return this.headers(beta ? { 'anthropic-beta': beta } : {})
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body = serializeAnthropicRequest(request, request.model ?? this.model)
+    const model = request.model ?? this.model
+    const body = serializeAnthropicRequest(request, model)
+    const headers = this.requestHeaders(request, body)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(`${this.baseUrl}/v1/messages`, this.headers(), body),
+      async () => postJson<any>(`${this.baseUrl}/v1/messages`, headers, body),
       classifyHttpError,
     )
 
@@ -159,15 +206,17 @@ export class AnthropicProvider {
   }
 
   private async *streamImpl(request: ChatRequest) {
+    const model = request.model ?? this.model
     const body = {
-      ...serializeAnthropicRequest(request, request.model ?? this.model),
+      ...serializeAnthropicRequest(request, model),
       stream: true,
     }
+    const headers = this.requestHeaders(request, body)
     let attempt = 0
     let responseBody: ReadableStream<Uint8Array>
     while (true) {
       try {
-        responseBody = await postStream(`${this.baseUrl}/v1/messages`, this.headers(), body)
+        responseBody = await postStream(`${this.baseUrl}/v1/messages`, headers, body)
         break
       } catch (error) {
         const status = (error as { status?: number }).status

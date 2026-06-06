@@ -378,3 +378,97 @@ describe('AnthropicProvider live', () => {
     expect(chunks.join('').length).toBeGreaterThan(0)
   }, 60_000)
 })
+
+describe('AnthropicProvider beta headers (M4)', () => {
+  let captured: { url: string; headers: Record<string, string>; body: any } | null = null
+
+  beforeEach(() => {
+    captured = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        captured = {
+          url,
+          headers: (options?.headers as Record<string, string>) ?? {},
+          body: options?.body ? JSON.parse(String(options.body)) : null,
+        }
+        return new Response(
+          JSON.stringify({
+            id: 'msg_x',
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'ok' }],
+            model: 'claude-sonnet-4-6',
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }),
+    )
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('adds anthropic-beta: mcp-client-2025-11-20 when mcpServers present', async () => {
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+    })
+    expect(captured?.headers['anthropic-beta']).toBe('mcp-client-2025-11-20')
+  })
+
+  it('adds anthropic-beta when only mcpToolConfigs present', async () => {
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpToolConfigs: [{ kind: 'all', mcpServerName: 'm' }],
+    })
+    expect(captured?.headers['anthropic-beta']).toBe('mcp-client-2025-11-20')
+  })
+
+  it('omits anthropic-beta when no MCP config (even with thinking)', async () => {
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      thinking: { budgetTokens: 1024 },
+    })
+    expect('anthropic-beta' in (captured?.headers ?? {})).toBe(false)
+  })
+
+  it('omits anthropic-beta for a plain request', async () => {
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect('anthropic-beta' in (captured?.headers ?? {})).toBe(false)
+  })
+
+  it('streamImpl also adds the MCP beta header', async () => {
+    // Return an empty SSE body so the generator completes without events.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        captured = {
+          url,
+          headers: (options?.headers as Record<string, string>) ?? {},
+          body: options?.body ? JSON.parse(String(options.body)) : null,
+        }
+        return new Response('', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      }),
+    )
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    const events: StreamEvent[] = []
+    for await (const e of provider.stream({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+    })) {
+      events.push(e)
+    }
+    expect(captured?.headers['anthropic-beta']).toBe('mcp-client-2025-11-20')
+  })
+})
