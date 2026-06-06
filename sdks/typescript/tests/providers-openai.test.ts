@@ -253,6 +253,48 @@ describe('OpenAIProvider stream', () => {
     expect(doneEvent.stopReason).toBe('tool_use')
   })
 
+  it('switches between two tool indices: closes the prior tool before opening the next', async () => {
+    const mockFetch = vi.fn(async () => {
+      const sseData = [
+        // index 0 opens (id + name)
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"get_weather"}}]},"finish_reason":null}]}\n\n',
+        // index 0 args
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"city\\":\\"NYC\\"}"}}]},"finish_reason":null}]}\n\n',
+        // index 1 opens -> must close index 0 (call_1) FIRST, then open call_2
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"call_2","function":{"name":"get_time"}}]},"finish_reason":null}]}\n\n',
+        // index 1 args
+        'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\\"tz\\":\\"EST\\"}"}}]},"finish_reason":null}]}\n\n',
+        // finish closes the last-open tool (call_2)
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}\n\n',
+        'data: [DONE]\n\n',
+      ].join('')
+
+      return new Response(sseData, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const provider = new OpenAIProvider('sk-test')
+    const events: StreamEvent[] = []
+
+    for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'multi' }] })) {
+      events.push(evt)
+    }
+
+    const starts = events.filter((e) => e.eventType === 'tool_call_start')
+    const ends = events.filter((e) => e.eventType === 'tool_call_end')
+    // Two distinct tools, each opened and closed EXACTLY once.
+    expect(starts.map((e) => e.toolCallId)).toEqual(['call_1', 'call_2'])
+    expect(ends.map((e) => e.toolCallId)).toEqual(['call_1', 'call_2'])
+    // The single-open invariant collectStream relies on: call_1 closes BEFORE call_2 opens.
+    expect(events.indexOf(ends[0])).toBeLessThan(events.indexOf(starts[1]))
+    // Terminal done with tool_use.
+    expect(events[events.length - 1].done).toBe(true)
+    expect(events[events.length - 1].stopReason).toBe('tool_use')
+  })
+
   it('closes open tool and emits done when [DONE] arrives', async () => {
     const mockFetch = vi.fn(async () => {
       const sseData = [

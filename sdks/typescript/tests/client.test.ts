@@ -78,3 +78,67 @@ describe('client anthropic routing', () => {
     expect(response.content).toBe('ok')
   })
 })
+
+describe('client openai/minimax routing (no npm deps)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('routes provider:"openai" to the self-hosted OpenAIProvider (no npm openai)', async () => {
+    let capturedUrl = ''
+    let capturedHeaders: Record<string, string> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        capturedUrl = url
+        capturedHeaders = (options?.headers as Record<string, string>) ?? {}
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl_1',
+            object: 'chat.completion',
+            created: 1234567890,
+            model: 'gpt-4o',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }),
+    )
+
+    const client = new Client({ provider: 'openai', apiKey: 'sk-test' })
+    const response = await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+
+    expect(capturedUrl).toContain('api.openai.com/v1/chat/completions')
+    expect(capturedHeaders['authorization']).toBe('Bearer sk-test')
+    expect(response.content).toBe('ok')
+  })
+
+  it('routes provider:"minimax" to the self-hosted MinimaxProvider at its default endpoint (no npm deps)', async () => {
+    let capturedUrl = ''
+    let capturedHeaders: Record<string, string> = {}
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        capturedUrl = url
+        capturedHeaders = (options?.headers as Record<string, string>) ?? {}
+        return new Response(
+          JSON.stringify({
+            model: 'MiniMax-Text-01',
+            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      }),
+    )
+
+    const client = new Client({ provider: 'minimax', apiKey: 'mk-test' })
+    const response = await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+
+    // Default MiniMax endpoint + Bearer auth, via raw fetch (no npm SDK).
+    expect(capturedUrl).toBe('https://api.minimax.chat/v1/text/chatcompletion_v2')
+    expect(capturedHeaders['authorization']).toBe('Bearer mk-test')
+    expect(response.content).toBe('ok')
+  })
+})

@@ -13,17 +13,10 @@
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "peerDependencies": {
-    "openai": ">=4.0.0"
-  },
-  "peerDependenciesMeta": {
-    "openai": {
-      "optional": true
-    }
-  },
+  "peerDependencies": {},
+  "peerDependenciesMeta": {},
   "devDependencies": {
     "@types/node": "^22.13.10",
-    "openai": "^6.4.0",
     "typescript": "^5.8.2",
     "vitest": "^3.0.8"
   }
