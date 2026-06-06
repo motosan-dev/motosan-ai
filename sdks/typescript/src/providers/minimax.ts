@@ -143,19 +143,19 @@ export class MinimaxProvider {
           .trim()
         if (!line) continue
         if (line === '[DONE]') {
-          yield { content: '', done: true }
+          yield { content: '', done: true, eventType: 'text' }
           return
         }
         try {
           const payload = JSON.parse(line)
           const text = String(payload?.choices?.[0]?.delta?.content ?? '')
-          if (text) yield { content: text, done: false }
+          if (text) yield { content: text, done: false, eventType: 'text' }
         } catch {
           continue
         }
       }
     }
 
-    yield { content: '', done: true }
+    yield { content: '', done: true, eventType: 'text' }
   }
 }

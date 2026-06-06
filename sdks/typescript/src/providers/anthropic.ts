@@ -152,9 +152,9 @@ export class AnthropicProvider {
       const event = typeof raw?.model_dump === 'function' ? raw.model_dump() : raw
       if (event?.type === 'content_block_delta') {
         const text = String(event?.delta?.text ?? '')
-        if (text) yield { content: text, done: false }
+        if (text) yield { content: text, done: false, eventType: 'text' }
       } else if (event?.type === 'message_stop') {
-        yield { content: '', done: true }
+        yield { content: '', done: true, eventType: 'text' }
         return
       }
     }
