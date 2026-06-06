@@ -165,6 +165,35 @@ describe('OpenAIProvider chat', () => {
 
     expect(capturedRequest?.url).toBe('https://api.custom.com/v1/chat/completions')
   })
+
+  it('falls back to reasoning_content when content is empty/null (reasoning models)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: 'chatcmpl_r',
+              model: 'gpt-5.3-codex',
+              choices: [
+                {
+                  message: { content: null, reasoning_content: 'thought it through' },
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    )
+
+    const provider = new OpenAIProvider('sk-test')
+    const response = await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+
+    // Matches Rust extract_chat_content (content.or(reasoning)) and the stream path.
+    expect(response.content).toBe('thought it through')
+  })
 })
 
 describe('OpenAIProvider stream', () => {

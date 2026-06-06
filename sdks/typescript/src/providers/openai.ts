@@ -65,7 +65,7 @@ export class OpenAIProvider {
     baseUrl = 'https://api.openai.com/v1'
   ) {
     this.model = model ?? DEFAULT_OPENAI_MODEL
-    this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
+    this.baseUrl = baseUrl.replace(/\/+$/, '') // trim trailing slash(es), like the URL setters
     this.retryPolicy = RetryPolicy.default()
     if (this.baseUrl !== 'https://api.openai.com/v1') {
       this.chatUrl = `${this.baseUrl}/chat/completions`
@@ -274,7 +274,11 @@ export class OpenAIProvider {
 
     const choice = payload?.choices?.[0] ?? {}
     const message = choice?.message ?? {}
-    const content = String(message?.content ?? '')
+    // Fall back to reasoning_content when content is empty/whitespace, matching
+    // Rust extract_chat_content (content.or(reasoning)) and the stream path.
+    const rawContent = String(message?.content ?? '')
+    const content =
+      rawContent.trim() !== '' ? rawContent : String(message?.reasoning_content ?? '')
 
     const toolCalls: ToolCall[] = (message?.tool_calls ?? []).map((tc: any) => {
       const args = String(tc?.function?.arguments ?? '{}')

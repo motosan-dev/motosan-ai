@@ -251,4 +251,103 @@ describe('retry provider integration', () => {
 
     expect(calls).toBe(1)
   })
+
+  // --- OpenAI / MiniMax retry coverage (the plan's named high-risk spot) ---
+
+  function openAiSse(): Response {
+    const sse =
+      'data: {"choices":[{"index":0,"delta":{"content":"stream ok"},"finish_reason":null}]}\n\n' +
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n' +
+      'data: [DONE]\n\n'
+    return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+  }
+
+  function errorResponse(status: number): Response {
+    return new Response(JSON.stringify({ error: { message: `http ${status}` } }), { status })
+  }
+
+  for (const status of [400, 401]) {
+    it(`OpenAI chat does not retry a ${status} response`, async () => {
+      let calls = 0
+      vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return errorResponse(status) }))
+      const provider = new OpenAIProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+      await expect(provider.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow()
+      expect(calls).toBe(1)
+    })
+  }
+
+  it('OpenAI stream retries the initial fetch after 429', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return calls === 1 ? rateLimit() : openAiSse() }))
+    const provider = new OpenAIProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event)
+    }
+    expect(calls).toBe(2)
+    expect(events.filter((e) => !e.done).map((e) => e.content)).toContain('stream ok')
+  })
+
+  it('OpenAI stream does not retry a 400 initial fetch', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return errorResponse(400) }))
+    const provider = new OpenAIProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+    await expect(async () => {
+      for await (const _ of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) { void _ }
+    }).rejects.toThrow()
+    expect(calls).toBe(1)
+  })
+
+  it('OpenAI stream does not retry after the response body has been returned', async () => {
+    let calls = 0
+    const broken = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"x"}}]}\n\n'))
+        controller.error(new Error('mid-stream break'))
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      calls += 1
+      return new Response(broken, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }))
+    const provider = new OpenAIProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+    try {
+      for await (const _ of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) { void _ }
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error)
+    }
+    expect(calls).toBe(1)
+  })
+
+  it('OpenAI stream rethrows a 404 and never falls back to the Responses API', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return errorResponse(404) }))
+    const provider = new OpenAIProvider('test-key')
+      .withRetryPolicy(immediateRetryPolicy())
+      .withResponsesFallback(true)
+    await expect(async () => {
+      for await (const _ of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) { void _ }
+    }).rejects.toThrow()
+    expect(calls).toBe(1) // no second call to the Responses endpoint
+  })
+
+  it('Minimax chat does not retry a 400 response', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return errorResponse(400) }))
+    const provider = new MinimaxProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+    await expect(provider.chat({ messages: [{ role: 'user', content: 'hi' }] })).rejects.toThrow()
+    expect(calls).toBe(1)
+  })
+
+  it('Minimax stream retries the initial fetch after 429', async () => {
+    let calls = 0
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return calls === 1 ? rateLimit() : openAiSse() }))
+    const provider = new MinimaxProvider('test-key').withRetryPolicy(immediateRetryPolicy())
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event)
+    }
+    expect(calls).toBe(2)
+    expect(events.filter((e) => !e.done).map((e) => e.content)).toContain('stream ok')
+  })
 })
