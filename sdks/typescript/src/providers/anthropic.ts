@@ -34,25 +34,26 @@ const ANTHROPIC_VERSION = '2023-06-01'
 /**
  * Build the `anthropic-beta` header value. Mirrors Rust `build_beta_header`
  * (anthropic.rs:78-99): comma-joined (no spaces), `undefined` when empty.
- * The OAuth betas are wired for the future setup-token path; in M4 callers
- * pass `isOauth=false`, so only the MCP beta can appear on the x-api-key path.
+ * The M4 x-api-key path emits MCP and non-adaptive thinking betas directly;
+ * OAuth-only setup-token betas are wired for the future OAuth path.
  */
 export function buildBetaHeader(
   hasMcp: boolean,
   isOauth: boolean,
   adaptiveThinking: boolean,
+  hasThinking = false,
 ): string | undefined {
   const betas: string[] = []
+  if (hasMcp) {
+    betas.push('mcp-client-2025-11-20')
+  }
   if (isOauth) {
     betas.push('claude-code-20250219')
     betas.push('oauth-2025-04-20')
     betas.push('fine-grained-tool-streaming-2025-05-14')
-    if (!adaptiveThinking) {
-      betas.push('interleaved-thinking-2025-05-14')
-    }
   }
-  if (hasMcp) {
-    betas.push('mcp-client-2025-11-20')
+  if (hasThinking && !adaptiveThinking) {
+    betas.push('interleaved-thinking-2025-05-14')
   }
   return betas.length === 0 ? undefined : betas.join(',')
 }
@@ -150,12 +151,13 @@ export class AnthropicProvider {
    * Build per-request headers including the beta header when applicable.
    * isOauth is always false in M4 (no setup-token path in TS).
    * adaptiveThinking is read off the serialized body, matching Rust
-   * (anthropic.rs:469/802) — it only affects the OAuth-only interleaved beta.
+   * (anthropic.rs:469/802). Non-adaptive thinking enables the interleaved-thinking beta.
    */
   private requestHeaders(req: ChatRequest, body: Record<string, any>): Record<string, string> {
     const hasMcp = requestHasMcp(req)
+    const hasThinking = body?.thinking !== undefined
     const adaptiveThinking = body?.thinking?.type === 'adaptive'
-    const beta = buildBetaHeader(hasMcp, false, adaptiveThinking)
+    const beta = buildBetaHeader(hasMcp, false, adaptiveThinking, hasThinking)
     return this.headers(beta ? { 'anthropic-beta': beta } : {})
   }
 

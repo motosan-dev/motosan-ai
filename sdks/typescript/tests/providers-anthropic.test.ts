@@ -434,8 +434,29 @@ describe('AnthropicProvider beta headers (M4)', () => {
     expect(captured?.headers['anthropic-beta']).toBe('mcp-client-2025-11-20')
   })
 
-  it('omits anthropic-beta when no MCP config (even with thinking)', async () => {
+  it('adds interleaved-thinking beta when non-adaptive thinking is present without MCP', async () => {
     const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      thinking: { budgetTokens: 1024 },
+    })
+    expect(captured?.headers['anthropic-beta']).toBe('interleaved-thinking-2025-05-14')
+  })
+
+  it('comma-joins MCP and interleaved-thinking betas with no spaces', async () => {
+    const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+      thinking: { budgetTokens: 1024 },
+    })
+    expect(captured?.headers['anthropic-beta']).toBe(
+      'mcp-client-2025-11-20,interleaved-thinking-2025-05-14',
+    )
+  })
+
+  it('omits interleaved-thinking beta for adaptive thinking without MCP', async () => {
+    const provider = new AnthropicProvider('k', 'claude-opus-4-8')
     await provider.chat({
       messages: [{ role: 'user', content: 'hi' }],
       thinking: { budgetTokens: 1024 },
