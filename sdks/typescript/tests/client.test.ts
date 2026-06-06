@@ -38,6 +38,14 @@ describe('client', () => {
     }
     expect(chunks.join('')).toBe('hi')
   })
+
+  it('Client.builder() builds a Client for a configured provider', () => {
+    const client = (Client as unknown as {
+      builder(): { provider(p: 'anthropic'): { apiKey(k: string): { build(): Client } } }
+    }).builder().provider('anthropic').apiKey('test').build()
+
+    expect(client).toBeInstanceOf(Client)
+  })
 })
 
 describe('client anthropic routing', () => {

@@ -189,6 +189,10 @@ export class Client {
   private provider: DispatchProvider
   private streamReadTimeoutSecs?: number
 
+  static builder(): ClientBuilder {
+    return new ClientBuilder()
+  }
+
   constructor(
     options:
       | {
