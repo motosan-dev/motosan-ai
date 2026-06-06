@@ -463,3 +463,153 @@ describe('serializeAnthropicRequest', () => {
     })
   })
 })
+
+describe('serializeAnthropicRequest thinking config (M4)', () => {
+  it('adaptive model emits thinking{type:adaptive,display:summarized} + output_config, no budget, no forced temperature', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      thinking: { budgetTokens: 4096 },
+    }
+    const result = serializeAnthropicRequest(req, 'claude-opus-4-8')
+    expect(result.thinking).toEqual({ type: 'adaptive', display: 'summarized' })
+    expect(result.output_config).toEqual({ effort: 'high' })
+    expect('budget_tokens' in result.thinking).toBe(false)
+    expect('temperature' in result).toBe(false)
+  })
+
+  it('all three adaptive literals are adaptive', () => {
+    for (const m of ['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6']) {
+      const result = serializeAnthropicRequest(
+        { messages: [{ role: 'user' as const, content: 'hi' }], thinking: { budgetTokens: 1 } },
+        m,
+      )
+      expect(result.thinking.type).toBe('adaptive')
+    }
+  })
+
+  it('enabled (non-adaptive) model emits thinking{type:enabled,budget_tokens,display:summarized} + forces temperature=1.0', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      thinking: { budgetTokens: 4096 },
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.thinking).toEqual({
+      type: 'enabled',
+      budget_tokens: 4096,
+      display: 'summarized',
+    })
+    expect('output_config' in result).toBe(false)
+    expect(result.temperature).toBe(1.0)
+  })
+
+  it('temperature collision: user temperature overridden to 1.0 by non-adaptive thinking', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      thinking: { budgetTokens: 2048 },
+      temperature: 0.2,
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.temperature).toBe(1.0)
+  })
+
+  it('adaptive thinking does NOT override a user temperature (it is simply not applied while thinking is set)', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      thinking: { budgetTokens: 2048 },
+      temperature: 0.2,
+    }
+    const result = serializeAnthropicRequest(req, 'claude-opus-4-8')
+    // thinking branch is taken; adaptive does not force temperature, and the user temp
+    // lives in the else-if that thinking skips, so temperature is absent.
+    expect('temperature' in result).toBe(false)
+  })
+
+  it('thinking absent: user temperature preserved', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      temperature: 0.3,
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.temperature).toBe(0.3)
+    expect('thinking' in result).toBe(false)
+  })
+})
+
+describe('serializeAnthropicRequest MCP (M4)', () => {
+  it('mcp_servers body array: type/url/name with and without authorizationToken', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      mcpServers: [
+        { type: 'url' as const, url: 'https://a.example/sse', name: 'a', authorizationToken: 'tok' },
+        { type: 'url' as const, url: 'https://b.example/sse', name: 'b' },
+      ],
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.mcp_servers).toEqual([
+      { type: 'url', url: 'https://a.example/sse', name: 'a', authorization_token: 'tok' },
+      { type: 'url', url: 'https://b.example/sse', name: 'b' },
+    ])
+  })
+
+  it('mcp_servers absent when no servers given', () => {
+    const result = serializeAnthropicRequest(
+      { messages: [{ role: 'user' as const, content: 'hi' }] },
+      'claude-sonnet-4-6',
+    )
+    expect('mcp_servers' in result).toBe(false)
+  })
+
+  it('mcp_toolset items appended to tools after regular tools (all/allowed/denied snake_case)', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      tools: [{ name: 'calc', description: 'd', inputSchema: { type: 'object' } }],
+      mcpToolConfigs: [
+        { kind: 'all' as const, mcpServerName: 's1' },
+        { kind: 'allowed' as const, mcpServerName: 's2', allowedTools: ['read', 'list'] },
+        { kind: 'denied' as const, mcpServerName: 's3', deniedTools: ['rm'] },
+      ],
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.tools).toHaveLength(4)
+    expect(result.tools[0].name).toBe('calc')
+    expect(result.tools[1]).toEqual({ type: 'mcp_toolset', mcp_server_name: 's1' })
+    expect(result.tools[2]).toEqual({
+      type: 'mcp_toolset',
+      mcp_server_name: 's2',
+      allowed_tools: ['read', 'list'],
+    })
+    expect(result.tools[3]).toEqual({
+      type: 'mcp_toolset',
+      mcp_server_name: 's3',
+      denied_tools: ['rm'],
+    })
+  })
+
+  it('tools is set when ONLY mcpToolConfigs present (no regular tools)', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      mcpToolConfigs: [{ kind: 'all' as const, mcpServerName: 's1' }],
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect(result.tools).toEqual([{ type: 'mcp_toolset', mcp_server_name: 's1' }])
+  })
+
+  it('tools absent when neither regular tools nor mcpToolConfigs present', () => {
+    const result = serializeAnthropicRequest(
+      { messages: [{ role: 'user' as const, content: 'hi' }] },
+      'claude-sonnet-4-6',
+    )
+    expect('tools' in result).toBe(false)
+  })
+
+  it('tool_choice none deletes tools INCLUDING mcp_toolset items', () => {
+    const req = {
+      messages: [{ role: 'user' as const, content: 'hi' }],
+      tools: [{ name: 'calc', description: 'd', inputSchema: { type: 'object' } }],
+      mcpToolConfigs: [{ kind: 'all' as const, mcpServerName: 's1' }],
+      toolChoice: { type: 'none' as const },
+    }
+    const result = serializeAnthropicRequest(req, 'claude-sonnet-4-6')
+    expect('tools' in result).toBe(false)
+  })
+})
