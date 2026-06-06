@@ -1,5 +1,9 @@
+import { isRetryableNetworkError, isRetryableStatus } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
+import { DEFAULT_OPENAI_MODEL } from '../models.js'
+import { withImage, type ProviderCapabilities } from '../provider.js'
+import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import {
   doneEvent,
@@ -13,29 +17,236 @@ import {
 } from '../stream.js'
 import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
 
+/** OpenAI authentication style. Mirrors Rust `OpenAIAuthStyle`. */
+export type OpenAIAuthStyle =
+  | { kind: 'bearer' }
+  | { kind: 'xApiKey' }
+  | { kind: 'custom'; header: string }
+
+/** Default chat-completions endpoint. */
+export const DEFAULT_OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
+
+/** Default Responses-API endpoint. */
+export const DEFAULT_OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
+
 const FINISH_REASON_MAP: Record<string, StopReason> = {
   stop: 'stop',
   length: 'max_tokens',
   tool_calls: 'tool_use',
 }
 
+function classifyHttpError(result: unknown): RetryClassification {
+  if (result instanceof Error) {
+    const error = result as { status?: number; retryAfterMs?: number }
+    const status = error.status
+    if (
+      (status !== undefined && isRetryableStatus(status)) ||
+      isRetryableNetworkError(result)
+    ) {
+      return { retryable: true, retryAfterMs: error.retryAfterMs }
+    }
+    throw result
+  }
+  return { retryable: false }
+}
+
 export class OpenAIProvider {
   private readonly model: string
   private readonly baseUrl: string
+  private retryPolicy: RetryPolicy
+  private authStyle: OpenAIAuthStyle = { kind: 'bearer' }
+  private chatUrl: string = DEFAULT_OPENAI_CHAT_URL
+  private responsesUrl: string = DEFAULT_OPENAI_RESPONSES_URL
+  private responsesFallback = false
 
   constructor(
     private readonly apiKey: string,
     model?: string,
     baseUrl = 'https://api.openai.com/v1'
   ) {
-    this.model = model ?? 'gpt-4o'
-    this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
+    this.model = model ?? DEFAULT_OPENAI_MODEL
+    this.baseUrl = baseUrl.replace(/\/+$/, '') // trim trailing slash(es), like the URL setters
+    this.retryPolicy = RetryPolicy.default()
+    if (this.baseUrl !== 'https://api.openai.com/v1') {
+      this.chatUrl = `${this.baseUrl}/chat/completions`
+      this.responsesUrl = `${this.baseUrl}/responses`
+    }
+  }
+
+  withRetryPolicy(policy: RetryPolicy): this {
+    this.retryPolicy = policy
+    return this
+  }
+
+  withAuthStyle(style: OpenAIAuthStyle): this {
+    this.authStyle = style
+    return this
+  }
+
+  withChatUrl(url: string): this {
+    this.chatUrl = url.replace(/\/+$/, '')
+    return this
+  }
+
+  withResponsesFallback(enabled: boolean): this {
+    this.responsesFallback = enabled
+    return this
+  }
+
+  withResponsesUrl(url: string): this {
+    this.responsesUrl = url.replace(/\/+$/, '')
+    return this
+  }
+
+  private applyAuth(headers: Record<string, string>): Record<string, string> {
+    const result = { ...headers }
+    switch (this.authStyle.kind) {
+      case 'bearer':
+        result.authorization = `Bearer ${this.apiKey}`
+        break
+      case 'xApiKey':
+        result['x-api-key'] = this.apiKey
+        break
+      case 'custom':
+        result[this.authStyle.header] = this.apiKey
+        break
+    }
+    return result
   }
 
   private headers(): Record<string, string> {
+    return this.applyAuth({ 'content-type': 'application/json' })
+  }
+
+  private extractResponsesText(payload: any): string {
+    const outputText = payload?.output_text
+    if (typeof outputText === 'string' && outputText.trim()) {
+      return outputText.trim()
+    }
+
+    const output = payload?.output
+    if (Array.isArray(output) && output.length > 0) {
+      const first = output[0]
+      const content =
+        first && typeof first === 'object'
+          ? (first as { content?: unknown }).content
+          : undefined
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          if (item && typeof item === 'object') {
+            const text = (item as { text?: unknown }).text
+            if (typeof text === 'string' && text.trim()) {
+              return text.trim()
+            }
+            const nested = (item as { content?: unknown }).content
+            if (Array.isArray(nested)) {
+              for (const nestedItem of nested) {
+                if (nestedItem && typeof nestedItem === 'object') {
+                  const nestedText = (nestedItem as { text?: unknown }).text
+                  if (typeof nestedText === 'string' && nestedText.trim()) {
+                    return nestedText.trim()
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return ''
+  }
+
+  private async chatViaResponses(request: ChatRequest): Promise<ChatResponse> {
+    const model = request.model ?? this.model
+    const instructionsParts: string[] = []
+
+    if (request.systemBlocks) {
+      for (const block of request.systemBlocks) {
+        const trimmed = block.text.trim()
+        if (trimmed) instructionsParts.push(trimmed)
+      }
+    } else if (request.system) {
+      const trimmed = request.system.trim()
+      if (trimmed) instructionsParts.push(trimmed)
+    }
+
+    const input: unknown[] = []
+    for (const message of request.messages) {
+      switch (message.role) {
+        case 'system': {
+          const trimmed = message.content.trim()
+          if (trimmed) instructionsParts.push(trimmed)
+          break
+        }
+        case 'assistant': {
+          if (message.toolCalls && message.toolCalls.length > 0) {
+            const toolCalls = message.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function',
+              function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+            }))
+            input.push({
+              role: 'assistant',
+              content: message.content,
+              tool_calls: toolCalls,
+            })
+          } else {
+            input.push({ role: 'assistant', content: message.content })
+          }
+          break
+        }
+        case 'user': {
+          input.push({ role: 'user', content: message.content })
+          break
+        }
+        case 'tool': {
+          if (message.toolCallId) {
+            input.push({
+              role: 'tool',
+              tool_call_id: message.toolCallId,
+              content: message.content,
+            })
+          }
+          break
+        }
+      }
+    }
+
+    const body: Record<string, unknown> = { model, input }
+    if (instructionsParts.length > 0) {
+      body.instructions = instructionsParts.join('\n\n')
+    }
+    if (request.providerOptions) {
+      for (const [key, value] of Object.entries(request.providerOptions)) {
+        body[key] = value
+      }
+    }
+
+    const payload = await postJson<any>(this.responsesUrl, this.headers(), body)
+    const content = this.extractResponsesText(payload)
+    const responseModel =
+      typeof payload?.model === 'string' ? payload.model : DEFAULT_OPENAI_MODEL
+    const usage = payload?.usage ?? {}
+    const inputTokens =
+      typeof usage?.input_tokens === 'number'
+        ? usage.input_tokens
+        : typeof usage?.prompt_tokens === 'number'
+          ? usage.prompt_tokens
+          : 0
+    const outputTokens =
+      typeof usage?.output_tokens === 'number'
+        ? usage.output_tokens
+        : typeof usage?.completion_tokens === 'number'
+          ? usage.completion_tokens
+          : 0
+
     return {
-      authorization: `Bearer ${this.apiKey}`,
-      'content-type': 'application/json',
+      content,
+      toolCalls: [],
+      model: responseModel,
+      usage: { inputTokens: Number(inputTokens), outputTokens: Number(outputTokens) },
+      stopReason: 'stop',
     }
   }
 
@@ -43,15 +254,31 @@ export class OpenAIProvider {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
 
-    const payload = await postJson<any>(
-      `${this.baseUrl}/chat/completions`,
-      this.headers(),
-      body
-    )
+    let payload: any
+    try {
+      payload = await withRetry(
+        this.retryPolicy,
+        async () => postJson<any>(this.chatUrl, this.headers(), body),
+        classifyHttpError,
+      )
+    } catch (error) {
+      if (
+        this.responsesFallback &&
+        error instanceof Error &&
+        (error as { status?: number }).status === 404
+      ) {
+        return this.chatViaResponses(request)
+      }
+      throw error
+    }
 
     const choice = payload?.choices?.[0] ?? {}
     const message = choice?.message ?? {}
-    const content = String(message?.content ?? '')
+    // Fall back to reasoning_content when content is empty/whitespace, matching
+    // Rust extract_chat_content (content.or(reasoning)) and the stream path.
+    const rawContent = String(message?.content ?? '')
+    const content =
+      rawContent.trim() !== '' ? rawContent : String(message?.reasoning_content ?? '')
 
     const toolCalls: ToolCall[] = (message?.tool_calls ?? []).map((tc: any) => {
       const args = String(tc?.function?.arguments ?? '{}')
@@ -87,16 +314,41 @@ export class OpenAIProvider {
     return this.streamImpl(request)
   }
 
+  capabilities(): ProviderCapabilities {
+    return withImage()
+  }
+
   private async *streamImpl(request: ChatRequest) {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
     body.stream = true
 
-    const responseBody = await postStream(
-      `${this.baseUrl}/chat/completions`,
-      this.headers(),
-      body
-    )
+    let attempt = 0
+    let responseBody: ReadableStream<Uint8Array>
+    while (true) {
+      try {
+        responseBody = await postStream(
+          this.chatUrl,
+          this.headers(),
+          body,
+        )
+        break
+      } catch (error) {
+        const status = (error as { status?: number }).status
+        const retryable =
+          (status !== undefined && isRetryableStatus(status)) ||
+          isRetryableNetworkError(error)
+        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
+          throw error
+        }
+        attempt += 1
+        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
+        const delay = this.retryPolicy.respectRetryAfter
+          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
+          : this.retryPolicy.delayForAttempt(attempt)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
 
     // Per-index tool-call tracking (only one tool open at a time for collectStream).
     const toolBuffer: Map<number, { id: string; name: string }> = new Map()

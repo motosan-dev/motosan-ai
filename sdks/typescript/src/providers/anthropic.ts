@@ -1,6 +1,13 @@
-import { ProviderError } from '../error.js'
+import {
+  isRetryableNetworkError,
+  isRetryableStatus,
+  ProviderError,
+} from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
+import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
+import { fullCaps, type ProviderCapabilities } from '../provider.js'
+import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
@@ -64,17 +71,39 @@ interface StreamState {
   stopReason?: StopReason
 }
 
+function classifyHttpError(result: unknown): RetryClassification {
+  if (result instanceof Error) {
+    const error = result as { status?: number; retryAfterMs?: number }
+    const status = error.status
+    if (
+      (status !== undefined && isRetryableStatus(status)) ||
+      isRetryableNetworkError(result)
+    ) {
+      return { retryable: true, retryAfterMs: error.retryAfterMs }
+    }
+    throw result
+  }
+  return { retryable: false }
+}
+
 export class AnthropicProvider {
   private readonly model: string
   private readonly baseUrl: string
+  private retryPolicy: RetryPolicy
 
   constructor(
     private readonly apiKey: string,
     model?: string,
     baseUrl = 'https://api.anthropic.com',
   ) {
-    this.model = model ?? 'claude-3-5-sonnet-20241022'
+    this.model = model ?? DEFAULT_ANTHROPIC_MODEL
     this.baseUrl = baseUrl
+    this.retryPolicy = RetryPolicy.default()
+  }
+
+  withRetryPolicy(policy: RetryPolicy): this {
+    this.retryPolicy = policy
+    return this
   }
 
   private headers(): Record<string, string> {
@@ -87,7 +116,11 @@ export class AnthropicProvider {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const body = serializeAnthropicRequest(request, request.model ?? this.model)
-    const payload = await postJson<any>(`${this.baseUrl}/v1/messages`, this.headers(), body)
+    const payload = await withRetry(
+      this.retryPolicy,
+      async () => postJson<any>(`${this.baseUrl}/v1/messages`, this.headers(), body),
+      classifyHttpError,
+    )
 
     const blocks: any[] = Array.isArray(payload?.content) ? payload.content : []
 
@@ -130,7 +163,28 @@ export class AnthropicProvider {
       ...serializeAnthropicRequest(request, request.model ?? this.model),
       stream: true,
     }
-    const responseBody = await postStream(`${this.baseUrl}/v1/messages`, this.headers(), body)
+    let attempt = 0
+    let responseBody: ReadableStream<Uint8Array>
+    while (true) {
+      try {
+        responseBody = await postStream(`${this.baseUrl}/v1/messages`, this.headers(), body)
+        break
+      } catch (error) {
+        const status = (error as { status?: number }).status
+        const retryable =
+          (status !== undefined && isRetryableStatus(status)) ||
+          isRetryableNetworkError(error)
+        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
+          throw error
+        }
+        attempt += 1
+        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
+        const delay = this.retryPolicy.respectRetryAfter
+          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
+          : this.retryPolicy.delayForAttempt(attempt)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
 
     const state: StreamState = {}
 
@@ -236,7 +290,7 @@ export class AnthropicProvider {
     }
   }
 
-  capabilities(): { supportsImage: boolean; supportsDocument: boolean } {
-    return { supportsImage: true, supportsDocument: true }
+  capabilities(): ProviderCapabilities {
+    return fullCaps()
   }
 }

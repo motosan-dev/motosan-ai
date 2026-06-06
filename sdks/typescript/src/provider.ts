@@ -1,0 +1,164 @@
+/**
+ * Provider capabilities, validation, dispatch, and stream wrappers.
+ *
+ * Mirrors Rust `providers/mod.rs:76-96` (validate_request) and
+ * `types.rs:903-930` (ProviderCapabilities).
+ */
+
+import { UnsupportedFeatureError } from './error.js'
+import type { BoxStream } from './stream.js'
+import type { ChatRequest, ChatResponse, ContentBlock, StreamEvent } from './types.js'
+
+/**
+ * Describes what features a provider supports.
+ *
+ * Mirrors Rust `ProviderCapabilities` (types.rs:903-907).
+ */
+export interface ProviderCapabilities {
+  supportsImage: boolean
+  supportsDocument: boolean
+}
+
+/**
+ * Provider with text only — no images, no documents.
+ *
+ * Mirrors Rust `ProviderCapabilities::text_only()` (types.rs:910-915).
+ */
+export function textOnly(): ProviderCapabilities {
+  return { supportsImage: false, supportsDocument: false }
+}
+
+/**
+ * Provider with image support — images but no documents.
+ *
+ * Mirrors Rust `ProviderCapabilities::with_image()` (types.rs:917-922).
+ */
+export function withImage(): ProviderCapabilities {
+  return { supportsImage: true, supportsDocument: false }
+}
+
+/**
+ * Provider with full support — images and documents.
+ *
+ * Mirrors Rust `ProviderCapabilities::full()` (types.rs:924-929).
+ */
+export function fullCaps(): ProviderCapabilities {
+  return { supportsImage: true, supportsDocument: true }
+}
+
+/**
+ * Validate a chat request against provider capabilities.
+ *
+ * Iterates request.messages[].contentBlocks and throws UnsupportedFeatureError if:
+ * - Content block is an image and !caps.supportsImage
+ * - Content block is a document and !caps.supportsDocument
+ *
+ * Mirrors Rust Provider::validate_request (providers/mod.rs:76-96).
+ * Throws BEFORE any HTTP call.
+ */
+export function validateRequest(req: ChatRequest, caps: ProviderCapabilities): void {
+  for (const msg of req.messages) {
+    const blocks: ContentBlock[] = msg.contentBlocks ?? []
+    for (const block of blocks) {
+      if (block.type === 'image' && !caps.supportsImage) {
+        throw new UnsupportedFeatureError('provider does not support image input')
+      }
+      if (block.type === 'document' && !caps.supportsDocument) {
+        throw new UnsupportedFeatureError('provider does not support document input')
+      }
+    }
+  }
+}
+
+/** String-tagged provider discriminator. Extend with 'ollama' | 'gemini' in M5/M6. */
+export type Provider = 'anthropic' | 'openai' | 'minimax'
+
+/**
+ * Minimal shape a provider must expose to be dispatched: a capability reshape
+ * plus chat/stream. Concrete providers (AnthropicProvider/OpenAIProvider/
+ * MinimaxProvider) structurally satisfy this.
+ */
+export interface ProviderImpl {
+  capabilities(): ProviderCapabilities
+  chat(req: ChatRequest): Promise<ChatResponse>
+  stream(req: ChatRequest): BoxStream
+}
+
+/**
+ * Dispatch a chat request: validateRequest(caps) BEFORE any HTTP call, then
+ * provider.chat (which owns its retry loop). NO retry here; mirrors Rust
+ * client.rs dispatch_chat (validate → p.chat).
+ */
+export async function dispatchChat(provider: ProviderImpl, req: ChatRequest): Promise<ChatResponse> {
+  validateRequest(req, provider.capabilities())
+  return provider.chat(req)
+}
+
+/**
+ * Dispatch a stream request: validate BEFORE connecting, then provider.stream
+ * (which owns the initial-fetch retry; NO retry here). Sync return; the returned
+ * generator throws on initial-fetch failure after provider internal retries.
+ */
+export function dispatchStream(provider: ProviderImpl, req: ChatRequest): BoxStream {
+  validateRequest(req, provider.capabilities())
+  return provider.stream(req)
+}
+
+/**
+ * Stream wrapper that applies a read timeout. SILENTLY terminates (returns/ends)
+ * on timeout — does NOT throw, matching the M1 mid-stream-failure swallow contract.
+ * Ports Rust `ReadTimeoutStream`: reset the deadline on each yielded event; if no
+ * event arrives before the deadline, end the stream.
+ */
+export async function* readTimeoutStream(inner: BoxStream, timeoutSecs: number): BoxStream {
+  const timeoutMs = timeoutSecs * 1000
+  const iterator = inner[Symbol.asyncIterator]()
+  let closed = false
+
+  async function closeInner(): Promise<void> {
+    if (!closed) {
+      closed = true
+      await iterator.return?.()
+    }
+  }
+
+  function cancelInnerWithoutWaiting(): void {
+    if (!closed) {
+      closed = true
+      void iterator.return?.().catch(() => {})
+    }
+  }
+
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const timeout = new Promise<'__timeout__'>((resolve) => {
+          timer = setTimeout(() => resolve('__timeout__'), timeoutMs)
+        })
+        const next = iterator.next()
+        const raced = await Promise.race([next, timeout])
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+
+        if (raced === '__timeout__') {
+          cancelInnerWithoutWaiting()
+          return
+        }
+
+        const result = raced as IteratorResult<StreamEvent>
+        if (result.done) {
+          closed = true
+          return
+        }
+        yield result.value
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
+    }
+  } finally {
+    await closeInner()
+  }
+}

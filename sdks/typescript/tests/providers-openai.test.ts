@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { OpenAIProvider } from '../src/providers/openai.js'
+import { DEFAULT_OPENAI_CHAT_URL, OpenAIProvider } from '../src/providers/openai.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
 describe('OpenAIProvider chat', () => {
@@ -164,6 +164,35 @@ describe('OpenAIProvider chat', () => {
     await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
 
     expect(capturedRequest?.url).toBe('https://api.custom.com/v1/chat/completions')
+  })
+
+  it('falls back to reasoning_content when content is empty/null (reasoning models)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              id: 'chatcmpl_r',
+              model: 'gpt-5.3-codex',
+              choices: [
+                {
+                  message: { content: null, reasoning_content: 'thought it through' },
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    )
+
+    const provider = new OpenAIProvider('sk-test')
+    const response = await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+
+    // Matches Rust extract_chat_content (content.or(reasoning)) and the stream path.
+    expect(response.content).toBe('thought it through')
   })
 })
 
@@ -394,4 +423,140 @@ describe('OpenAIProvider (live integration)', () => {
       expect(textAccum.length).toBeGreaterThan(0)
     }
   )
+})
+
+describe('OpenAIProvider auth styles', () => {
+  let captured: { url: string; headers: Record<string, string> } | null = null
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    captured = null
+  })
+
+  function stubOk() {
+    const mockFetch = vi.fn(async (url: string, options?: RequestInit) => {
+      captured = { url, headers: (options?.headers as Record<string, string>) ?? {} }
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl_auth',
+          model: 'gpt-4o',
+          choices: [{ index: 0, message: { content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200 },
+      )
+    })
+    vi.stubGlobal('fetch', mockFetch)
+  }
+
+  it('exports the default OpenAI chat-completions URL', () => {
+    expect(DEFAULT_OPENAI_CHAT_URL).toBe('https://api.openai.com/v1/chat/completions')
+  })
+
+  it('uses Bearer auth by default in the Authorization header', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-bearer-test')
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured?.headers['authorization']).toBe('Bearer sk-bearer-test')
+    expect(captured?.headers['x-api-key']).toBeUndefined()
+  })
+
+  it('uses x-api-key when configured via withAuthStyle', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-xapikey-test').withAuthStyle({ kind: 'xApiKey' })
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured?.headers['x-api-key']).toBe('sk-xapikey-test')
+    expect(captured?.headers['authorization']).toBeUndefined()
+  })
+
+  it('uses a custom header when configured via withAuthStyle', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('myapikey123').withAuthStyle({
+      kind: 'custom',
+      header: 'X-Custom-Auth',
+    })
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured?.headers['X-Custom-Auth']).toBe('myapikey123')
+    expect(captured?.headers['authorization']).toBeUndefined()
+    expect(captured?.headers['x-api-key']).toBeUndefined()
+  })
+})
+
+describe('OpenAIProvider custom chat URL', () => {
+  let capturedUrl: string | null = null
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    capturedUrl = null
+  })
+
+  function stubOk() {
+    const mockFetch = vi.fn(async (url: string) => {
+      capturedUrl = url
+      return new Response(
+        JSON.stringify({
+          id: 'chatcmpl_url',
+          model: 'gpt-4o',
+          choices: [{ index: 0, message: { content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        { status: 200 },
+      )
+    })
+    vi.stubGlobal('fetch', mockFetch)
+  }
+
+  it('uses a custom chat URL set via withChatUrl', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-test').withChatUrl(
+      'https://api.groq.com/openai/v1/chat/completions',
+    )
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(capturedUrl).toBe('https://api.groq.com/openai/v1/chat/completions')
+  })
+
+  it('trims trailing slashes from a custom chat URL', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-test').withChatUrl(
+      'https://api.groq.com/openai/v1/chat/completions///',
+    )
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(capturedUrl).toBe('https://api.groq.com/openai/v1/chat/completions')
+  })
+
+  it('derives chat URL from a custom baseUrl (backward compatibility)', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-test', 'gpt-4o', 'https://api.custom.com/v1/')
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(capturedUrl).toBe('https://api.custom.com/v1/chat/completions')
+  })
+
+  it('prefers an explicit withChatUrl over the baseUrl-derived URL', async () => {
+    stubOk()
+    const provider = new OpenAIProvider('sk-test', 'gpt-4o', 'https://api.custom.com/v1/').withChatUrl(
+      'https://api.other.com/custom/chat',
+    )
+    await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(capturedUrl).toBe('https://api.other.com/custom/chat')
+  })
+
+  it('uses the custom chat URL for streaming requests', async () => {
+    const mockFetch = vi.fn(async (url: string) => {
+      capturedUrl = url
+      const sseData = 'data: {"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+      return new Response(sseData, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const provider = new OpenAIProvider('sk-test').withChatUrl('https://api.other.com/custom/stream/')
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'test' }] })) {
+      events.push(event)
+    }
+    expect(capturedUrl).toBe('https://api.other.com/custom/stream')
+    expect(events.at(-1)?.done).toBe(true)
+  })
 })
