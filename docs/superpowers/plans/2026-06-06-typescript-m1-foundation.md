@@ -47,6 +47,7 @@ Replace the flat string-only types with the full structured type system mirrorin
 **Files:**
 - `sdks/typescript/src/types.ts` (rewrite — replaces the flat types + the `MessageFactory` literal, whose per-method helpers move to `message.ts` in Task 3 as standalone exported functions: `user()`, `assistant()`, etc.)
 - `sdks/typescript/tests/types.test.ts` (rewrite — JSON-roundtrip + optional-omission assertions)
+- Build-compat only if required by `tsc`: existing stream literals in `sdks/typescript/src/providers/anthropic.ts`, `sdks/typescript/src/providers/openai.ts`, and/or `sdks/typescript/src/providers/minimax.ts` may be minimally updated to include `eventType: 'text'` (no provider refactor in Task 1).
 
 > Context: the current `tests/types.test.ts` imports `MessageFactory` from `../src/types.js`. After this task `types.ts` is types-only. Rewrite the test file in this task so it no longer imports `MessageFactory` (its helpers return as standalone functions in Task 3's `message.ts`); the other existing test files (`client.test.ts`, `providers.serialization.test.ts`, the two `integration.*` files) are NOT touched here and keep compiling because they import only from `client`/provider modules. If `npm run build`/`npm run test` surfaces a stale `MessageFactory` reference from another file during this task, that file is updated in Task 9 (wire-up) — do not edit it here unless the build breaks; if it breaks, the minimal fix is to keep a temporary `MessageFactory` re-export shim. Verify with the build step below.
 
@@ -402,7 +403,7 @@ Replace the flat string-only types with the full structured type system mirrorin
   npm run build
   ```
 
-  Expected: exit 0, no `tsc` errors. If `tsc` reports that another module still imports `MessageFactory` from `./types.js` (e.g. `client.ts`/`index.ts`), add a minimal temporary re-export shim at the bottom of `types.ts` — `export { MessageFactory } from './message.js'` is NOT available yet, so instead leave the consumer untouched and let Task 3/Task 9 own it; the only acceptable change in THIS task is to `types.ts` and `tests/types.test.ts`. If the build cannot pass without touching a consumer, stop and note it for Task 3/Task 9 rather than expanding this task's scope. (Per the existing layout, `client.ts`/`index.ts` import the provider/client surface, not `MessageFactory`, so the build is expected to pass clean.)
+  Expected: exit 0, no `tsc` errors. If `tsc` reports old provider stream literals missing the newly-required `eventType`, make the smallest compatibility edit in the affected existing provider files by adding `eventType: 'text'` to those old text/done `StreamEvent` objects only; do not refactor provider streaming in Task 1 (Task 8 owns the Anthropic rewrite). If `tsc` reports that another module still imports `MessageFactory` from `./types.js` (e.g. `client.ts`/`index.ts`), add a minimal temporary re-export shim at the bottom of `types.ts` — `export { MessageFactory } from './message.js'` is NOT available yet, so instead leave the consumer untouched and let Task 3/Task 9 own it. If the build cannot pass without touching any consumer beyond the minimal `eventType: 'text'` compatibility described here, stop and note it for Task 3/Task 9 rather than expanding this task's scope.
 
 - [ ] **Step 6: Run the full suite to confirm no regression in sibling test files.**
 
@@ -415,7 +416,7 @@ Replace the flat string-only types with the full structured type system mirrorin
 - [ ] **Step 7: Commit (test + impl together, conventional-commit style, on the M1 feature branch).**
 
   ```bash
-  git add sdks/typescript/src/types.ts sdks/typescript/tests/types.test.ts
+  git add sdks/typescript/src/types.ts sdks/typescript/tests/types.test.ts sdks/typescript/src/providers/anthropic.ts sdks/typescript/src/providers/openai.ts sdks/typescript/src/providers/minimax.ts
   git commit -m "$(cat <<'EOF'
   feat(ts): structured type system (content blocks, stream taxonomy, usage cache tokens)
 
@@ -433,7 +434,7 @@ Replace the flat string-only types with the full structured type system mirrorin
   )"
   ```
 
-**Done criteria:** `npx vitest run tests/types.test.ts` green; `npm run build` exits 0 under strict mode; `types.ts` defines all of `Role`, `ContentBlock`/`ImageSource`/`DocumentSource`, `ToolCall`, `Tool`, `ToolChoice`, `ThinkingConfig`, `SystemBlock`, `Usage` (with optional cache tokens), `StopReason`, `StreamEventType`, `StreamEvent`, `Message` (with `contentBlocks`), `ChatRequest`, `ChatResponse`; no flat-string-only assumption remains; commit landed on the feature branch.
+**Done criteria:** `npx vitest run tests/types.test.ts` green; `npm run build` exits 0 under strict mode; any old provider stream literals needed for build have only the minimal `eventType: 'text'` compatibility addition; `types.ts` defines all of `Role`, `ContentBlock`/`ImageSource`/`DocumentSource`, `ToolCall`, `Tool`, `ToolChoice`, `ThinkingConfig`, `SystemBlock`, `Usage` (with optional cache tokens), `StopReason`, `StreamEventType`, `StreamEvent`, `Message` (with `contentBlocks`), `ChatRequest`, `ChatResponse`; no flat-string-only assumption remains; commit landed on the feature branch.
 
 ---
 

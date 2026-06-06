@@ -26,7 +26,7 @@ Rules:
 
 **Task 1 — types.ts**
 ```
-Execute "### Task 1: Rewrite types.ts — structured type system" from the plan. This creates the complete src/types.ts (the type contract every later task imports) and rewrites tests/types.test.ts. For the red step, use the plan's corrected `tsc --noEmit ... tests/types.test.ts` command because Vitest does not type-check `import type`. Done when npm run build and the types test are green and tests/types.test.ts no longer imports MessageFactory.
+Execute "### Task 1: Rewrite types.ts — structured type system" from the plan. This creates the complete src/types.ts (the type contract every later task imports) and rewrites tests/types.test.ts. For the red step, use the plan's corrected `tsc --noEmit ... tests/types.test.ts` command because Vitest does not type-check `import type`. If build exposes old provider stream literals missing the newly required `eventType`, apply only the plan-approved minimal compatibility addition `eventType: 'text'` in those existing provider literals. Done when npm run build and the types test are green and tests/types.test.ts no longer imports MessageFactory.
 ```
 
 **Task 2 — error.ts**
