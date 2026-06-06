@@ -165,7 +165,11 @@ describe('AnthropicProvider chat', () => {
 
   it('capabilities() reports image + document support', () => {
     const provider = new AnthropicProvider('key')
-    expect(provider.capabilities()).toEqual({ supportsImage: true, supportsDocument: true })
+    expect(provider.capabilities()).toEqual({
+      supportsImage: true,
+      supportsDocument: true,
+      supportsMcp: true,
+    })
   })
 })
 

@@ -3,6 +3,7 @@ import {
   textOnly,
   withImage,
   fullCaps,
+  minimaxCaps,
   validateRequest,
   type ProviderCapabilities,
 } from '../src/provider.js'
@@ -10,22 +11,36 @@ import { UnsupportedFeatureError } from '../src/error.js'
 import type { ChatRequest } from '../src/types.js'
 
 describe('ProviderCapabilities factories', () => {
-  it('textOnly() returns {false, false}', () => {
-    const caps = textOnly()
-    expect(caps.supportsImage).toBe(false)
-    expect(caps.supportsDocument).toBe(false)
+  it('textOnly() returns {false, false, supportsMcp:false}', () => {
+    expect(textOnly()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+    })
   })
 
-  it('withImage() returns {true, false}', () => {
-    const caps = withImage()
-    expect(caps.supportsImage).toBe(true)
-    expect(caps.supportsDocument).toBe(false)
+  it('withImage() returns {true, false, supportsMcp:false}', () => {
+    expect(withImage()).toEqual({
+      supportsImage: true,
+      supportsDocument: false,
+      supportsMcp: false,
+    })
   })
 
-  it('fullCaps() returns {true, true}', () => {
-    const caps = fullCaps()
-    expect(caps.supportsImage).toBe(true)
-    expect(caps.supportsDocument).toBe(true)
+  it('fullCaps() returns {true, true, supportsMcp:true}', () => {
+    expect(fullCaps()).toEqual({
+      supportsImage: true,
+      supportsDocument: true,
+      supportsMcp: true,
+    })
+  })
+
+  it('minimaxCaps() returns text-only but MCP-capable', () => {
+    expect(minimaxCaps()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: true,
+    })
   })
 })
 
@@ -235,5 +250,41 @@ describe('Provider capabilities integration', () => {
       capabilities: withImage(),
     }
     expect(config.capabilities.supportsImage).toBe(true)
+  })
+})
+
+describe('validateRequest MCP gating (M4)', () => {
+  const mcpReq: ChatRequest = {
+    messages: [{ role: 'user', content: 'hi' }],
+    mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+  }
+  const mcpToolReq: ChatRequest = {
+    messages: [{ role: 'user', content: 'hi' }],
+    mcpToolConfigs: [{ kind: 'all', mcpServerName: 'm' }],
+  }
+
+  it('throws UnsupportedFeatureError when mcpServers set and caps lack MCP (openai/withImage)', () => {
+    expect(() => validateRequest(mcpReq, withImage())).toThrow(UnsupportedFeatureError)
+    expect(() => validateRequest(mcpReq, withImage())).toThrow(
+      'provider does not support MCP server config',
+    )
+  })
+
+  it('throws when mcpToolConfigs set and caps lack MCP (textOnly)', () => {
+    expect(() => validateRequest(mcpToolReq, textOnly())).toThrow(UnsupportedFeatureError)
+  })
+
+  it('passes MCP config for MCP-capable caps (fullCaps / anthropic)', () => {
+    expect(() => validateRequest(mcpReq, fullCaps())).not.toThrow()
+    expect(() => validateRequest(mcpToolReq, fullCaps())).not.toThrow()
+  })
+
+  it('passes MCP config for minimaxCaps (text-only but MCP-capable)', () => {
+    expect(() => validateRequest(mcpReq, minimaxCaps())).not.toThrow()
+  })
+
+  it('does NOT throw when no MCP config is present (textOnly)', () => {
+    const plain: ChatRequest = { messages: [{ role: 'user', content: 'hi' }] }
+    expect(() => validateRequest(plain, textOnly())).not.toThrow()
   })
 })

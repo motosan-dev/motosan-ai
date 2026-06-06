@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_MINIMAX_MODEL } from '../src/models.js'
 import { MinimaxProvider } from '../src/providers/minimax.js'
-import { textOnly } from '../src/provider.js'
+import { minimaxCaps } from '../src/provider.js'
 import type { ChatRequest } from '../src/types.js'
 
 function anthropicResponse(model = DEFAULT_MINIMAX_MODEL) {
@@ -96,9 +96,9 @@ describe('MinimaxProvider (Anthropic-compat wire)', () => {
     expect(url).toBe('https://proxy.example/anthropic/v1/messages')
   })
 
-  it('reports text-only capabilities', () => {
+  it('reports text-only MCP-capable capabilities', () => {
     const provider = new MinimaxProvider('mm-key')
-    expect(provider.capabilities()).toEqual(textOnly())
+    expect(provider.capabilities()).toEqual(minimaxCaps())
   })
 
   it('streams via the Anthropic SSE adapter and posts stream:true', async () => {

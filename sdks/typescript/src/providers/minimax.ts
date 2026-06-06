@@ -11,7 +11,7 @@
  * (Rust client.rs:577).
  */
 import { DEFAULT_MINIMAX_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities } from '../provider.js'
+import { minimaxCaps, type ProviderCapabilities } from '../provider.js'
 import { RetryPolicy } from '../retry.js'
 import type { BoxStream } from '../stream.js'
 import type { ChatRequest, ChatResponse } from '../types.js'
@@ -44,8 +44,8 @@ export class MinimaxProvider {
     return this.inner.stream(request)
   }
 
-  /** Text-only — images/documents rejected by validateRequest before any HTTP call. */
+  /** Text-only but MCP-capable via Anthropic-compatible wire. */
   capabilities(): ProviderCapabilities {
-    return textOnly()
+    return minimaxCaps()
   }
 }
