@@ -1,162 +1,238 @@
-import { AuthError, ConfigError, NetworkError, ProviderError, RateLimitError } from '../error.js'
-import type { ChatRequest, ChatResponse, Message, StreamEvent, ToolCall } from '../types.js'
+import { ProviderError } from '../error.js'
+import { postJson, postStream } from '../http/fetch.js'
+import { parseSse } from '../http/sse.js'
+import { serializeAnthropicRequest } from '../serialize/anthropic.js'
+import {
+  doneEvent,
+  doneWithStopReason,
+  textEvent,
+  thinkingDelta,
+  thinkingDone,
+  toolCallArgsWithId,
+  toolCallEndWithId,
+  toolCallStart,
+  usageEvent,
+  type BoxStream,
+} from '../stream.js'
+import type {
+  ChatRequest,
+  ChatResponse,
+  StopReason,
+  ToolCall,
+  Usage,
+} from '../types.js'
 
-interface AnthropicCtor {
-  new (args: { apiKey: string }): {
-    messages: {
-      create: (args: Record<string, unknown>) => Promise<any>
-    }
+const ANTHROPIC_VERSION = '2023-06-01'
+
+function parseStopReason(reason: unknown): StopReason {
+  switch (reason) {
+    case 'end_turn':
+      return 'end_turn'
+    case 'max_tokens':
+      return 'max_tokens'
+    case 'tool_use':
+      return 'tool_use'
+    case 'stop_sequence':
+      return 'stop_sequence'
+    case 'stop':
+      return 'stop'
+    default:
+      return 'other'
   }
 }
 
+/** Build a Usage object, omitting cache fields unless explicitly provided. */
+function toUsage(raw: any, includeCache: boolean): Usage {
+  const usage: Usage = {
+    inputTokens: Number(raw?.input_tokens ?? 0),
+    outputTokens: Number(raw?.output_tokens ?? 0),
+  }
+  if (includeCache) {
+    if (raw?.cache_creation_input_tokens != null) {
+      usage.cacheCreationInputTokens = Number(raw.cache_creation_input_tokens)
+    }
+    if (raw?.cache_read_input_tokens != null) {
+      usage.cacheReadInputTokens = Number(raw.cache_read_input_tokens)
+    }
+  }
+  return usage
+}
+
+interface StreamState {
+  currentToolId?: string
+  currentThinkingBuf?: string
+  stopReason?: StopReason
+}
+
 export class AnthropicProvider {
-  private clientPromise: Promise<any>
-  private model: string
+  private readonly model: string
+  private readonly baseUrl: string
 
   constructor(
     private readonly apiKey: string,
     model?: string,
-    injectedClient?: any
+    baseUrl = 'https://api.anthropic.com',
   ) {
-    this.model = model ?? 'claude-sonnet-4-5'
-    this.clientPromise = injectedClient
-      ? Promise.resolve(injectedClient)
-      : import('@anthropic-ai/sdk')
-          .then((mod) => {
-            const Ctor = (mod.default ?? (mod as any).Anthropic) as unknown as AnthropicCtor
-            if (!Ctor) throw new ConfigError('Missing Anthropic SDK constructor')
-            return new Ctor({ apiKey })
-          })
-          .catch((error) => {
-            if (error instanceof ConfigError) throw error
-            throw new ConfigError('Install optional peer dependency @anthropic-ai/sdk')
-          })
+    this.model = model ?? 'claude-3-5-sonnet-20241022'
+    this.baseUrl = baseUrl
   }
 
-  static serializeMessages(messages: Message[], explicitSystem?: string): { messages: any[]; system?: string } {
-    const outgoing: any[] = []
-    const systemParts: string[] = []
-    if (explicitSystem?.trim()) systemParts.push(explicitSystem)
-
-    for (const message of messages) {
-      if (message.role === 'system') {
-        if (message.content.trim()) systemParts.push(message.content)
-      } else if (message.role === 'user') {
-        outgoing.push({ role: 'user', content: message.content })
-      } else if (message.role === 'assistant') {
-        if (message.toolCalls?.length) {
-          const blocks: any[] = []
-          if (message.content) blocks.push({ type: 'text', text: message.content })
-          for (const tc of message.toolCalls) {
-            blocks.push({ type: 'tool_use', id: tc.id, name: tc.name, input: tc.input })
-          }
-          outgoing.push({ role: 'assistant', content: blocks })
-        } else {
-          outgoing.push({ role: 'assistant', content: message.content })
-        }
-      } else if (message.role === 'tool' && message.toolCallId) {
-        outgoing.push({
-          role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: message.toolCallId, content: message.content }]
-        })
-      }
-    }
-
+  private headers(): Record<string, string> {
     return {
-      messages: outgoing,
-      system: systemParts.length ? systemParts.join('\n\n') : undefined
+      'x-api-key': this.apiKey,
+      'anthropic-version': ANTHROPIC_VERSION,
+      'content-type': 'application/json',
     }
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const client = await this.clientPromise
-    const serialized = AnthropicProvider.serializeMessages(request.messages, request.system)
-    const body: Record<string, unknown> = {
-      model: request.model ?? this.model,
-      messages: serialized.messages,
-      max_tokens: request.maxTokens ?? 1024
-    }
-    if (serialized.system) body.system = serialized.system
-    if (request.temperature != null) body.temperature = request.temperature
-    if (request.tools?.length) {
-      body.tools = request.tools.map((t) => ({
-        name: t.name,
-        description: t.description ?? '',
-        input_schema: t.inputSchema ?? { type: 'object', properties: {} }
-      }))
-    }
-    if (request.providerOptions) Object.assign(body, request.providerOptions)
+    const body = serializeAnthropicRequest(request, request.model ?? this.model)
+    const payload = await postJson<any>(`${this.baseUrl}/v1/messages`, this.headers(), body)
 
-    let payload: any
-    try {
-      payload = await client.messages.create(body)
-      if (typeof payload?.model_dump === 'function') payload = payload.model_dump()
-    } catch (error: any) {
-      const name = String(error?.constructor?.name ?? '').toLowerCase()
-      if (name.includes('authentication')) throw new AuthError(String(error))
-      if (name.includes('ratelimit') || name.includes('rate_limit')) throw new RateLimitError(String(error))
-      throw new NetworkError(String(error))
-    }
+    const blocks: any[] = Array.isArray(payload?.content) ? payload.content : []
 
-    const contentBlocks = Array.isArray(payload?.content) ? payload.content : []
-    const content = contentBlocks
-      .filter((b: any) => b?.type === 'text')
-      .map((b: any) => String(b?.text ?? ''))
+    const content = blocks
+      .filter((b) => b?.type === 'text')
+      .map((b) => String(b?.text ?? ''))
       .join('')
-    const toolCalls: ToolCall[] = contentBlocks
-      .filter((b: any) => b?.type === 'tool_use')
-      .map((b: any) => ({ id: String(b?.id ?? ''), name: String(b?.name ?? ''), input: (b?.input ?? {}) as Record<string, unknown> }))
 
-    const stopReasonMap: Record<string, ChatResponse['stopReason']> = {
-      end_turn: 'end_turn',
-      max_tokens: 'max_tokens',
-      tool_use: 'tool_use',
-      stop: 'stop'
-    }
+    const thinking =
+      blocks
+        .filter((b) => b?.type === 'thinking')
+        .map((b) => String(b?.thinking ?? ''))
+        .join('') || undefined
+
+    const toolCalls: ToolCall[] = blocks
+      .filter((b) => b?.type === 'tool_use')
+      .map((b) => ({
+        id: String(b?.id ?? ''),
+        name: String(b?.name ?? ''),
+        input: (b?.input ?? {}) as Record<string, unknown>,
+      }))
+      .filter((tc) => tc.id && tc.name)
 
     return {
       content,
+      ...(thinking ? { thinking } : {}),
       toolCalls,
       model: String(payload?.model ?? this.model),
-      usage: {
-        inputTokens: Number(payload?.usage?.input_tokens ?? 0),
-        outputTokens: Number(payload?.usage?.output_tokens ?? 0)
-      },
-      stopReason: stopReasonMap[String(payload?.stop_reason ?? '')] ?? 'other'
+      usage: toUsage(payload?.usage ?? {}, true),
+      stopReason: parseStopReason(payload?.stop_reason),
     }
   }
 
-  async *stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const client = await this.clientPromise
-    const serialized = AnthropicProvider.serializeMessages(request.messages, request.system)
-    const body: Record<string, unknown> = {
-      model: request.model ?? this.model,
-      messages: serialized.messages,
-      max_tokens: request.maxTokens ?? 1024,
-      stream: true
-    }
-    if (serialized.system) body.system = serialized.system
-    if (request.providerOptions) Object.assign(body, request.providerOptions)
+  stream(request: ChatRequest): BoxStream {
+    return this.streamImpl(request)
+  }
 
-    let events: any
-    try {
-      events = await client.messages.create(body)
-    } catch (error: any) {
-      const name = String(error?.constructor?.name ?? '').toLowerCase()
-      if (name.includes('authentication')) throw new AuthError(String(error))
-      if (name.includes('ratelimit') || name.includes('rate_limit')) throw new RateLimitError(String(error))
-      throw new ProviderError(String(error))
+  private async *streamImpl(request: ChatRequest) {
+    const body = {
+      ...serializeAnthropicRequest(request, request.model ?? this.model),
+      stream: true,
     }
+    const responseBody = await postStream(`${this.baseUrl}/v1/messages`, this.headers(), body)
 
-    for await (const raw of events) {
-      const event = typeof raw?.model_dump === 'function' ? raw.model_dump() : raw
-      if (event?.type === 'content_block_delta') {
-        const text = String(event?.delta?.text ?? '')
-        if (text) yield { content: text, done: false, eventType: 'text' }
-      } else if (event?.type === 'message_stop') {
-        yield { content: '', done: true, eventType: 'text' }
-        return
+    const state: StreamState = {}
+
+    for await (const evt of parseSse(responseBody)) {
+      const data = evt.data
+      if (!data) continue
+
+      switch (evt.event) {
+        case 'message_start': {
+          const usage = data?.message?.usage
+          if (usage) {
+            yield usageEvent(toUsage(usage, true))
+          }
+          break
+        }
+
+        case 'content_block_start': {
+          const block = data?.content_block
+          if (block?.type === 'tool_use') {
+            const id = String(block.id ?? '')
+            const name = String(block.name ?? '')
+            state.currentToolId = id
+            yield toolCallStart(id, name)
+          } else if (block?.type === 'thinking') {
+            state.currentThinkingBuf = ''
+          }
+          // redacted_thinking and text blocks: nothing to emit on start.
+          break
+        }
+
+        case 'content_block_delta': {
+          const delta = data?.delta
+          if (!delta) break
+
+          if (delta.type === 'text_delta') {
+            const text = String(delta.text ?? '')
+            if (text) yield textEvent(text)
+          } else if (delta.type === 'input_json_delta') {
+            const partial = String(delta.partial_json ?? '')
+            if (partial && state.currentToolId !== undefined) {
+              yield toolCallArgsWithId(state.currentToolId, partial)
+            }
+          } else if (delta.type === 'thinking_delta') {
+            const text = String(delta.thinking ?? '')
+            if (text) {
+              if (state.currentThinkingBuf !== undefined) {
+                state.currentThinkingBuf += text
+              }
+              yield thinkingDelta(text)
+            }
+          }
+          // signature_delta and any other delta types are ignored.
+          break
+        }
+
+        case 'content_block_stop': {
+          if (state.currentToolId !== undefined) {
+            const id = state.currentToolId
+            state.currentToolId = undefined
+            yield toolCallEndWithId(id)
+          }
+          if (state.currentThinkingBuf !== undefined) {
+            const buf = state.currentThinkingBuf
+            state.currentThinkingBuf = undefined
+            yield thinkingDone(buf)
+          }
+          break
+        }
+
+        case 'message_delta': {
+          const reason = data?.delta?.stop_reason
+          if (reason) state.stopReason = parseStopReason(reason)
+          const usage = data?.usage
+          if (usage) {
+            // message_delta usage carries NO cache tokens.
+            yield usageEvent(toUsage(usage, false))
+          }
+          break
+        }
+
+        case 'message_stop': {
+          yield state.stopReason !== undefined
+            ? doneWithStopReason(state.stopReason)
+            : doneEvent()
+          return
+        }
+
+        default:
+          // ping / unknown events are ignored.
+          break
       }
     }
+
+    // Defensive: terminate even if message_stop never arrived.
+    if (state.stopReason !== undefined) {
+      yield doneWithStopReason(state.stopReason)
+    } else {
+      yield doneEvent()
+    }
+  }
+
+  capabilities(): { supportsImage: boolean; supportsDocument: boolean } {
+    return { supportsImage: true, supportsDocument: true }
   }
 }
