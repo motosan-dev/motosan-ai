@@ -62,6 +62,8 @@ export class ClientBuilder {
   protected _minimaxEndpoint?: string
   protected _openaiAuthStyle: OpenAIAuthStyle = { kind: 'bearer' }
   protected _openaiChatUrl?: string
+  protected _openaiResponsesFallback = false
+  protected _openaiResponsesUrl?: string
 
   provider(p: Provider): this {
     this._provider = p
@@ -118,6 +120,16 @@ export class ClientBuilder {
     return this
   }
 
+  openaiResponsesFallback(enabled: boolean): this {
+    this._openaiResponsesFallback = enabled
+    return this
+  }
+
+  openaiResponsesUrl(u: string): this {
+    this._openaiResponsesUrl = u
+    return this
+  }
+
   /**
    * Construct the configured provider with its existing constructor signature,
    * then chain Task 5's mutating `withRetryPolicy(policy): this` setter.
@@ -136,6 +148,12 @@ export class ClientBuilder {
         .withAuthStyle(this._openaiAuthStyle)
       if (this._openaiChatUrl) {
         openai = openai.withChatUrl(this._openaiChatUrl)
+      }
+      if (this._openaiResponsesUrl) {
+        openai = openai.withResponsesUrl(this._openaiResponsesUrl)
+      }
+      if (this._openaiResponsesFallback) {
+        openai = openai.withResponsesFallback(this._openaiResponsesFallback)
       }
       return openai
     }

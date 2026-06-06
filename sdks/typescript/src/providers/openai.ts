@@ -26,6 +26,9 @@ export type OpenAIAuthStyle =
 /** Default chat-completions endpoint. */
 export const DEFAULT_OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
+/** Default Responses-API endpoint. */
+export const DEFAULT_OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
+
 const FINISH_REASON_MAP: Record<string, StopReason> = {
   stop: 'stop',
   length: 'max_tokens',
@@ -53,6 +56,8 @@ export class OpenAIProvider {
   private retryPolicy: RetryPolicy
   private authStyle: OpenAIAuthStyle = { kind: 'bearer' }
   private chatUrl: string = DEFAULT_OPENAI_CHAT_URL
+  private responsesUrl: string = DEFAULT_OPENAI_RESPONSES_URL
+  private responsesFallback = false
 
   constructor(
     private readonly apiKey: string,
@@ -64,6 +69,7 @@ export class OpenAIProvider {
     this.retryPolicy = RetryPolicy.default()
     if (this.baseUrl !== 'https://api.openai.com/v1') {
       this.chatUrl = `${this.baseUrl}/chat/completions`
+      this.responsesUrl = `${this.baseUrl}/responses`
     }
   }
 
@@ -79,6 +85,16 @@ export class OpenAIProvider {
 
   withChatUrl(url: string): this {
     this.chatUrl = url.replace(/\/+$/, '')
+    return this
+  }
+
+  withResponsesFallback(enabled: boolean): this {
+    this.responsesFallback = enabled
+    return this
+  }
+
+  withResponsesUrl(url: string): this {
+    this.responsesUrl = url.replace(/\/+$/, '')
     return this
   }
 
@@ -102,16 +118,159 @@ export class OpenAIProvider {
     return this.applyAuth({ 'content-type': 'application/json' })
   }
 
+  private extractResponsesText(payload: any): string {
+    const outputText = payload?.output_text
+    if (typeof outputText === 'string' && outputText.trim()) {
+      return outputText.trim()
+    }
+
+    const output = payload?.output
+    if (Array.isArray(output) && output.length > 0) {
+      const first = output[0]
+      const content =
+        first && typeof first === 'object'
+          ? (first as { content?: unknown }).content
+          : undefined
+      if (Array.isArray(content)) {
+        for (const item of content) {
+          if (item && typeof item === 'object') {
+            const text = (item as { text?: unknown }).text
+            if (typeof text === 'string' && text.trim()) {
+              return text.trim()
+            }
+            const nested = (item as { content?: unknown }).content
+            if (Array.isArray(nested)) {
+              for (const nestedItem of nested) {
+                if (nestedItem && typeof nestedItem === 'object') {
+                  const nestedText = (nestedItem as { text?: unknown }).text
+                  if (typeof nestedText === 'string' && nestedText.trim()) {
+                    return nestedText.trim()
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return ''
+  }
+
+  private async chatViaResponses(request: ChatRequest): Promise<ChatResponse> {
+    const model = request.model ?? this.model
+    const instructionsParts: string[] = []
+
+    if (request.systemBlocks) {
+      for (const block of request.systemBlocks) {
+        const trimmed = block.text.trim()
+        if (trimmed) instructionsParts.push(trimmed)
+      }
+    } else if (request.system) {
+      const trimmed = request.system.trim()
+      if (trimmed) instructionsParts.push(trimmed)
+    }
+
+    const input: unknown[] = []
+    for (const message of request.messages) {
+      switch (message.role) {
+        case 'system': {
+          const trimmed = message.content.trim()
+          if (trimmed) instructionsParts.push(trimmed)
+          break
+        }
+        case 'assistant': {
+          if (message.toolCalls && message.toolCalls.length > 0) {
+            const toolCalls = message.toolCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function',
+              function: { name: tc.name, arguments: JSON.stringify(tc.input) },
+            }))
+            input.push({
+              role: 'assistant',
+              content: message.content,
+              tool_calls: toolCalls,
+            })
+          } else {
+            input.push({ role: 'assistant', content: message.content })
+          }
+          break
+        }
+        case 'user': {
+          input.push({ role: 'user', content: message.content })
+          break
+        }
+        case 'tool': {
+          if (message.toolCallId) {
+            input.push({
+              role: 'tool',
+              tool_call_id: message.toolCallId,
+              content: message.content,
+            })
+          }
+          break
+        }
+      }
+    }
+
+    const body: Record<string, unknown> = { model, input }
+    if (instructionsParts.length > 0) {
+      body.instructions = instructionsParts.join('\n\n')
+    }
+    if (request.providerOptions) {
+      for (const [key, value] of Object.entries(request.providerOptions)) {
+        body[key] = value
+      }
+    }
+
+    const payload = await postJson<any>(this.responsesUrl, this.headers(), body)
+    const content = this.extractResponsesText(payload)
+    const responseModel =
+      typeof payload?.model === 'string' ? payload.model : DEFAULT_OPENAI_MODEL
+    const usage = payload?.usage ?? {}
+    const inputTokens =
+      typeof usage?.input_tokens === 'number'
+        ? usage.input_tokens
+        : typeof usage?.prompt_tokens === 'number'
+          ? usage.prompt_tokens
+          : 0
+    const outputTokens =
+      typeof usage?.output_tokens === 'number'
+        ? usage.output_tokens
+        : typeof usage?.completion_tokens === 'number'
+          ? usage.completion_tokens
+          : 0
+
+    return {
+      content,
+      toolCalls: [],
+      model: responseModel,
+      usage: { inputTokens: Number(inputTokens), outputTokens: Number(outputTokens) },
+      stopReason: 'stop',
+    }
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
 
-    const payload = await withRetry(
-      this.retryPolicy,
-      async () =>
-        postJson<any>(this.chatUrl, this.headers(), body),
-      classifyHttpError,
-    )
+    let payload: any
+    try {
+      payload = await withRetry(
+        this.retryPolicy,
+        async () => postJson<any>(this.chatUrl, this.headers(), body),
+        classifyHttpError,
+      )
+    } catch (error) {
+      if (
+        this.responsesFallback &&
+        error instanceof Error &&
+        (error as { status?: number }).status === 404
+      ) {
+        return this.chatViaResponses(request)
+      }
+      throw error
+    }
 
     const choice = payload?.choices?.[0] ?? {}
     const message = choice?.message ?? {}
