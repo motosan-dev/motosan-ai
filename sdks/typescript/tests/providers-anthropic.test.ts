@@ -328,6 +328,38 @@ describe('AnthropicProvider stream', () => {
     expect(doneEvents).toHaveLength(1)
     expect(doneEvents[0].stopReason).toBeUndefined()
   })
+
+  it('does not emit thinking_done for an empty thinking block (start/stop, no deltas)', async () => {
+    const sse =
+      'event: content_block_start\n' +
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}\n\n' +
+      'event: content_block_stop\n' +
+      'data: {"type":"content_block_stop","index":0}\n\n' +
+      'event: content_block_start\n' +
+      'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}\n\n' +
+      'event: content_block_delta\n' +
+      'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hi"}}\n\n' +
+      'event: content_block_stop\n' +
+      'data: {"type":"content_block_stop","index":1}\n\n' +
+      'event: message_stop\n' +
+      'data: {"type":"message_stop"}\n\n'
+
+    streamFromTranscript(sse)
+
+    const provider = new AnthropicProvider('key', 'claude-3-5-sonnet-20241022')
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event)
+    }
+
+    // A thinking block that produced no deltas must NOT emit thinking_done
+    // (collectStream maps the absence to thinking: undefined).
+    expect(events.some((e) => e.eventType === 'thinking_done')).toBe(false)
+    expect(events.some((e) => e.eventType === 'thinking_delta')).toBe(false)
+    expect(events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content)).toEqual([
+      'hi',
+    ])
+  })
 })
 
 describe('AnthropicProvider live', () => {

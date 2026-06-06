@@ -195,7 +195,11 @@ export class AnthropicProvider {
           if (state.currentThinkingBuf !== undefined) {
             const buf = state.currentThinkingBuf
             state.currentThinkingBuf = undefined
-            yield thinkingDone(buf)
+            // Only emit thinkingDone for a block that produced content; an empty
+            // thinking block yields no event (collectStream maps it to undefined).
+            if (buf.length > 0) {
+              yield thinkingDone(buf)
+            }
           }
           break
         }

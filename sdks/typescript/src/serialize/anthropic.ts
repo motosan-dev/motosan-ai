@@ -4,7 +4,6 @@ const DEFAULT_MAX_TOKENS = 8192
 const CACHE_CONTROL = { type: 'ephemeral' } as const
 
 type SerializedBlock = Record<string, unknown>
-type CacheableTool = { cache?: boolean }
 
 function serializeContentBlock(block: ContentBlock): SerializedBlock {
   if (block.type === 'text') {
@@ -187,15 +186,16 @@ export function serializeAnthropicRequest(
   }
 
   if (req.tools && req.tools.length > 0) {
-    result.tools = req.tools.map((tool, index) => {
+    result.tools = req.tools.map((tool) => {
       const serialized: SerializedBlock = {
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
       }
 
-      const cacheable = tool as CacheableTool
-      if (index === req.tools!.length - 1 && cacheable.cache) {
+      // Per-tool cache flag, position-independent — matches Rust
+      // providers/anthropic.rs (`if tool.cache { cache_control = ... }`).
+      if (tool.cache) {
         serialized.cache_control = CACHE_CONTROL
       }
 

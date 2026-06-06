@@ -41,6 +41,8 @@ export interface Tool {
   name: string
   description?: string
   inputSchema?: Record<string, unknown>
+  /** When true, attaches Anthropic `cache_control` to this tool (per-tool, position-independent). */
+  cache?: boolean
 }
 
 /**

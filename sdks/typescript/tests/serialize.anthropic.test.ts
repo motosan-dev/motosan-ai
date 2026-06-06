@@ -316,7 +316,7 @@ describe('serializeAnthropicRequest', () => {
       ])
     })
 
-    it('includes cache_control on last tool when there are multiple tools', () => {
+    it('includes cache_control on a cached last tool, not on uncached ones', () => {
       const req = {
         messages: [{ role: 'user' as const, content: 'hello' }],
         tools: [
@@ -328,6 +328,23 @@ describe('serializeAnthropicRequest', () => {
 
       expect(result.tools[0].cache_control).toBeUndefined()
       expect(result.tools[1].cache_control).toEqual({ type: 'ephemeral' })
+    })
+
+    it('includes cache_control on a cached NON-last tool (per-tool, position-independent)', () => {
+      const req = {
+        messages: [{ role: 'user' as const, content: 'hello' }],
+        tools: [
+          { name: 'tool1', description: 'First', inputSchema: {}, cache: true },
+          { name: 'tool2', description: 'Second', inputSchema: {} },
+        ],
+      }
+      const result = serializeAnthropicRequest(req, 'claude-opus-4')
+
+      // Matches Rust providers/anthropic.rs: each tool with cache:true carries
+      // cache_control regardless of position. (Regression guard for the
+      // last-tool-only bug.)
+      expect(result.tools[0].cache_control).toEqual({ type: 'ephemeral' })
+      expect(result.tools[1].cache_control).toBeUndefined()
     })
 
     it('omits tools field when no tools provided', () => {

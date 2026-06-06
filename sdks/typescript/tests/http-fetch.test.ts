@@ -52,6 +52,9 @@ describe('http/fetch', () => {
 
       await expect(
         postJson('https://api.test.com/v1/messages', {}, { test: true }),
+      ).rejects.toThrow(AuthError)
+      await expect(
+        postJson('https://api.test.com/v1/messages', {}, { test: true }),
       ).rejects.toThrow('unauthorized')
     })
 
