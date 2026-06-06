@@ -203,6 +203,24 @@ export function serializeAnthropicRequest(
     })
   }
 
+  if (req.toolChoice) {
+    switch (req.toolChoice.type) {
+      case 'auto':
+        result.tool_choice = { type: 'auto' }
+        break
+      case 'required':
+        result.tool_choice = { type: 'any' }
+        break
+      case 'none':
+        // Anthropic has no native "none"; removing tools prevents calls.
+        delete result.tools
+        break
+      case 'tool':
+        result.tool_choice = { type: 'tool', name: req.toolChoice.name }
+        break
+    }
+  }
+
   if (req.thinking) {
     result.thinking = req.thinking
   }

@@ -1,160 +1,224 @@
-import { AuthError, ConfigError, NetworkError, ProviderError, RateLimitError } from '../error.js'
-import type { ChatRequest, ChatResponse, Message, StreamEvent, ToolCall } from '../types.js'
+import { postJson, postStream } from '../http/fetch.js'
+import { parseSse } from '../http/sse.js'
+import { serializeOpenAiRequest } from '../serialize/openai.js'
+import {
+  doneEvent,
+  doneWithStopReason,
+  textEvent,
+  toolCallArgsWithId,
+  toolCallEndWithId,
+  toolCallStart,
+  usageEvent,
+  type BoxStream,
+} from '../stream.js'
+import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
 
-interface OpenAICtor {
-  new (args: { apiKey: string }): {
-    chat: {
-      completions: {
-        create: (args: Record<string, unknown>) => Promise<any>
-      }
-    }
-  }
+const FINISH_REASON_MAP: Record<string, StopReason> = {
+  stop: 'stop',
+  length: 'max_tokens',
+  tool_calls: 'tool_use',
 }
 
 export class OpenAIProvider {
-  private clientPromise: Promise<any>
-  private model: string
+  private readonly model: string
+  private readonly baseUrl: string
 
   constructor(
     private readonly apiKey: string,
     model?: string,
-    injectedClient?: any
+    baseUrl = 'https://api.openai.com/v1'
   ) {
     this.model = model ?? 'gpt-4o'
-    this.clientPromise = injectedClient
-      ? Promise.resolve(injectedClient)
-      : import('openai')
-          .then((mod) => {
-            const Ctor = (mod.default ?? (mod as any).OpenAI) as unknown as OpenAICtor
-            if (!Ctor) throw new ConfigError('Missing OpenAI SDK constructor')
-            return new Ctor({ apiKey })
-          })
-          .catch((error) => {
-            if (error instanceof ConfigError) throw error
-            throw new ConfigError('Install optional peer dependency openai')
-          })
+    this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
   }
 
-  static serializeMessages(messages: Message[], system?: string): any[] {
-    const outgoing: any[] = []
-    if (system) outgoing.push({ role: 'system', content: system })
-    for (const message of messages) {
-      if (message.role === 'system') {
-        outgoing.push({ role: 'system', content: message.content })
-      } else if (message.role === 'user') {
-        outgoing.push({ role: 'user', content: message.content })
-      } else if (message.role === 'assistant') {
-        if (message.toolCalls?.length) {
-          outgoing.push({
-            role: 'assistant',
-            content: message.content,
-            tool_calls: message.toolCalls.map((tc) => ({
-              id: tc.id,
-              type: 'function',
-              function: { name: tc.name, arguments: JSON.stringify(tc.input) }
-            }))
-          })
-        } else {
-          outgoing.push({ role: 'assistant', content: message.content })
-        }
-      } else if (message.role === 'tool' && message.toolCallId) {
-        outgoing.push({ role: 'tool', tool_call_id: message.toolCallId, content: message.content })
-      }
+  private headers(): Record<string, string> {
+    return {
+      authorization: `Bearer ${this.apiKey}`,
+      'content-type': 'application/json',
     }
-    return outgoing
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const client = await this.clientPromise
-    const body: Record<string, unknown> = {
-      model: request.model ?? this.model,
-      messages: OpenAIProvider.serializeMessages(request.messages, request.system)
-    }
-    if (request.maxTokens != null) body.max_tokens = request.maxTokens
-    if (request.temperature != null) body.temperature = request.temperature
-    if (request.tools?.length) {
-      body.tools = request.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description ?? '',
-          parameters: t.inputSchema ?? { type: 'object', properties: {} }
-        }
-      }))
-    }
-    if (request.providerOptions) Object.assign(body, request.providerOptions)
+    const resolvedModel = request.model ?? this.model
+    const body = serializeOpenAiRequest(request, resolvedModel)
 
-    let payload: any
-    try {
-      payload = await client.chat.completions.create(body)
-      if (typeof payload?.model_dump === 'function') payload = payload.model_dump()
-    } catch (error: any) {
-      const name = String(error?.constructor?.name ?? '').toLowerCase()
-      if (name.includes('authentication')) throw new AuthError(String(error))
-      if (name.includes('ratelimit') || name.includes('rate_limit')) throw new RateLimitError(String(error))
-      throw new NetworkError(String(error))
-    }
+    const payload = await postJson<any>(
+      `${this.baseUrl}/chat/completions`,
+      this.headers(),
+      body
+    )
 
     const choice = payload?.choices?.[0] ?? {}
     const message = choice?.message ?? {}
+    const content = String(message?.content ?? '')
+
     const toolCalls: ToolCall[] = (message?.tool_calls ?? []).map((tc: any) => {
       const args = String(tc?.function?.arguments ?? '{}')
-      let parsed: Record<string, unknown> = {}
+      let input: Record<string, unknown> = {}
       try {
-        parsed = JSON.parse(args)
+        input = JSON.parse(args)
       } catch {
-        parsed = {}
+        input = {}
       }
       return {
         id: String(tc?.id ?? ''),
         name: String(tc?.function?.name ?? ''),
-        input: parsed
+        input,
       }
     })
 
-    const finishReasonMap: Record<string, ChatResponse['stopReason']> = {
-      stop: 'stop',
-      length: 'max_tokens',
-      tool_calls: 'tool_use'
-    }
+    const stopReason =
+      FINISH_REASON_MAP[String(choice?.finish_reason ?? '')] ?? 'other'
 
     return {
-      content: String(message?.content ?? ''),
+      content,
       toolCalls,
-      model: String(payload?.model ?? this.model),
+      model: String(payload?.model ?? resolvedModel),
       usage: {
         inputTokens: Number(payload?.usage?.prompt_tokens ?? 0),
-        outputTokens: Number(payload?.usage?.completion_tokens ?? 0)
+        outputTokens: Number(payload?.usage?.completion_tokens ?? 0),
       },
-      stopReason: finishReasonMap[String(choice?.finish_reason ?? '')] ?? 'other'
+      stopReason,
     }
   }
 
-  async *stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const client = await this.clientPromise
-    const body: Record<string, unknown> = {
-      model: request.model ?? this.model,
-      messages: OpenAIProvider.serializeMessages(request.messages, request.system),
-      stream: true
-    }
-    if (request.providerOptions) Object.assign(body, request.providerOptions)
+  stream(request: ChatRequest): BoxStream {
+    return this.streamImpl(request)
+  }
 
-    let stream: any
-    try {
-      stream = await client.chat.completions.create(body)
-    } catch (error: any) {
-      throw new ProviderError(String(error))
-    }
+  private async *streamImpl(request: ChatRequest) {
+    const resolvedModel = request.model ?? this.model
+    const body = serializeOpenAiRequest(request, resolvedModel)
+    body.stream = true
 
-    for await (const raw of stream) {
-      const chunk = typeof raw?.model_dump === 'function' ? raw.model_dump() : raw
-      const choice = chunk?.choices?.[0]
-      const text = String(choice?.delta?.content ?? '')
-      if (text) yield { content: text, done: false, eventType: 'text' }
-      if (choice?.finish_reason) {
-        yield { content: '', done: true, eventType: 'text' }
-        return
+    const responseBody = await postStream(
+      `${this.baseUrl}/chat/completions`,
+      this.headers(),
+      body
+    )
+
+    // Per-index tool-call tracking (only one tool open at a time for collectStream).
+    const toolBuffer: Map<number, { id: string; name: string }> = new Map()
+    let openToolIndex: number | undefined
+    let pendingStopReason: StopReason | undefined
+    let doneEmitted = false
+
+    for await (const evt of parseSse(responseBody)) {
+      const data = evt.data
+
+      // [DONE] sentinel
+      if (data === '[DONE]') {
+        if (!doneEmitted) {
+          // Flush any still-open tool (the provider sent no finish_reason).
+          if (openToolIndex !== undefined) {
+            const openId = toolBuffer.get(openToolIndex)?.id
+            if (openId) {
+              yield toolCallEndWithId(openId)
+            }
+            openToolIndex = undefined
+          }
+          doneEmitted = true
+          yield pendingStopReason !== undefined
+            ? doneWithStopReason(pendingStopReason)
+            : doneEvent()
+        }
+        break
       }
+
+      if (!data || typeof data !== 'object') continue
+
+      const choice = data?.choices?.[0]
+      if (!choice) continue
+
+      const delta = choice?.delta
+      if (!delta) continue
+
+      // Text content (fall back to reasoning_content). No trimming — preserve
+      // whitespace exactly, matching Rust's is_empty() check (openai.rs).
+      const content = typeof delta.content === 'string' ? delta.content : ''
+      const reasoning =
+        typeof delta.reasoning_content === 'string' ? delta.reasoning_content : ''
+      const text = content !== '' ? content : reasoning
+      if (text !== '') {
+        yield textEvent(text)
+      }
+
+      // Tool calls (indexed per spec).
+      if (Array.isArray(delta.tool_calls)) {
+        for (const tc of delta.tool_calls) {
+          const tcIndex = tc?.index
+          if (tcIndex === undefined) continue
+
+          const tcId = tc?.id
+          const tcName = tc?.function?.name
+          const tcArgs = tc?.function?.arguments
+
+          // First delta for this index: has id + name.
+          if (tcId && tcName) {
+            // Close any open tool from a different index.
+            if (openToolIndex !== undefined && openToolIndex !== tcIndex) {
+              const openId = toolBuffer.get(openToolIndex)?.id
+              if (openId) {
+                yield toolCallEndWithId(openId)
+              }
+            }
+
+            // Open this tool.
+            toolBuffer.set(tcIndex, { id: tcId, name: tcName })
+            openToolIndex = tcIndex
+            yield toolCallStart(tcId, tcName)
+          }
+
+          // Arguments fragment.
+          if (tcArgs) {
+            const bufferedTool = toolBuffer.get(tcIndex)
+            if (bufferedTool) {
+              yield toolCallArgsWithId(bufferedTool.id, tcArgs)
+            }
+          }
+        }
+      }
+
+      // Stash finish_reason for the terminal done event.
+      if (choice?.finish_reason) {
+        pendingStopReason =
+          FINISH_REASON_MAP[String(choice.finish_reason)] ?? 'other'
+
+        // If finish_reason is tool_calls, close the open tool now.
+        if (choice.finish_reason === 'tool_calls' && openToolIndex !== undefined) {
+          const openId = toolBuffer.get(openToolIndex)?.id
+          if (openId) {
+            yield toolCallEndWithId(openId)
+            openToolIndex = undefined
+          }
+        }
+      }
+
+      // Usage event (if present in final chunk with stream_options).
+      const usage = data?.usage
+      if (usage) {
+        yield usageEvent({
+          inputTokens: Number(usage?.prompt_tokens ?? 0),
+          outputTokens: Number(usage?.completion_tokens ?? 0),
+        })
+      }
+    }
+
+    // Defensive: EOF without [DONE] — emit terminal once.
+    if (!doneEmitted) {
+      // If a tool is still open (no finish_reason/[DONE] closed it), flush it.
+      if (openToolIndex !== undefined) {
+        const openId = toolBuffer.get(openToolIndex)?.id
+        if (openId) {
+          yield toolCallEndWithId(openId)
+        }
+        openToolIndex = undefined
+      }
+      doneEmitted = true
+      yield pendingStopReason !== undefined
+        ? doneWithStopReason(pendingStopReason)
+        : doneEvent()
     }
   }
 }

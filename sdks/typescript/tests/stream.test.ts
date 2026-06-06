@@ -119,6 +119,45 @@ describe('stream.ts', () => {
       expect(response.stopReason).toBe('tool_use')
     })
 
+    it('accumulates multiple sequential tool calls with correct JSON parsing and usage', async () => {
+      const events: StreamEvent[] = [
+        textEvent('Processing '),
+        toolCallStart('call_1', 'get_weather'),
+        toolCallArgsWithId('call_1', '{"city":"'),
+        toolCallArgsWithId('call_1', 'Tokyo",'),
+        toolCallArgsWithId('call_1', '"units":"celsius"}'),
+        toolCallEndWithId('call_1'),
+        textEvent('and '),
+        toolCallStart('call_2', 'translate_text'),
+        toolCallArgsWithId('call_2', '{"text":"hello",'),
+        toolCallArgsWithId('call_2', '"target_language":"fr"}'),
+        toolCallEndWithId('call_2'),
+        usageEvent({ inputTokens: 50, outputTokens: 25 }),
+        doneWithStopReason('tool_use'),
+      ]
+      const stream = (async function* () {
+        for (const ev of events) yield ev
+      })() as BoxStream
+
+      const response = await collectStream(stream)
+
+      expect(response.toolCalls).toHaveLength(2)
+      expect(response.toolCalls[0]).toEqual({
+        id: 'call_1',
+        name: 'get_weather',
+        input: { city: 'Tokyo', units: 'celsius' },
+      })
+      expect(response.toolCalls[1]).toEqual({
+        id: 'call_2',
+        name: 'translate_text',
+        input: { text: 'hello', target_language: 'fr' },
+      })
+      expect(response.content).toBe('Processing and ')
+      expect(response.usage.inputTokens).toBe(50)
+      expect(response.usage.outputTokens).toBe(25)
+      expect(response.stopReason).toBe('tool_use')
+    })
+
     it('uses stopReason heuristic (tool_use when toolCalls present, end_turn otherwise)', async () => {
       const noToolEvents: StreamEvent[] = [textEvent('hello'), doneEvent()]
       const noToolStream = (async function* () {
