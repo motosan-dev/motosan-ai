@@ -1,4 +1,5 @@
 import { NetworkError, ProviderError, mapHttpError } from '../error.js'
+import { DEFAULT_MINIMAX_MODEL } from '../models.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from '../types.js'
 
@@ -12,7 +13,7 @@ export class MinimaxProvider {
     endpoint?: string,
     private readonly fetcher: typeof fetch = fetch
   ) {
-    this.model = model ?? 'MiniMax-Text-01'
+    this.model = model ?? DEFAULT_MINIMAX_MODEL
     this.endpoint = endpoint ?? 'https://api.minimax.chat/v1/text/chatcompletion_v2'
   }
 

@@ -1,5 +1,6 @@
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
+import { DEFAULT_OPENAI_MODEL } from '../models.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import {
   doneEvent,
@@ -28,7 +29,7 @@ export class OpenAIProvider {
     model?: string,
     baseUrl = 'https://api.openai.com/v1'
   ) {
-    this.model = model ?? 'gpt-4o'
+    this.model = model ?? DEFAULT_OPENAI_MODEL
     this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
   }
 

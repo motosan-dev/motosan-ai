@@ -1,5 +1,6 @@
 import { ProviderError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
+import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
@@ -73,7 +74,7 @@ export class AnthropicProvider {
     model?: string,
     baseUrl = 'https://api.anthropic.com',
   ) {
-    this.model = model ?? 'claude-3-5-sonnet-20241022'
+    this.model = model ?? DEFAULT_ANTHROPIC_MODEL
     this.baseUrl = baseUrl
   }
 

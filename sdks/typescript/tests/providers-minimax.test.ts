@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_MINIMAX_MODEL } from '../src/models.js'
 import { MinimaxProvider } from '../src/providers/minimax.js'
 import type { ChatRequest } from '../src/types.js'
 
@@ -16,7 +17,7 @@ describe('minimax provider serialization', () => {
         return new Response(
           JSON.stringify({
             id: 'cmpl_123',
-            model: 'MiniMax-Text-01',
+            model: DEFAULT_MINIMAX_MODEL,
             choices: [
               {
                 message: { role: 'assistant', content: 'ok' },
@@ -56,7 +57,7 @@ describe('minimax provider serialization', () => {
     await provider.chat(request)
 
     // Verify the captured body has OpenAI wire format
-    expect(capturedBody.model).toBe('MiniMax-Text-01')
+    expect(capturedBody.model).toBe(DEFAULT_MINIMAX_MODEL)
 
     // System message should be FIRST message in the array (OpenAI format)
     expect(capturedBody.messages[0]).toEqual({
