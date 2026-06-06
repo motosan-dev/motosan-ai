@@ -1,12 +1,35 @@
-import { NetworkError, ProviderError, mapHttpError } from '../error.js'
+import {
+  isRetryableNetworkError,
+  isRetryableStatus,
+  NetworkError,
+  ProviderError,
+  mapHttpError,
+} from '../error.js'
 import { DEFAULT_MINIMAX_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
+import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from '../types.js'
+
+function classifyHttpError(result: unknown): RetryClassification {
+  if (result instanceof Error) {
+    const error = result as { status?: number; retryAfterMs?: number }
+    const status = error.status
+    if (
+      (status !== undefined && isRetryableStatus(status)) ||
+      isRetryableNetworkError(result)
+    ) {
+      return { retryable: true, retryAfterMs: error.retryAfterMs }
+    }
+    throw result
+  }
+  return { retryable: false }
+}
 
 export class MinimaxProvider {
   private model: string
   private endpoint: string
+  private retryPolicy: RetryPolicy
 
   constructor(
     private readonly apiKey: string,
@@ -16,70 +39,90 @@ export class MinimaxProvider {
   ) {
     this.model = model ?? DEFAULT_MINIMAX_MODEL
     this.endpoint = endpoint ?? 'https://api.minimax.chat/v1/text/chatcompletion_v2'
+    this.retryPolicy = RetryPolicy.default()
+  }
+
+  withRetryPolicy(policy: RetryPolicy): this {
+    this.retryPolicy = policy
+    return this
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
 
-    let response: Response
     try {
-      response = await this.fetcher(this.endpoint, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json'
+      return await withRetry(
+        this.retryPolicy,
+        async () => {
+          const response = await this.fetcher(this.endpoint, {
+            method: 'POST',
+            headers: {
+              authorization: `Bearer ${this.apiKey}`,
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(body),
+          })
+
+          const text = await response.text()
+          let payload: any = {}
+          try {
+            payload = text ? JSON.parse(text) : {}
+          } catch {
+            payload = {}
+          }
+
+          if (!response.ok) {
+            const message = String(
+              payload?.error?.message ?? text ?? 'minimax request failed',
+            )
+            throw mapHttpError(response.status, message, response.headers.get('retry-after'))
+          }
+
+          const choice = payload?.choices?.[0] ?? {}
+          const msg = choice?.message ?? {}
+          const toolCalls = (msg?.tool_calls ?? []).map((tc: any) => {
+            const args = String(tc?.function?.arguments ?? '{}')
+            let parsed = {}
+            try {
+              parsed = JSON.parse(args)
+            } catch {
+              parsed = {}
+            }
+            return {
+              id: String(tc?.id ?? ''),
+              name: String(tc?.function?.name ?? ''),
+              input: parsed,
+            }
+          })
+
+          const stopReason: ChatResponse['stopReason'] =
+            choice?.finish_reason === 'tool_calls'
+              ? 'tool_use'
+              : choice?.finish_reason === 'length'
+                ? 'max_tokens'
+                : choice?.finish_reason === 'stop'
+                  ? 'stop'
+                  : 'other'
+
+          return {
+            content: String(msg?.content ?? ''),
+            toolCalls,
+            model: String(payload?.model ?? this.model),
+            usage: {
+              inputTokens: Number(payload?.usage?.prompt_tokens ?? 0),
+              outputTokens: Number(payload?.usage?.completion_tokens ?? 0),
+            },
+            stopReason,
+          }
         },
-        body: JSON.stringify(body)
-      })
-    } catch (error: any) {
-      throw new NetworkError(String(error))
-    }
-
-    const text = await response.text()
-    let payload: any = {}
-    try {
-      payload = text ? JSON.parse(text) : {}
-    } catch {
-      payload = {}
-    }
-
-    if (!response.ok) {
-      const message = String(payload?.error?.message ?? text ?? 'minimax request failed')
-      throw mapHttpError(response.status, message)
-    }
-
-    const choice = payload?.choices?.[0] ?? {}
-    const msg = choice?.message ?? {}
-    const toolCalls = (msg?.tool_calls ?? []).map((tc: any) => {
-      const args = String(tc?.function?.arguments ?? '{}')
-      let parsed = {}
-      try {
-        parsed = JSON.parse(args)
-      } catch {
-        parsed = {}
+        classifyHttpError,
+      )
+    } catch (error) {
+      if (isRetryableNetworkError(error)) {
+        throw new NetworkError(String(error))
       }
-      return { id: String(tc?.id ?? ''), name: String(tc?.function?.name ?? ''), input: parsed }
-    })
-
-    const stopReason: ChatResponse['stopReason'] =
-      choice?.finish_reason === 'tool_calls'
-        ? 'tool_use'
-        : choice?.finish_reason === 'length'
-          ? 'max_tokens'
-          : choice?.finish_reason === 'stop'
-            ? 'stop'
-            : 'other'
-
-    return {
-      content: String(msg?.content ?? ''),
-      toolCalls,
-      model: String(payload?.model ?? this.model),
-      usage: {
-        inputTokens: Number(payload?.usage?.prompt_tokens ?? 0),
-        outputTokens: Number(payload?.usage?.completion_tokens ?? 0)
-      },
-      stopReason
+      throw error
     }
   }
 
@@ -88,24 +131,51 @@ export class MinimaxProvider {
     const body = serializeOpenAiRequest(request, resolvedModel)
     body.stream = true
 
+    let attempt = 0
     let response: Response
-    try {
-      response = await this.fetcher(this.endpoint, {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json'
-        },
-        body: JSON.stringify(body)
-      })
-    } catch (error: any) {
-      throw new NetworkError(String(error))
+    while (true) {
+      try {
+        response = await this.fetcher(this.endpoint, {
+          method: 'POST',
+          headers: {
+            authorization: `Bearer ${this.apiKey}`,
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(body),
+        })
+      } catch (error) {
+        if (!isRetryableNetworkError(error) || attempt >= this.retryPolicy.maxRetries) {
+          throw new NetworkError(String(error))
+        }
+        attempt += 1
+        await new Promise((resolve) =>
+          setTimeout(resolve, this.retryPolicy.delayForAttempt(attempt)),
+        )
+        continue
+      }
+
+      if (response.ok) {
+        break
+      }
+
+      const text = await response.text()
+      const error = mapHttpError(
+        response.status,
+        text || 'minimax stream failed',
+        response.headers.get('retry-after'),
+      )
+      const retryable = isRetryableStatus(response.status)
+      if (!retryable || attempt >= this.retryPolicy.maxRetries) {
+        throw error
+      }
+      attempt += 1
+      const retryAfterMs = error.retryAfterMs
+      const delay = this.retryPolicy.respectRetryAfter
+        ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
+        : this.retryPolicy.delayForAttempt(attempt)
+      await new Promise((resolve) => setTimeout(resolve, delay))
     }
 
-    if (!response.ok) {
-      const text = await response.text()
-      throw mapHttpError(response.status, text || 'minimax stream failed')
-    }
     if (!response.body) throw new ProviderError('Missing response body for stream')
 
     const reader = response.body.getReader()

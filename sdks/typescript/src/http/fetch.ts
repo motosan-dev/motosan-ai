@@ -13,7 +13,11 @@ async function throwMappedError(response: Response): Promise<never> {
     payload = text
   }
   const message = extractErrorMessage(payload, `HTTP ${response.status}`)
-  throw mapHttpError(response.status, message)
+  throw mapHttpError(
+    response.status,
+    message,
+    response.headers?.get('retry-after') ?? null,
+  )
 }
 
 export async function postJson<T = unknown>(

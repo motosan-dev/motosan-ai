@@ -1,7 +1,9 @@
+import { isRetryableNetworkError, isRetryableStatus } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_OPENAI_MODEL } from '../models.js'
 import { withImage, type ProviderCapabilities } from '../provider.js'
+import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import {
   doneEvent,
@@ -21,9 +23,25 @@ const FINISH_REASON_MAP: Record<string, StopReason> = {
   tool_calls: 'tool_use',
 }
 
+function classifyHttpError(result: unknown): RetryClassification {
+  if (result instanceof Error) {
+    const error = result as { status?: number; retryAfterMs?: number }
+    const status = error.status
+    if (
+      (status !== undefined && isRetryableStatus(status)) ||
+      isRetryableNetworkError(result)
+    ) {
+      return { retryable: true, retryAfterMs: error.retryAfterMs }
+    }
+    throw result
+  }
+  return { retryable: false }
+}
+
 export class OpenAIProvider {
   private readonly model: string
   private readonly baseUrl: string
+  private retryPolicy: RetryPolicy
 
   constructor(
     private readonly apiKey: string,
@@ -32,6 +50,12 @@ export class OpenAIProvider {
   ) {
     this.model = model ?? DEFAULT_OPENAI_MODEL
     this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
+    this.retryPolicy = RetryPolicy.default()
+  }
+
+  withRetryPolicy(policy: RetryPolicy): this {
+    this.retryPolicy = policy
+    return this
   }
 
   private headers(): Record<string, string> {
@@ -45,10 +69,11 @@ export class OpenAIProvider {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
 
-    const payload = await postJson<any>(
-      `${this.baseUrl}/chat/completions`,
-      this.headers(),
-      body
+    const payload = await withRetry(
+      this.retryPolicy,
+      async () =>
+        postJson<any>(`${this.baseUrl}/chat/completions`, this.headers(), body),
+      classifyHttpError,
     )
 
     const choice = payload?.choices?.[0] ?? {}
@@ -98,11 +123,32 @@ export class OpenAIProvider {
     const body = serializeOpenAiRequest(request, resolvedModel)
     body.stream = true
 
-    const responseBody = await postStream(
-      `${this.baseUrl}/chat/completions`,
-      this.headers(),
-      body
-    )
+    let attempt = 0
+    let responseBody: ReadableStream<Uint8Array>
+    while (true) {
+      try {
+        responseBody = await postStream(
+          `${this.baseUrl}/chat/completions`,
+          this.headers(),
+          body,
+        )
+        break
+      } catch (error) {
+        const status = (error as { status?: number }).status
+        const retryable =
+          (status !== undefined && isRetryableStatus(status)) ||
+          isRetryableNetworkError(error)
+        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
+          throw error
+        }
+        attempt += 1
+        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
+        const delay = this.retryPolicy.respectRetryAfter
+          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
+          : this.retryPolicy.delayForAttempt(attempt)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
 
     // Per-index tool-call tracking (only one tool open at a time for collectStream).
     const toolBuffer: Map<number, { id: string; name: string }> = new Map()

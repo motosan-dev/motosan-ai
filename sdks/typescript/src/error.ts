@@ -1,4 +1,7 @@
-export class MotosanError extends Error {}
+export class MotosanError extends Error {
+  status?: number
+  retryAfterMs?: number
+}
 export class AuthError extends MotosanError {}
 export class RateLimitError extends MotosanError {}
 export class InvalidRequestError extends MotosanError {}
@@ -32,11 +35,25 @@ export class UnsupportedFeatureError extends MotosanError {
   }
 }
 
-export function mapHttpError(status: number, message: string): MotosanError {
-  if (status === 401) return new AuthError(message)
-  if (status === 429) return new RateLimitError(message)
-  if (status === 400) return new InvalidRequestError(message)
-  return new ProviderError(message)
+export function mapHttpError(
+  status: number,
+  message: string,
+  retryAfter?: string | null,
+): MotosanError {
+  const error =
+    status === 401
+      ? new AuthError(message)
+      : status === 429
+        ? new RateLimitError(message)
+        : status === 400
+          ? new InvalidRequestError(message)
+          : new ProviderError(message)
+  error.status = status
+  const retryAfterMs = parseRetryAfter(retryAfter ?? null)
+  if (retryAfterMs !== undefined) {
+    error.retryAfterMs = retryAfterMs
+  }
+  return error
 }
 
 /**
