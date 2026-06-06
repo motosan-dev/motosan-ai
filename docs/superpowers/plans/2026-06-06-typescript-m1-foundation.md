@@ -227,13 +227,13 @@ Replace the flat string-only types with the full structured type system mirrorin
   })
   ```
 
-- [ ] **Step 2: Run the test — it must fail.** The new file imports types (`ContentBlock`, `ImageSource`, `DocumentSource`, `StreamEventType`, `ToolChoice`, expanded `StreamEvent`/`Message`/`ChatResponse`, etc.) that do not yet exist in the flat `types.ts`.
+- [ ] **Step 2: Run the type-check test — it must fail.** The new file imports types (`ContentBlock`, `ImageSource`, `DocumentSource`, `StreamEventType`, `ToolChoice`, expanded `StreamEvent`/`Message`/`ChatResponse`, etc.) that do not yet exist in the flat `types.ts`. Use `tsc` for the red step because Vitest/esbuild does not type-check test files and `import type` exports are erased at runtime.
 
   ```bash
-  npx vitest run tests/types.test.ts
+  npx tsc --noEmit --module NodeNext --moduleResolution NodeNext --strict --target ES2022 --types vitest,node tests/types.test.ts
   ```
 
-  Expected: FAIL — vitest reports unresolved/missing type exports from `../src/types.js` (e.g. `ContentBlock`, `ImageSource`, `DocumentSource`, `StreamEventType`, `ToolChoice` are not exported), and/or type errors on the expanded `StreamEvent`/`Message` shapes. (Confirms the test is exercising the new contract, not the old types.)
+  Expected: FAIL — TypeScript reports unresolved/missing type exports from `../src/types.js` (e.g. `ContentBlock`, `ImageSource`, `DocumentSource`, `StreamEventType`, `ToolChoice` are not exported), and/or type errors on the expanded `StreamEvent`/`Message` shapes. (Confirms the test is exercising the new contract, not the old types.)
 
 - [ ] **Step 3: Implement — overwrite `sdks/typescript/src/types.ts`** with the locked structured type system.
 
