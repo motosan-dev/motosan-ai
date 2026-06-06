@@ -18,4 +18,8 @@ export {
   MINIMAX_MODELS,
 } from './models.js'
 export type { ProviderCapabilities, Provider } from './provider.js'
-export { textOnly, withImage, fullCaps, validateRequest } from './provider.js'
+export { textOnly, withImage, fullCaps, minimaxCaps, validateRequest } from './provider.js'
+
+// M4: server-side MCP types (also covered by `export * from './types.js'`; listed
+// explicitly for discoverability). No internal http/serialize symbols are exported.
+export type { McpServerType, McpServerConfig, McpToolConfig } from './types.js'
