@@ -61,7 +61,7 @@ Execute "### Task 7: serialize/anthropic.ts request serializer". Create src/seri
 
 **Task 8 — providers/anthropic.ts**
 ```
-Execute "### Task 8: providers/anthropic.ts rewrite (self-implemented chat + stream)". Rewrite src/providers/anthropic.ts to import postJson/postStream (../http/fetch.js), parseSse (../http/sse.js), serializeAnthropicRequest (../serialize/anthropic.js), and the stream.ts constructor helpers — NO @anthropic-ai/sdk, NO local parseSse/streamEvent. The streaming test uses a HAND-AUTHORED inline SSE transcript string. Live test is env-gated with it.skipIf(!process.env.ANTHROPIC_API_KEY).
+Execute "### Task 8: providers/anthropic.ts rewrite (self-implemented chat + stream)". Rewrite src/providers/anthropic.ts to import postJson/postStream (../http/fetch.js), parseSse (../http/sse.js), serializeAnthropicRequest (../serialize/anthropic.js), and the stream.ts constructor helpers — NO @anthropic-ai/sdk, NO local parseSse/streamEvent. The streaming test uses a HAND-AUTHORED inline SSE transcript string. Live test is env-gated with it.skipIf(!process.env.ANTHROPIC_API_KEY). If build reports the BoxStream/ProviderLike stream seam, apply only the plan-approved minimal src/client.ts type widening to AsyncIterable<StreamEvent>; do not change routing.
 ```
 
 **Task 9 — wire-up + drop @anthropic-ai/sdk**

@@ -4121,6 +4121,7 @@ Expected output:
 **Files:**
 - **Modify:** `/Users/daiwanwei/Projects/wade/motosan-ai/sdks/typescript/src/providers/anthropic.ts`
 - **Test:** `/Users/daiwanwei/Projects/wade/motosan-ai/sdks/typescript/tests/providers-anthropic.test.ts`
+- **Build-compat only if required by `tsc`:** `/Users/daiwanwei/Projects/wade/motosan-ai/sdks/typescript/src/client.ts` may be minimally widened so `ProviderLike.stream` and `Client.stream` return `AsyncIterable<StreamEvent>` instead of `AsyncGenerator<StreamEvent>`; do not change provider routing in Task 8.
 
 > Depends on Task 5 (`http/fetch.ts`), Task 3 (`http/sse.ts`), Task 6 (`stream.ts` helpers), and Task 7 (`serialize/anthropic.ts`). This task wires those together — it does NOT define its own SSE parser, its own `streamEvent()` factory, or its own request serializer. It imports `postJson`/`postStream` from `../http/fetch.js`, `parseSse` from `../http/sse.js`, `serializeAnthropicRequest` from `../serialize/anthropic.js`, and the `StreamEvent` constructor helpers from `../stream.js`. Note: `parseSse` yields `SseEvent { event?: string; data: any }` — read `evt.event` (the SSE event name) and `evt.data` (the already-parsed JSON), NOT `{ eventType, payload }`.
 
@@ -4810,12 +4811,14 @@ Expected output (clean compile):
 > tsc -p tsconfig.json
 ```
 
+If `tsc` reports that `AnthropicProvider.stream(): BoxStream` / `AsyncIterable<StreamEvent>` is not assignable to `ProviderLike.stream(): AsyncGenerator<StreamEvent>`, make the minimal type-seam compatibility edit in `src/client.ts`: widen `ProviderLike.stream` and `Client.stream` return types to `AsyncIterable<StreamEvent>`. Do not change `chat`, provider construction, or routing in this task.
+
 ---
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/providers/anthropic.ts tests/providers-anthropic.test.ts && git commit -m "$(cat <<'EOF'
+git add src/providers/anthropic.ts tests/providers-anthropic.test.ts src/client.ts && git commit -m "$(cat <<'EOF'
 feat(anthropic): self-implement chat + stream without @anthropic-ai/sdk
 
 Rewrite AnthropicProvider on the shared HTTP/SSE/serialize layer:
@@ -4934,7 +4937,7 @@ If the existing `client.ts` still constructs the old provider in a way that does
 
 - [ ] **Step 2: Confirm `src/client.ts` routes anthropic to the self-hosted provider**
 
-`client.ts` already imports `AnthropicProvider` from `./providers/anthropic.js` and constructs it as `new AnthropicProvider(apiKey, options.model)`. The self-hosted provider's constructor signature is `(apiKey: string, model?: string, baseUrl?: string)` — identical for the first two args — so no change to the construction call is required. Keep `ProviderName`, `ProviderLike`, and `Client` exactly as they are. Verify the file reads as follows (no edits needed if it already matches):
+`client.ts` already imports `AnthropicProvider` from `./providers/anthropic.js` and constructs it as `new AnthropicProvider(apiKey, options.model)`. The self-hosted provider's constructor signature is `(apiKey: string, model?: string, baseUrl?: string)` — identical for the first two args — so no change to the construction call is required. Keep provider routing unchanged. If Task 8 already widened the stream type seam for build compatibility, keep that widened `AsyncIterable<StreamEvent>` shape here; otherwise verify the file reads as follows (no edits needed if it already matches):
 
 ```typescript
 import { ConfigError } from './error.js'
@@ -4947,7 +4950,7 @@ export type ProviderName = 'anthropic' | 'openai' | 'minimax'
 
 export interface ProviderLike {
   chat(request: ChatRequest): Promise<ChatResponse>
-  stream(request: ChatRequest): AsyncGenerator<StreamEvent>
+  stream(request: ChatRequest): AsyncIterable<StreamEvent>
 }
 
 export class Client {
@@ -4989,13 +4992,13 @@ export class Client {
     return this.provider.chat(request)
   }
 
-  stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
+  stream(request: ChatRequest): AsyncIterable<StreamEvent> {
     return this.provider.stream(request)
   }
 }
 ```
 
-> The `ProviderLike.stream` return type is `AsyncGenerator<StreamEvent>`. The self-hosted `AnthropicProvider.stream` returns a `BoxStream` (`AsyncIterable<StreamEvent>`); an `async *` generator satisfies `AsyncIterable`, and the assignment is via structural typing of `chat`/`stream`. If `tsc` complains that `BoxStream` is not assignable to `AsyncGenerator`, leave `client.ts`'s `ProviderLike.stream` typed as `AsyncIterable<StreamEvent>` instead — but do NOT change `chat`/the rest of the shape. Run the build (Step 5) to confirm before editing.
+> The `ProviderLike.stream` return type is intentionally `AsyncIterable<StreamEvent>` after the Task 8 build-seam fix. Existing provider async generators satisfy `AsyncIterable`, and the self-hosted `AnthropicProvider.stream` returns `BoxStream` (`AsyncIterable<StreamEvent>`). Do NOT change `chat`, provider construction, or routing.
 
 Re-run the client test to confirm GREEN:
 
@@ -5132,7 +5135,7 @@ Expected output:
 
 ## Cross-task implementation notes (read before executing)
 
-- **`BoxStream` vs `AsyncGenerator<StreamEvent>` typing seam:** the new `AnthropicProvider.stream()` returns `BoxStream` (`AsyncIterable<StreamEvent>`), while the existing `ProviderLike.stream` in `client.ts` is typed `AsyncGenerator<StreamEvent>`. An async generator satisfies `AsyncIterable`, so this is usually fine; if `tsc` complains in Task 9, widen `ProviderLike.stream` to `AsyncIterable<StreamEvent>`.
+- **`BoxStream` vs `AsyncGenerator<StreamEvent>` typing seam:** the new `AnthropicProvider.stream()` returns `BoxStream` (`AsyncIterable<StreamEvent>`), while the original `ProviderLike.stream` in `client.ts` was typed `AsyncGenerator<StreamEvent>`. An async generator satisfies `AsyncIterable`; if `tsc` complains during Task 8, widen `ProviderLike.stream` and `Client.stream` to `AsyncIterable<StreamEvent>` there so the per-task build gate stays green.
 - **The terminal `done` event has `eventType: 'text'`:** `doneEvent`/`doneWithStopReason` from `stream.ts` set `eventType` to `'text'` (there is no dedicated done type in `StreamEventType`). Identify the terminal event by `e.done === true`, NOT by `eventType`. Task 8's transcript test asserts on `e.done`.
 - **`parseSse` yields `SseEvent { event?, data }`:** the Anthropic stream adapter reads `evt.event` (e.g. `'content_block_delta'`) and `evt.data` (the parsed JSON) — not a `{ eventType, payload }` shape.
 - **Existing tests stay green:** `tests/integration.anthropic.test.ts` (env-gated) is untouched; Task 9 appends to `tests/client.test.ts` rather than rewriting it.
