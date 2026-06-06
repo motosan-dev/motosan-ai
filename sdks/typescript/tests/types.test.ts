@@ -5,6 +5,9 @@ import type {
   ContentBlock,
   DocumentSource,
   ImageSource,
+  McpServerConfig,
+  McpServerType,
+  McpToolConfig,
   Message,
   StopReason,
   StreamEvent,
@@ -166,5 +169,67 @@ describe('Tool, ToolChoice, StopReason shapes', () => {
   it('StopReason union values are usable', () => {
     const reasons: StopReason[] = ['end_turn', 'max_tokens', 'tool_use', 'stop', 'stop_sequence', 'other']
     expect(reasons).toContain('tool_use')
+  })
+})
+
+describe('MCP types', () => {
+  it('McpServerType is the literal "url"', () => {
+    const t: McpServerType = 'url'
+    expect(t).toBe('url')
+  })
+
+  it('McpServerConfig roundtrips with and without authorizationToken', () => {
+    const withToken: McpServerConfig = {
+      type: 'url',
+      url: 'https://mcp.example.com/sse',
+      name: 'example',
+      authorizationToken: 'tok_123',
+    }
+    const withoutToken: McpServerConfig = {
+      type: 'url',
+      url: 'https://mcp.example.com/sse',
+      name: 'example',
+    }
+    expect(roundtrip(withToken)).toEqual(withToken)
+    expect(roundtrip(withoutToken)).toEqual(withoutToken)
+    const json = JSON.parse(JSON.stringify(withoutToken))
+    expect('authorizationToken' in json).toBe(false)
+  })
+
+  it('McpToolConfig discriminated union: all/allowed/denied roundtrip', () => {
+    const all: McpToolConfig = { kind: 'all', mcpServerName: 'srv' }
+    const allowed: McpToolConfig = {
+      kind: 'allowed',
+      mcpServerName: 'srv',
+      allowedTools: ['read', 'list'],
+    }
+    const denied: McpToolConfig = {
+      kind: 'denied',
+      mcpServerName: 'srv',
+      deniedTools: ['delete'],
+    }
+    expect(roundtrip(all)).toEqual(all)
+    expect(roundtrip(allowed)).toEqual(allowed)
+    expect(roundtrip(denied)).toEqual(denied)
+  })
+
+  it('ChatRequest carries optional mcpServers and mcpToolConfigs', () => {
+    const req: ChatRequest = {
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+      mcpToolConfigs: [{ kind: 'all', mcpServerName: 'm' }],
+    }
+    const json = roundtrip(req)
+    expect(json.mcpServers).toHaveLength(1)
+    expect(json.mcpToolConfigs).toHaveLength(1)
+    expect(json.mcpServers?.[0].name).toBe('m')
+    expect(json.mcpToolConfigs?.[0].kind).toBe('all')
+  })
+
+  it('ChatRequest omits the MCP fields when unset', () => {
+    const req: ChatRequest = { messages: [{ role: 'user', content: 'hi' }] }
+    const json = JSON.parse(JSON.stringify(req))
+    expect('mcpServers' in json).toBe(false)
+    expect('mcpToolConfigs' in json).toBe(false)
   })
 })
