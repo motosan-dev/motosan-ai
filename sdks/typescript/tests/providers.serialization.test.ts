@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AnthropicProvider } from '../src/providers/anthropic.js'
-import { OpenAIProvider } from '../src/providers/openai.js'
+import { serializeOpenAiRequest } from '../src/serialize/openai.js'
 
 describe('provider serialization', () => {
   afterEach(() => {
@@ -47,15 +47,21 @@ describe('provider serialization', () => {
   })
 
   it('openai serializes assistant tool_calls', () => {
-    const serialized = OpenAIProvider.serializeMessages([
+    const body = serializeOpenAiRequest(
       {
-        role: 'assistant',
-        content: 'Let me check',
-        toolCalls: [{ id: 'call_1', name: 'get_weather', input: { city: 'Taipei' } }]
+        messages: [
+          {
+            role: 'assistant',
+            content: 'Let me check',
+            toolCalls: [{ id: 'call_1', name: 'get_weather', input: { city: 'Taipei' } }]
+          },
+          { role: 'tool', toolCallId: 'call_1', content: '25C' }
+        ]
       },
-      { role: 'tool', toolCallId: 'call_1', content: '25C' }
-    ])
+      'MiniMax-Text-01'
+    )
 
+    const serialized = body.messages as any[]
     const assistant = serialized[0]
     expect(Array.isArray(assistant.tool_calls)).toBe(true)
     expect(assistant.tool_calls[0].function.arguments).toContain('Taipei')

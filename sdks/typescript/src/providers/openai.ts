@@ -11,7 +11,7 @@ import {
   usageEvent,
   type BoxStream,
 } from '../stream.js'
-import type { ChatRequest, ChatResponse, Message, StopReason, ToolCall } from '../types.js'
+import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
 
 const FINISH_REASON_MAP: Record<string, StopReason> = {
   stop: 'stop',
@@ -220,41 +220,5 @@ export class OpenAIProvider {
         ? doneWithStopReason(pendingStopReason)
         : doneEvent()
     }
-  }
-
-  static serializeMessages(
-    messages: Message[],
-    system?: string
-  ): any[] {
-    const outgoing: any[] = []
-    if (system) outgoing.push({ role: 'system', content: system })
-    for (const message of messages) {
-      if (message.role === 'system') {
-        outgoing.push({ role: 'system', content: message.content })
-      } else if (message.role === 'user') {
-        outgoing.push({ role: 'user', content: message.content })
-      } else if (message.role === 'assistant') {
-        if (message.toolCalls?.length) {
-          outgoing.push({
-            role: 'assistant',
-            content: message.content,
-            tool_calls: message.toolCalls.map((tc) => ({
-              id: tc.id,
-              type: 'function',
-              function: { name: tc.name, arguments: JSON.stringify(tc.input) },
-            })),
-          })
-        } else {
-          outgoing.push({ role: 'assistant', content: message.content })
-        }
-      } else if (message.role === 'tool' && message.toolCallId) {
-        outgoing.push({
-          role: 'tool',
-          tool_call_id: message.toolCallId,
-          content: message.content,
-        })
-      }
-    }
-    return outgoing
   }
 }

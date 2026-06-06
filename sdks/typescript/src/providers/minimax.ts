@@ -1,5 +1,5 @@
 import { NetworkError, ProviderError, mapHttpError } from '../error.js'
-import { OpenAIProvider } from './openai.js'
+import { serializeOpenAiRequest } from '../serialize/openai.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from '../types.js'
 
 export class MinimaxProvider {
@@ -17,23 +17,8 @@ export class MinimaxProvider {
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body: Record<string, unknown> = {
-      model: request.model ?? this.model,
-      messages: OpenAIProvider.serializeMessages(request.messages, request.system)
-    }
-    if (request.maxTokens != null) body.max_tokens = request.maxTokens
-    if (request.temperature != null) body.temperature = request.temperature
-    if (request.tools?.length) {
-      body.tools = request.tools.map((t) => ({
-        type: 'function',
-        function: {
-          name: t.name,
-          description: t.description ?? '',
-          parameters: t.inputSchema ?? { type: 'object', properties: {} }
-        }
-      }))
-    }
-    if (request.providerOptions) Object.assign(body, request.providerOptions)
+    const resolvedModel = request.model ?? this.model
+    const body = serializeOpenAiRequest(request, resolvedModel)
 
     let response: Response
     try {
@@ -97,12 +82,9 @@ export class MinimaxProvider {
   }
 
   async *stream(request: ChatRequest): AsyncGenerator<StreamEvent> {
-    const body = {
-      model: request.model ?? this.model,
-      messages: OpenAIProvider.serializeMessages(request.messages, request.system),
-      stream: true,
-      ...(request.providerOptions ?? {})
-    }
+    const resolvedModel = request.model ?? this.model
+    const body = serializeOpenAiRequest(request, resolvedModel)
+    body.stream = true
 
     let response: Response
     try {
