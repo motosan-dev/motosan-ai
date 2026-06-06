@@ -12,7 +12,7 @@ import { collectStream, type BoxStream } from './stream.js'
 import { stripThink } from './think_stripper.js'
 import { AnthropicProvider } from './providers/anthropic.js'
 import { MinimaxProvider } from './providers/minimax.js'
-import { OpenAIProvider } from './providers/openai.js'
+import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
 export type ProviderName = Provider
@@ -60,6 +60,8 @@ export class ClientBuilder {
   protected _streamReadTimeoutSecs?: number
   protected _anthropicBaseUrl?: string
   protected _minimaxEndpoint?: string
+  protected _openaiAuthStyle: OpenAIAuthStyle = { kind: 'bearer' }
+  protected _openaiChatUrl?: string
 
   provider(p: Provider): this {
     this._provider = p
@@ -96,6 +98,26 @@ export class ClientBuilder {
     return this
   }
 
+  openaiAuthBearer(): this {
+    this._openaiAuthStyle = { kind: 'bearer' }
+    return this
+  }
+
+  openaiAuthXApiKey(): this {
+    this._openaiAuthStyle = { kind: 'xApiKey' }
+    return this
+  }
+
+  openaiAuthCustomHeader(name: string): this {
+    this._openaiAuthStyle = { kind: 'custom', header: name }
+    return this
+  }
+
+  openaiChatUrl(u: string): this {
+    this._openaiChatUrl = u
+    return this
+  }
+
   /**
    * Construct the configured provider with its existing constructor signature,
    * then chain Task 5's mutating `withRetryPolicy(policy): this` setter.
@@ -109,7 +131,13 @@ export class ClientBuilder {
       )
     }
     if (provider === 'openai') {
-      return new OpenAIProvider(apiKey, this._model, undefined).withRetryPolicy(this._retryPolicy)
+      let openai = new OpenAIProvider(apiKey, this._model)
+        .withRetryPolicy(this._retryPolicy)
+        .withAuthStyle(this._openaiAuthStyle)
+      if (this._openaiChatUrl) {
+        openai = openai.withChatUrl(this._openaiChatUrl)
+      }
+      return openai
     }
     return new MinimaxProvider(apiKey, this._model, this._minimaxEndpoint).withRetryPolicy(
       this._retryPolicy,

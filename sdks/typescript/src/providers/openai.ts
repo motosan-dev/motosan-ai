@@ -17,6 +17,15 @@ import {
 } from '../stream.js'
 import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
 
+/** OpenAI authentication style. Mirrors Rust `OpenAIAuthStyle`. */
+export type OpenAIAuthStyle =
+  | { kind: 'bearer' }
+  | { kind: 'xApiKey' }
+  | { kind: 'custom'; header: string }
+
+/** Default chat-completions endpoint. */
+export const DEFAULT_OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
+
 const FINISH_REASON_MAP: Record<string, StopReason> = {
   stop: 'stop',
   length: 'max_tokens',
@@ -42,6 +51,8 @@ export class OpenAIProvider {
   private readonly model: string
   private readonly baseUrl: string
   private retryPolicy: RetryPolicy
+  private authStyle: OpenAIAuthStyle = { kind: 'bearer' }
+  private chatUrl: string = DEFAULT_OPENAI_CHAT_URL
 
   constructor(
     private readonly apiKey: string,
@@ -51,6 +62,9 @@ export class OpenAIProvider {
     this.model = model ?? DEFAULT_OPENAI_MODEL
     this.baseUrl = baseUrl.replace(/\/$/, '') // trim trailing slash
     this.retryPolicy = RetryPolicy.default()
+    if (this.baseUrl !== 'https://api.openai.com/v1') {
+      this.chatUrl = `${this.baseUrl}/chat/completions`
+    }
   }
 
   withRetryPolicy(policy: RetryPolicy): this {
@@ -58,11 +72,34 @@ export class OpenAIProvider {
     return this
   }
 
-  private headers(): Record<string, string> {
-    return {
-      authorization: `Bearer ${this.apiKey}`,
-      'content-type': 'application/json',
+  withAuthStyle(style: OpenAIAuthStyle): this {
+    this.authStyle = style
+    return this
+  }
+
+  withChatUrl(url: string): this {
+    this.chatUrl = url.replace(/\/+$/, '')
+    return this
+  }
+
+  private applyAuth(headers: Record<string, string>): Record<string, string> {
+    const result = { ...headers }
+    switch (this.authStyle.kind) {
+      case 'bearer':
+        result.authorization = `Bearer ${this.apiKey}`
+        break
+      case 'xApiKey':
+        result['x-api-key'] = this.apiKey
+        break
+      case 'custom':
+        result[this.authStyle.header] = this.apiKey
+        break
     }
+    return result
+  }
+
+  private headers(): Record<string, string> {
+    return this.applyAuth({ 'content-type': 'application/json' })
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
@@ -72,7 +109,7 @@ export class OpenAIProvider {
     const payload = await withRetry(
       this.retryPolicy,
       async () =>
-        postJson<any>(`${this.baseUrl}/chat/completions`, this.headers(), body),
+        postJson<any>(this.chatUrl, this.headers(), body),
       classifyHttpError,
     )
 
@@ -128,7 +165,7 @@ export class OpenAIProvider {
     while (true) {
       try {
         responseBody = await postStream(
-          `${this.baseUrl}/chat/completions`,
+          this.chatUrl,
           this.headers(),
           body,
         )

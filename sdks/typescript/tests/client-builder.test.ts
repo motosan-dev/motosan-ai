@@ -316,3 +316,78 @@ describe('Client stream wiring (stripThink)', () => {
     expect(out).toBe('ab')
   })
 })
+
+describe('ClientBuilder OpenAI auth + chat URL', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function stubOpenAiOk(captured: { url?: string; headers?: Record<string, string> }) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        captured.url = url
+        captured.headers = (options?.headers as Record<string, string>) ?? {}
+        return new Response(
+          JSON.stringify({
+            id: 'chatcmpl_builder',
+            model: 'gpt-4o',
+            choices: [{ index: 0, message: { content: 'ok' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200 },
+        )
+      }),
+    )
+  }
+
+  it('chains openaiAuthXApiKey and openaiChatUrl into requests', async () => {
+    const captured: { url?: string; headers?: Record<string, string> } = {}
+    stubOpenAiOk(captured)
+
+    const client = new ClientBuilder()
+      .provider('openai')
+      .apiKey('sk-test123')
+      .model('gpt-4o')
+      .openaiAuthXApiKey()
+      .openaiChatUrl('https://api.custom.com/v1/chat/completions/')
+      .build()
+
+    await client.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured.url).toBe('https://api.custom.com/v1/chat/completions')
+    expect(captured.headers?.['x-api-key']).toBe('sk-test123')
+    expect(captured.headers?.authorization).toBeUndefined()
+  })
+
+  it('chains openaiAuthCustomHeader into requests', async () => {
+    const captured: { url?: string; headers?: Record<string, string> } = {}
+    stubOpenAiOk(captured)
+
+    const client = new ClientBuilder()
+      .provider('openai')
+      .apiKey('custom-key')
+      .openaiAuthCustomHeader('X-Provider-Key')
+      .build()
+
+    await client.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured.headers?.['X-Provider-Key']).toBe('custom-key')
+    expect(captured.headers?.authorization).toBeUndefined()
+    expect(captured.headers?.['x-api-key']).toBeUndefined()
+  })
+
+  it('can reset the auth style back to Bearer', async () => {
+    const captured: { url?: string; headers?: Record<string, string> } = {}
+    stubOpenAiOk(captured)
+
+    const client = new ClientBuilder()
+      .provider('openai')
+      .apiKey('bearer-key')
+      .openaiAuthXApiKey()
+      .openaiAuthBearer()
+      .build()
+
+    await client.chat({ messages: [{ role: 'user', content: 'test' }] })
+    expect(captured.headers?.authorization).toBe('Bearer bearer-key')
+    expect(captured.headers?.['x-api-key']).toBeUndefined()
+  })
+})
