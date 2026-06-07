@@ -1,18 +1,55 @@
 {
   "name": "@motosan-ai/sdk",
-  "version": "0.3.0",
-  "description": "TypeScript SDK for Motosan AI providers",
+  "version": "0.10.0",
+  "description": "Multi-provider TypeScript/ESM SDK for Anthropic, OpenAI, MiniMax, Ollama, and Gemini. Self-implemented wire protocol via native fetch — zero official-provider-SDK dependencies.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "prepublishOnly": "npm run build"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/motosan-dev/motosan-ai.git",
+    "directory": "sdks/typescript"
+  },
+  "homepage": "https://github.com/motosan-dev/motosan-ai/tree/main/sdks/typescript#readme",
+  "bugs": {
+    "url": "https://github.com/motosan-dev/motosan-ai/issues"
+  },
+  "license": "MIT",
+  "author": "motosan-dev",
+  "keywords": [
+    "anthropic",
+    "openai",
+    "gemini",
+    "ollama",
+    "minimax",
+    "llm",
+    "ai",
+    "sdk",
+    "streaming",
+    "claude"
+  ],
   "peerDependencies": {},
   "peerDependenciesMeta": {},
   "devDependencies": {

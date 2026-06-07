@@ -1,0 +1,35 @@
+name: publish-typescript
+
+on:
+  push:
+    tags: ["ts-v*"]
+  workflow_dispatch: {}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdks/typescript
+    permissions:
+      contents: read
+      id-token: write # required for npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+          cache: "npm"
+          cache-dependency-path: sdks/typescript/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test
+      - name: Verify tag matches package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#ts-v}"
+          PKG=$(node -p "require('./package.json').version")
+          test "$TAG" = "$PKG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
+      - run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

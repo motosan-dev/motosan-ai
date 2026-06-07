@@ -877,7 +877,7 @@ token.issued_at      // Unix timestamp of issue time
 
 ## Release
 
-Python and Rust SDKs are versioned and released **independently**.
+Python, Rust, and TypeScript SDKs are versioned and released **independently**.
 
 ### Tag Convention
 
@@ -885,6 +885,7 @@ Python and Rust SDKs are versioned and released **independently**.
 |--------------|-----------------------|-----------------------|
 | Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
 | Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
+| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.10.0`          |
 | motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | `motosan-ai-oauth-v0.2.0` |
 | codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
 | anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |
@@ -935,6 +936,29 @@ git commit -m "chore: release rust-v0.4.1"
 # 5. Tag + push (triggers publish-rust.yml → crates.io)
 git tag -a rust-v0.4.1 -m "rust-v0.4.1 — summary"
 git push origin main rust-v0.4.1
+```
+
+### Release Steps (TypeScript)
+
+```bash
+# 1. Bump version
+#    sdks/typescript/package.json → "version": "X.Y.Z"
+
+# 2. Update CHANGELOG
+#    sdks/typescript/CHANGELOG.md → ## [X.Y.Z] - YYYY-MM-DD
+
+# 3. Update version references in:
+#    - README.md (root) — Languages table
+#    - AGENTS.md — Releasing paragraph
+#    - llms.txt — Tag Convention + this section
+
+# 4. Commit
+git add sdks/typescript/package.json sdks/typescript/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
+git commit -m "chore: release ts-vX.Y.Z"
+
+# 5. Tag + push (triggers publish-typescript.yml → npm)
+git tag ts-vX.Y.Z
+git push origin main ts-vX.Y.Z
 ```
 
 ### Release Steps (motosan-ai-oauth)
@@ -999,6 +1023,7 @@ git push origin main anthropic-oauth-v0.1.1
 Tag push triggers GitHub Actions:
 - **publish-python.yml**: `uv build` → `pypa/gh-action-pypi-publish` (secret: `PYPI_API_TOKEN`)
 - **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+- **publish-typescript.yml**: `npm ci` → `npm run build` → `npm run test` → version-matches-tag guard → `npm publish --provenance --access public` (secret: `NPM_TOKEN`)
 - **publish-motosan-ai-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 - **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
 - **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
@@ -1023,4 +1048,7 @@ cd sdks/python && uv build --out-dir dist && uv publish dist/*
 
 # Rust
 cd sdks/rust && cargo publish
+
+# TypeScript
+cd sdks/typescript && npm ci && npm run build && npm publish --access public
 ```
