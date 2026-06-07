@@ -8,7 +8,7 @@ import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
 import { fullCaps, type ProviderCapabilities } from '../provider.js'
 import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
-import { modelUsesAdaptiveThinking, serializeAnthropicRequest } from '../serialize/anthropic.js'
+import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
   doneWithStopReason,
@@ -32,10 +32,19 @@ import type {
 const ANTHROPIC_VERSION = '2023-06-01'
 
 /**
- * Build the `anthropic-beta` header value. Mirrors Rust `build_beta_header`
- * (anthropic.rs:78-99): comma-joined (no spaces), `undefined` when empty.
- * The M4 x-api-key path emits MCP and non-adaptive thinking betas directly;
- * OAuth-only setup-token betas are wired for the future OAuth path.
+ * Build the `anthropic-beta` header value (comma-joined, no spaces; `undefined`
+ * when empty).
+ *
+ * INTENTIONAL DIVERGENCE from the Rust reference: Rust (`anthropic.rs:78-99`)
+ * gates `interleaved-thinking-2025-05-14` inside the OAuth branch. We instead
+ * emit it on the x-api-key path whenever non-adaptive thinking is requested,
+ * matching independent TS SDK practice (earendil-works/pi
+ * `packages/ai/src/providers/anthropic.ts:792-799`, which adds the beta for
+ * `interleavedThinking && !forceAdaptiveThinking` regardless of auth mode, and
+ * defaults `interleavedThinking` to true). The beta is a GA Anthropic beta
+ * accepted on standard API-key requests, so this is non-breaking. Adaptive
+ * models have interleaved thinking built in, so the beta is skipped for them.
+ * OAuth setup-token betas remain wired for the future OAuth path.
  */
 export function buildBetaHeader(
   hasMcp: boolean,
