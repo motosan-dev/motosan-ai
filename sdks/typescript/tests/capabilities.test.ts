@@ -5,6 +5,7 @@ import {
   fullCaps,
   minimaxCaps,
   validateRequest,
+  type Provider,
   type ProviderCapabilities,
 } from '../src/provider.js'
 import { UnsupportedFeatureError } from '../src/error.js'
@@ -286,5 +287,19 @@ describe('validateRequest MCP gating (M4)', () => {
   it('does NOT throw when no MCP config is present (textOnly)', () => {
     const plain: ChatRequest = { messages: [{ role: 'user', content: 'hi' }] }
     expect(() => validateRequest(plain, textOnly())).not.toThrow()
+  })
+})
+
+describe('Provider union includes ollama (M5)', () => {
+  it('accepts "ollama" as a Provider value', () => {
+    // Type-level: this assignment only compiles once 'ollama' is in the union.
+    const p: Provider = 'ollama'
+    expect(p).toBe('ollama')
+  })
+
+  it('still accepts the M1-M4 provider tokens', () => {
+    const all: Provider[] = ['anthropic', 'openai', 'minimax', 'ollama']
+    expect(all).toContain('ollama')
+    expect(all).toHaveLength(4)
   })
 })
