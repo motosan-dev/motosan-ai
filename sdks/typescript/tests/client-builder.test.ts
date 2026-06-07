@@ -54,11 +54,11 @@ describe('ClientBuilder', () => {
     expect(client).toBeInstanceOf(Client)
   })
 
-  it('supports minimaxEndpoint override', () => {
+  it('supports minimaxBaseUrl override', () => {
     const client = new ClientBuilder()
       .provider('minimax')
       .apiKey('test-key')
-      .minimaxEndpoint('https://custom.minimax.api/v1/chat')
+      .minimaxBaseUrl('https://custom.minimax.api/anthropic')
       .build()
     expect(client).toBeInstanceOf(Client)
   })
@@ -116,9 +116,13 @@ describe('Client capability validation (dispatch)', () => {
         async () =>
           new Response(
             JSON.stringify({
+              id: 'msg_1',
+              type: 'message',
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Hi!' }],
               model: 'MiniMax-M2.7',
-              choices: [{ message: { content: 'Hi!' }, finish_reason: 'stop' }],
-              usage: { prompt_tokens: 1, completion_tokens: 1 },
+              stop_reason: 'end_turn',
+              usage: { input_tokens: 1, output_tokens: 1 },
             }),
             { status: 200 },
           ),
@@ -137,7 +141,7 @@ describe('Client capability validation (dispatch)', () => {
   it('dispatchChat does not retry provider-level retryable errors', async () => {
     let calls = 0
     const provider = {
-      capabilities: () => ({ supportsImage: true, supportsDocument: true }),
+      capabilities: () => ({ supportsImage: true, supportsDocument: true, supportsMcp: false }),
       async chat() {
         calls += 1
         const err = new Error('retryable from provider') as Error & { status?: number }
@@ -299,7 +303,7 @@ describe('readTimeoutStream', () => {
 describe('Client stream wiring (stripThink)', () => {
   it('strips <think> tags from a provider stream via the Client', async () => {
     const fakeProvider = {
-      capabilities: () => ({ supportsImage: false, supportsDocument: false }),
+      capabilities: () => ({ supportsImage: false, supportsDocument: false, supportsMcp: false }),
       async chat() {
         throw new Error('unused')
       },

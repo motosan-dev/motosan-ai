@@ -60,6 +60,33 @@ export interface ThinkingConfig {
   budgetTokens: number
 }
 
+/** Server-side MCP transport type. Mirrors Rust `McpServerType` (types.rs:301-305, lowercase). */
+export type McpServerType = 'url'
+
+/**
+ * Config for a server-side MCP server. Mirrors Rust `McpServerConfig`
+ * (types.rs:312-320). The provider connects to the MCP server server-side;
+ * the client never manages the connection. Anthropic wire only.
+ */
+export interface McpServerConfig {
+  /** Rust `kind`, serde-renamed to wire key "type" (types.rs:314). */
+  type: McpServerType
+  url: string
+  name: string
+  /** Rust `authorization_token`; omitted on the wire when absent (types.rs:318-319). */
+  authorizationToken?: string
+}
+
+/**
+ * Per-server MCP tool filtering. Mirrors Rust `McpToolConfig` enum
+ * (types.rs:326-340). Discriminated union on `kind` — a TS contract choice
+ * (the Rust enum is untagged; the wire form is hand-built by the serializer).
+ */
+export type McpToolConfig =
+  | { kind: 'all'; mcpServerName: string }
+  | { kind: 'allowed'; mcpServerName: string; allowedTools: string[] }
+  | { kind: 'denied'; mcpServerName: string; deniedTools: string[] }
+
 /** A system prompt block with optional cache control (Anthropic ephemeral cache). */
 export interface SystemBlock {
   text: string
@@ -135,6 +162,10 @@ export interface ChatRequest {
   maxTokens?: number
   temperature?: number
   providerOptions?: Record<string, unknown>
+  /** Server-side MCP servers (Anthropic wire only). Mirrors Rust `mcp_servers` (types.rs:364-372). */
+  mcpServers?: McpServerConfig[]
+  /** Per-server MCP tool filtering. Mirrors Rust `mcp_tool_configs` (types.rs:364-372). */
+  mcpToolConfigs?: McpToolConfig[]
 }
 
 /** A non-streaming chat response (or the reassembly of a stream via collectStream). */

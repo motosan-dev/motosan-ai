@@ -12,11 +12,16 @@ import type { ChatRequest, ChatResponse, ContentBlock, StreamEvent } from './typ
 /**
  * Describes what features a provider supports.
  *
- * Mirrors Rust `ProviderCapabilities` (types.rs:903-907).
+ * Mirrors Rust `ProviderCapabilities` (types.rs:903-907) PLUS a TS-only
+ * `supportsMcp` flag. Rust has no MCP capability — it achieves "no MCP on
+ * OpenAI" by serializer omission. TS adds the flag so validateRequest can
+ * reject MCP on non-Anthropic providers per the M4 Done-when requirement.
  */
 export interface ProviderCapabilities {
   supportsImage: boolean
   supportsDocument: boolean
+  /** TS-only divergence from Rust: whether the provider accepts MCP server/tool config. */
+  supportsMcp: boolean
 }
 
 /**
@@ -25,7 +30,7 @@ export interface ProviderCapabilities {
  * Mirrors Rust `ProviderCapabilities::text_only()` (types.rs:910-915).
  */
 export function textOnly(): ProviderCapabilities {
-  return { supportsImage: false, supportsDocument: false }
+  return { supportsImage: false, supportsDocument: false, supportsMcp: false }
 }
 
 /**
@@ -34,7 +39,7 @@ export function textOnly(): ProviderCapabilities {
  * Mirrors Rust `ProviderCapabilities::with_image()` (types.rs:917-922).
  */
 export function withImage(): ProviderCapabilities {
-  return { supportsImage: true, supportsDocument: false }
+  return { supportsImage: true, supportsDocument: false, supportsMcp: false }
 }
 
 /**
@@ -43,7 +48,16 @@ export function withImage(): ProviderCapabilities {
  * Mirrors Rust `ProviderCapabilities::full()` (types.rs:924-929).
  */
 export function fullCaps(): ProviderCapabilities {
-  return { supportsImage: true, supportsDocument: true }
+  return { supportsImage: true, supportsDocument: true, supportsMcp: true }
+}
+
+/**
+ * MiniMax capabilities: text-only (no images/documents) but MCP-capable,
+ * because MiniMax routes through the Anthropic-compatible wire (contract §5/§6).
+ * Distinct from `textOnly()` so MCP isn't blanket-blocked on the text-only path.
+ */
+export function minimaxCaps(): ProviderCapabilities {
+  return { supportsImage: false, supportsDocument: false, supportsMcp: true }
 }
 
 /**
@@ -67,6 +81,12 @@ export function validateRequest(req: ChatRequest, caps: ProviderCapabilities): v
         throw new UnsupportedFeatureError('provider does not support document input')
       }
     }
+  }
+
+  // TS-only MCP gating (contract §6): reject MCP config on non-MCP providers.
+  const hasMcp = (req.mcpServers?.length ?? 0) > 0 || (req.mcpToolConfigs?.length ?? 0) > 0
+  if (hasMcp && !caps.supportsMcp) {
+    throw new UnsupportedFeatureError('provider does not support MCP server config')
   }
 }
 

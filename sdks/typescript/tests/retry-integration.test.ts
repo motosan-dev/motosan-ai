@@ -44,11 +44,13 @@ function openAiSuccess(): Response {
 function minimaxSuccess(): Response {
   return new Response(
     JSON.stringify({
-      choices: [
-        { message: { content: 'minimax ok', tool_calls: [] }, finish_reason: 'stop' },
-      ],
+      id: 'msg_1',
+      type: 'message',
+      role: 'assistant',
+      content: [{ type: 'text', text: 'minimax ok' }],
       model: 'MiniMax-M2.7',
-      usage: { prompt_tokens: 1, completion_tokens: 2 },
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 1, output_tokens: 2 },
     }),
     { status: 200 },
   )
@@ -341,7 +343,7 @@ describe('retry provider integration', () => {
 
   it('Minimax stream retries the initial fetch after 429', async () => {
     let calls = 0
-    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return calls === 1 ? rateLimit() : openAiSse() }))
+    vi.stubGlobal('fetch', vi.fn(async () => { calls += 1; return calls === 1 ? rateLimit() : anthropicSseResponse() }))
     const provider = new MinimaxProvider('test-key').withRetryPolicy(immediateRetryPolicy())
     const events: StreamEvent[] = []
     for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {

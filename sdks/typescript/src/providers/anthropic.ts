@@ -31,6 +31,47 @@ import type {
 
 const ANTHROPIC_VERSION = '2023-06-01'
 
+/**
+ * Build the `anthropic-beta` header value (comma-joined, no spaces; `undefined`
+ * when empty).
+ *
+ * INTENTIONAL DIVERGENCE from the Rust reference: Rust (`anthropic.rs:78-99`)
+ * gates `interleaved-thinking-2025-05-14` inside the OAuth branch. We instead
+ * emit it on the x-api-key path whenever non-adaptive thinking is requested,
+ * matching independent TS SDK practice (earendil-works/pi
+ * `packages/ai/src/providers/anthropic.ts:792-799`, which adds the beta for
+ * `interleavedThinking && !forceAdaptiveThinking` regardless of auth mode, and
+ * defaults `interleavedThinking` to true). The beta is a GA Anthropic beta
+ * accepted on standard API-key requests, so this is non-breaking. Adaptive
+ * models have interleaved thinking built in, so the beta is skipped for them.
+ * OAuth setup-token betas remain wired for the future OAuth path.
+ */
+export function buildBetaHeader(
+  hasMcp: boolean,
+  isOauth: boolean,
+  adaptiveThinking: boolean,
+  hasThinking = false,
+): string | undefined {
+  const betas: string[] = []
+  if (hasMcp) {
+    betas.push('mcp-client-2025-11-20')
+  }
+  if (isOauth) {
+    betas.push('claude-code-20250219')
+    betas.push('oauth-2025-04-20')
+    betas.push('fine-grained-tool-streaming-2025-05-14')
+  }
+  if (hasThinking && !adaptiveThinking) {
+    betas.push('interleaved-thinking-2025-05-14')
+  }
+  return betas.length === 0 ? undefined : betas.join(',')
+}
+
+/** Whether a request carries any MCP config. Mirrors Rust anthropic.rs:466-467. */
+function requestHasMcp(req: ChatRequest): boolean {
+  return (req.mcpServers?.length ?? 0) > 0 || (req.mcpToolConfigs?.length ?? 0) > 0
+}
+
 function parseStopReason(reason: unknown): StopReason {
   switch (reason) {
     case 'end_turn':
@@ -106,19 +147,36 @@ export class AnthropicProvider {
     return this
   }
 
-  private headers(): Record<string, string> {
+  private headers(extra?: Record<string, string>): Record<string, string> {
     return {
       'x-api-key': this.apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
       'content-type': 'application/json',
+      ...(extra ?? {}),
     }
   }
 
+  /**
+   * Build per-request headers including the beta header when applicable.
+   * isOauth is always false in M4 (no setup-token path in TS).
+   * adaptiveThinking is read off the serialized body, matching Rust
+   * (anthropic.rs:469/802). Non-adaptive thinking enables the interleaved-thinking beta.
+   */
+  private requestHeaders(req: ChatRequest, body: Record<string, any>): Record<string, string> {
+    const hasMcp = requestHasMcp(req)
+    const hasThinking = body?.thinking !== undefined
+    const adaptiveThinking = body?.thinking?.type === 'adaptive'
+    const beta = buildBetaHeader(hasMcp, false, adaptiveThinking, hasThinking)
+    return this.headers(beta ? { 'anthropic-beta': beta } : {})
+  }
+
   async chat(request: ChatRequest): Promise<ChatResponse> {
-    const body = serializeAnthropicRequest(request, request.model ?? this.model)
+    const model = request.model ?? this.model
+    const body = serializeAnthropicRequest(request, model)
+    const headers = this.requestHeaders(request, body)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(`${this.baseUrl}/v1/messages`, this.headers(), body),
+      async () => postJson<any>(`${this.baseUrl}/v1/messages`, headers, body),
       classifyHttpError,
     )
 
@@ -159,15 +217,17 @@ export class AnthropicProvider {
   }
 
   private async *streamImpl(request: ChatRequest) {
+    const model = request.model ?? this.model
     const body = {
-      ...serializeAnthropicRequest(request, request.model ?? this.model),
+      ...serializeAnthropicRequest(request, model),
       stream: true,
     }
+    const headers = this.requestHeaders(request, body)
     let attempt = 0
     let responseBody: ReadableStream<Uint8Array>
     while (true) {
       try {
-        responseBody = await postStream(`${this.baseUrl}/v1/messages`, this.headers(), body)
+        responseBody = await postStream(`${this.baseUrl}/v1/messages`, headers, body)
         break
       } catch (error) {
         const status = (error as { status?: number }).status

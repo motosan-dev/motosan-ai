@@ -122,7 +122,7 @@ describe('client openai/minimax routing (no npm deps)', () => {
     expect(response.content).toBe('ok')
   })
 
-  it('routes provider:"minimax" to the self-hosted MinimaxProvider at its default endpoint (no npm deps)', async () => {
+  it('routes provider:"minimax" to the Anthropic-compatible MiniMax endpoint (no npm deps)', async () => {
     let capturedUrl = ''
     let capturedHeaders: Record<string, string> = {}
     vi.stubGlobal(
@@ -132,9 +132,13 @@ describe('client openai/minimax routing (no npm deps)', () => {
         capturedHeaders = (options?.headers as Record<string, string>) ?? {}
         return new Response(
           JSON.stringify({
-            model: 'MiniMax-Text-01',
-            choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
-            usage: { prompt_tokens: 1, completion_tokens: 1 },
+            id: 'msg_1',
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'ok' }],
+            model: 'MiniMax-M2.7',
+            stop_reason: 'end_turn',
+            usage: { input_tokens: 1, output_tokens: 1 },
           }),
           { status: 200, headers: { 'content-type': 'application/json' } },
         )
@@ -144,9 +148,10 @@ describe('client openai/minimax routing (no npm deps)', () => {
     const client = new Client({ provider: 'minimax', apiKey: 'mk-test' })
     const response = await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
 
-    // Default MiniMax endpoint + Bearer auth, via raw fetch (no npm SDK).
-    expect(capturedUrl).toBe('https://api.minimax.chat/v1/text/chatcompletion_v2')
-    expect(capturedHeaders['authorization']).toBe('Bearer mk-test')
+    // Default MiniMax Anthropic-compat base + /v1/messages, with x-api-key auth.
+    expect(capturedUrl).toBe('https://api.minimax.io/anthropic/v1/messages')
+    expect(capturedHeaders['x-api-key']).toBe('mk-test')
+    expect('authorization' in capturedHeaders).toBe(false)
     expect(response.content).toBe('ok')
   })
 })

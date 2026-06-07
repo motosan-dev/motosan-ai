@@ -11,9 +11,21 @@ describe('index.ts public exports', () => {
     expect(typeof mod.withImage).toBe('function')
     expect(typeof mod.fullCaps).toBe('function')
     const caps: ProviderCapabilities = mod.textOnly()
-    expect(caps).toEqual({ supportsImage: false, supportsDocument: false })
-    expect(mod.withImage()).toEqual({ supportsImage: true, supportsDocument: false })
-    expect(mod.fullCaps()).toEqual({ supportsImage: true, supportsDocument: true })
+    expect(caps).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+    })
+    expect(mod.withImage()).toEqual({
+      supportsImage: true,
+      supportsDocument: false,
+      supportsMcp: false,
+    })
+    expect(mod.fullCaps()).toEqual({
+      supportsImage: true,
+      supportsDocument: true,
+      supportsMcp: true,
+    })
 
     expect(typeof mod.DEFAULT_ANTHROPIC_MODEL).toBe('string')
     expect(typeof mod.DEFAULT_OPENAI_MODEL).toBe('string')

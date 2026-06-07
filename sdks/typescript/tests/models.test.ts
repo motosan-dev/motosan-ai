@@ -131,7 +131,7 @@ describe('models', () => {
 
     it('MinimaxProvider should use DEFAULT_MINIMAX_MODEL', () => {
       const provider = new MinimaxProvider('test-api-key')
-      expect((provider as any).model).toBe(DEFAULT_MINIMAX_MODEL)
+      expect((provider as any).inner.model).toBe(DEFAULT_MINIMAX_MODEL)
     })
   })
 })

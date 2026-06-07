@@ -1,7 +1,66 @@
-import type { ChatRequest, ContentBlock } from '../types.js'
+import type { ChatRequest, ContentBlock, McpToolConfig } from '../types.js'
 
 const DEFAULT_MAX_TOKENS = 8192
 const CACHE_CONTROL = { type: 'ephemeral' } as const
+
+/**
+ * Models that use ADAPTIVE thinking (Anthropic chooses the budget; the older
+ * budget-token shape is rejected). Mirrors Rust `model_uses_adaptive_thinking`
+ * (anthropic.rs:195-200). Opus 4.x is adaptive; 4-7 is kept though absent from
+ * ANTHROPIC_MODELS, matching the Rust literal set.
+ */
+const ADAPTIVE_THINKING_MODELS = new Set(['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6'])
+
+/** Whether `model` uses adaptive thinking. Exported for the beta-header builder (Task 3). */
+export function modelUsesAdaptiveThinking(model: string): boolean {
+  return ADAPTIVE_THINKING_MODELS.has(model)
+}
+
+/**
+ * Apply thinking config onto the result body. Mirrors Rust `apply_thinking_config`
+ * (anthropic.rs:202-220). Adaptive → thinking{type:adaptive,display:summarized} +
+ * output_config{effort:high}, no budget_tokens. Otherwise → thinking{type:enabled,
+ * budget_tokens,display:summarized}. `display:"summarized"` is unconditional.
+ */
+function applyThinkingConfig(
+  result: Record<string, any>,
+  model: string,
+  thinking: { budgetTokens: number },
+): void {
+  if (modelUsesAdaptiveThinking(model)) {
+    result.thinking = { type: 'adaptive', display: 'summarized' }
+    result.output_config = { effort: 'high' }
+  } else {
+    result.thinking = {
+      type: 'enabled',
+      budget_tokens: thinking.budgetTokens,
+      display: 'summarized',
+    }
+  }
+}
+
+/**
+ * Serialize one McpToolConfig to an Anthropic `mcp_toolset` tools-array entry.
+ * Mirrors Rust `serialize_mcp_tool_config` (anthropic.rs:170-193). Wire keys are
+ * snake_case.
+ */
+function serializeMcpToolConfig(config: McpToolConfig): SerializedBlock {
+  if (config.kind === 'all') {
+    return { type: 'mcp_toolset', mcp_server_name: config.mcpServerName }
+  }
+  if (config.kind === 'allowed') {
+    return {
+      type: 'mcp_toolset',
+      mcp_server_name: config.mcpServerName,
+      allowed_tools: config.allowedTools,
+    }
+  }
+  return {
+    type: 'mcp_toolset',
+    mcp_server_name: config.mcpServerName,
+    denied_tools: config.deniedTools,
+  }
+}
 
 type SerializedBlock = Record<string, unknown>
 
@@ -185,22 +244,32 @@ export function serializeAnthropicRequest(
     }
   }
 
+  // Combined tools array: regular tools first, then mcp_toolset items.
+  // Mirrors Rust `all_tools` assembly (anthropic.rs:386-392); body.tools is set
+  // iff the combined array is non-empty (`!all_tools.is_empty()`).
+  const allTools: SerializedBlock[] = []
   if (req.tools && req.tools.length > 0) {
-    result.tools = req.tools.map((tool) => {
+    for (const tool of req.tools) {
       const serialized: SerializedBlock = {
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
       }
-
       // Per-tool cache flag, position-independent — matches Rust
       // providers/anthropic.rs (`if tool.cache { cache_control = ... }`).
       if (tool.cache) {
         serialized.cache_control = CACHE_CONTROL
       }
-
-      return serialized
-    })
+      allTools.push(serialized)
+    }
+  }
+  if (req.mcpToolConfigs && req.mcpToolConfigs.length > 0) {
+    for (const config of req.mcpToolConfigs) {
+      allTools.push(serializeMcpToolConfig(config))
+    }
+  }
+  if (allTools.length > 0) {
+    result.tools = allTools
   }
 
   if (req.toolChoice) {
@@ -221,16 +290,31 @@ export function serializeAnthropicRequest(
     }
   }
 
+  // Thinking/temperature collision. Mirrors Rust anthropic.rs:352-367:
+  // when thinking is set, non-adaptive forces temperature=1.0 and the user
+  // temperature is NOT applied (it lives only in the else-if branch).
   if (req.thinking) {
-    result.thinking = req.thinking
+    if (!modelUsesAdaptiveThinking(model)) {
+      result.temperature = 1.0
+    }
+    applyThinkingConfig(result, model, req.thinking)
+  } else if (req.temperature !== undefined) {
+    result.temperature = req.temperature
   }
 
   if (req.stopSequences && req.stopSequences.length > 0) {
     result.stop_sequences = req.stopSequences
   }
 
-  if (req.temperature !== undefined) {
-    result.temperature = req.temperature
+  // mcp_servers body key. Mirrors Rust anthropic.rs:417-435. Set only when non-empty.
+  if (req.mcpServers && req.mcpServers.length > 0) {
+    result.mcp_servers = req.mcpServers.map((s) => {
+      const obj: SerializedBlock = { type: s.type, url: s.url, name: s.name }
+      if (s.authorizationToken !== undefined) {
+        obj.authorization_token = s.authorizationToken
+      }
+      return obj
+    })
   }
 
   if (req.providerOptions && typeof req.providerOptions === 'object') {
