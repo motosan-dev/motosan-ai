@@ -14,6 +14,7 @@ import { AnthropicProvider } from './providers/anthropic.js'
 import { MinimaxProvider } from './providers/minimax.js'
 import { OllamaProvider } from './providers/ollama.js'
 import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
+import { GeminiProvider } from './providers/gemini.js'
 import { DEFAULT_OLLAMA_MODEL } from './models.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
@@ -30,7 +31,12 @@ export interface ProviderLike {
  * client.rs `api_key_required = !matches!(provider, ClaudeCode | ...)`):
  * future CLI backends opt out by NOT being in this set, without touching build().
  */
-const HTTP_PROVIDERS: ReadonlySet<ProviderName> = new Set(['anthropic', 'openai', 'minimax'])
+const HTTP_PROVIDERS: ReadonlySet<ProviderName> = new Set([
+  'anthropic',
+  'openai',
+  'minimax',
+  'gemini',
+])
 
 const ENV_KEY_BY_PROVIDER: Record<ProviderName, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
@@ -39,6 +45,7 @@ const ENV_KEY_BY_PROVIDER: Record<ProviderName, string> = {
   // Ollama needs no env key; '' keeps the Record total and
   // process.env[''] yields undefined (harmless — apiKey not required).
   ollama: '',
+  gemini: 'GEMINI_API_KEY',
 }
 
 function asDispatchProvider(provider: ProviderLike): DispatchProvider {
@@ -65,6 +72,7 @@ export class ClientBuilder {
   protected _streamReadTimeoutSecs?: number
   protected _anthropicBaseUrl?: string
   protected _minimaxBaseUrl?: string
+  protected _geminiBaseUrl?: string
   protected _openaiAuthStyle: OpenAIAuthStyle = { kind: 'bearer' }
   protected _openaiChatUrl?: string
   protected _openaiResponsesFallback = false
@@ -102,6 +110,11 @@ export class ClientBuilder {
 
   anthropicBaseUrl(u: string): this {
     this._anthropicBaseUrl = u
+    return this
+  }
+
+  geminiBaseUrl(u: string): this {
+    this._geminiBaseUrl = u
     return this
   }
 
@@ -224,6 +237,11 @@ export class ClientBuilder {
         .withAuthStyle({ kind: 'bearer' })
         .withRetryPolicy(this._retryPolicy)
     }
+    if (provider === 'gemini') {
+      return new GeminiProvider(apiKey, this._model, this._geminiBaseUrl).withRetryPolicy(
+        this._retryPolicy,
+      )
+    }
     return new MinimaxProvider(apiKey, this._model, this._minimaxBaseUrl).withRetryPolicy(
       this._retryPolicy,
     )
@@ -318,6 +336,8 @@ export class Client {
       this.provider = new OpenAIProvider(resolvedApiKey, opts.model ?? DEFAULT_OLLAMA_MODEL)
         .withChatUrl('http://localhost:11434/v1/chat/completions')
         .withAuthStyle({ kind: 'bearer' })
+    } else if (provider === 'gemini') {
+      this.provider = new GeminiProvider(resolvedApiKey, opts.model)
     } else {
       this.provider = new MinimaxProvider(resolvedApiKey, opts.model, opts.minimaxBaseUrl)
     }
