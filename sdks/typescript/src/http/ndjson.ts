@@ -6,7 +6,12 @@
  * incomplete lines, splits on \n boundaries, and JSON-parses each non-empty line.
  * Malformed JSON lines are silently skipped.
  *
- * Basic implementation for M1; finalized in M5.
+ * Finalized in M5: verified sufficient for Ollama native /api/chat NDJSON.
+ * The parser is provider-agnostic — it yields each parsed object (including
+ * any {done:true} object) and never inspects `done`. Termination on
+ * {done:true} is the Ollama stream adapter's responsibility (providers/ollama.ts),
+ * mirroring Rust where NdjsonStream only splits lines (ollama.rs:500-551) and
+ * OllamaStreamAdapter decides done (ollama.rs:441-447).
  */
 
 /**
