@@ -26,3 +26,6 @@ export const MINIMAX_MODELS = ['MiniMax-M2.7', 'MiniMax-M2.7-highspeed'] as cons
 
 /** Default MiniMax model (models.rs convention, first element) */
 export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
+
+/** Default Ollama model (models.rs:3) */
+export const DEFAULT_OLLAMA_MODEL = 'llama3.2'
