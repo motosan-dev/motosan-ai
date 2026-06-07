@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENAI_MODEL,
   MINIMAX_MODELS,
   DEFAULT_MINIMAX_MODEL,
+  DEFAULT_OLLAMA_MODEL,
 } from '../src/models.js'
 import {
   DEFAULT_ANTHROPIC_MODEL as INDEX_DEFAULT_ANTHROPIC_MODEL,
@@ -99,6 +100,22 @@ describe('models', () => {
 
     it('should be the first element of MINIMAX_MODELS', () => {
       expect(DEFAULT_MINIMAX_MODEL).toBe(MINIMAX_MODELS[0])
+    })
+  })
+
+  describe('DEFAULT_OLLAMA_MODEL', () => {
+    it('should be a non-empty string', () => {
+      expect(typeof DEFAULT_OLLAMA_MODEL).toBe('string')
+      expect(DEFAULT_OLLAMA_MODEL.length).toBeGreaterThan(0)
+    })
+
+    it('should match the value from models.rs:3', () => {
+      expect(DEFAULT_OLLAMA_MODEL).toBe('llama3.2')
+    })
+
+    it('has no OLLAMA_MODELS array (no Rust source — contract §1)', async () => {
+      const mod = await import('../src/models.js')
+      expect((mod as Record<string, unknown>).OLLAMA_MODELS).toBeUndefined()
     })
   })
 

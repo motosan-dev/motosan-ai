@@ -90,8 +90,14 @@ export function validateRequest(req: ChatRequest, caps: ProviderCapabilities): v
   }
 }
 
-/** String-tagged provider discriminator. Extend with 'ollama' | 'gemini' in M5/M6. */
-export type Provider = 'anthropic' | 'openai' | 'minimax'
+/**
+ * String-tagged provider discriminator. 'ollama' added in M5. Extend with
+ * 'gemini' in M6. Auto-routing between Ollama's native /api/chat and the
+ * OpenAI-compat path is decided at provider-construction time in
+ * ClientBuilder.buildProvider (see client.ts) — dispatchChat/dispatchStream
+ * stay provider-agnostic, so NO 'ollama' arm is added here.
+ */
+export type Provider = 'anthropic' | 'openai' | 'minimax' | 'ollama'
 
 /**
  * Minimal shape a provider must expose to be dispatched: a capability reshape

@@ -395,3 +395,267 @@ describe('ClientBuilder OpenAI auth + chat URL', () => {
     expect(captured.headers?.['x-api-key']).toBeUndefined()
   })
 })
+
+describe('ClientBuilder Ollama routing (native vs compat)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  function nativeOk() {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        urls.push(url)
+        // Return an Ollama native NDJSON-ish body that also parses as a
+        // single JSON object for chat() (chat uses postJson; one object).
+        const isStream = options?.body ? JSON.parse(String(options.body)).stream : false
+        if (isStream) {
+          return new Response('{"message":{"content":"hi"},"done":false}\n{"done":true}\n', {
+            status: 200,
+          })
+        }
+        return new Response(
+          JSON.stringify({ model: 'llama3.2', message: { content: 'hi' }, done: true }),
+          { status: 200 },
+        )
+      }),
+    )
+    return urls
+  }
+
+  function compatOk() {
+    const urls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, options?: RequestInit) => {
+        urls.push(url)
+        const isStream = options?.body ? JSON.parse(String(options.body)).stream : false
+        if (isStream) {
+          return new Response(
+            'data: {"choices":[{"index":0,"delta":{"content":"hi"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          )
+        }
+        return new Response(
+          JSON.stringify({
+            model: 'llama3.2',
+            choices: [{ index: 0, message: { content: 'hi' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200 },
+        )
+      }),
+    )
+    return urls
+  }
+
+  it('routes to native /api/chat for BOTH chat and stream when ollamaNative(true)', async () => {
+    const urls = nativeOk()
+    const client = new ClientBuilder()
+      .provider('ollama')
+      .ollamaBaseUrl('http://localhost:11434')
+      .ollamaNative(true)
+      .build()
+
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    for await (const _e of client.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      // drain
+    }
+
+    // SAME instance, SAME endpoint for chat and stream (never split).
+    expect(urls).toEqual([
+      'http://localhost:11434/api/chat',
+      'http://localhost:11434/api/chat',
+    ])
+  })
+
+  it('routes to native when ANY tuning field is set (ollamaThink)', async () => {
+    const urls = nativeOk()
+    const client = new ClientBuilder().provider('ollama').ollamaThink('high').build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(urls[0]).toBe('http://localhost:11434/api/chat')
+  })
+
+  it('routes to native when ollamaKeepAlive is set', async () => {
+    const urls = nativeOk()
+    const client = new ClientBuilder().provider('ollama').ollamaKeepAlive('5m').build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(urls[0]).toBe('http://localhost:11434/api/chat')
+  })
+
+  it('routes to native when ollamaNumCtx is set', async () => {
+    const urls = nativeOk()
+    const client = new ClientBuilder().provider('ollama').ollamaNumCtx(4096).build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(urls[0]).toBe('http://localhost:11434/api/chat')
+  })
+
+  it('routes to OpenAI-compat /v1/chat/completions by default (no tuning, no native flag)', async () => {
+    const urls = compatOk()
+    const client = new ClientBuilder()
+      .provider('ollama')
+      .ollamaBaseUrl('http://localhost:11434')
+      .build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    for await (const _e of client.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      // drain
+    }
+    expect(urls).toEqual([
+      'http://localhost:11434/v1/chat/completions',
+      'http://localhost:11434/v1/chat/completions',
+    ])
+  })
+
+  it('compat path sends Bearer with an empty key (harmless against Ollama)', async () => {
+    let authHeader: string | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, options?: RequestInit) => {
+        authHeader = (options?.headers as Record<string, string>)?.authorization
+        return new Response(
+          JSON.stringify({
+            model: 'llama3.2',
+            choices: [{ index: 0, message: { content: 'hi' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          }),
+          { status: 200 },
+        )
+      }),
+    )
+    const client = new ClientBuilder().provider('ollama').build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(authHeader).toBe('Bearer ')
+  })
+
+  it('defaults the base URL to http://localhost:11434 when unset', async () => {
+    const urls = compatOk()
+    const client = new ClientBuilder().provider('ollama').build()
+    await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(urls[0]).toBe('http://localhost:11434/v1/chat/completions')
+  })
+})
+
+describe('ClientBuilder Ollama api-key-not-required seam', () => {
+  beforeEach(() => {
+    delete process.env.OLLAMA_API_KEY
+  })
+
+  it('build() succeeds for provider("ollama") with NO apiKey', () => {
+    const client = new ClientBuilder()
+      .provider('ollama')
+      .ollamaBaseUrl('http://localhost:11434')
+      .build()
+    expect(client).toBeInstanceOf(Client)
+  })
+
+  it('build() succeeds for provider("ollama") with no apiKey and no base url', () => {
+    const client = new ClientBuilder().provider('ollama').build()
+    expect(client).toBeInstanceOf(Client)
+  })
+})
+
+describe('ClientBuilder Ollama tuning-field validation (non-ollama provider)', () => {
+  beforeEach(() => {
+    delete process.env.OPENAI_API_KEY
+  })
+
+  it('throws ConfigError naming ollama_think on a non-ollama provider', () => {
+    const builder = new ClientBuilder().provider('openai').apiKey('sk-test').ollamaThink('high')
+    expect(() => builder.build()).toThrowError(ConfigError)
+    expect(() => builder.build()).toThrowError('ollama_think can only be used with Provider::Ollama')
+  })
+
+  it('throws ConfigError naming ollama_keep_alive on a non-ollama provider', () => {
+    const builder = new ClientBuilder().provider('openai').apiKey('sk-test').ollamaKeepAlive('5m')
+    expect(() => builder.build()).toThrowError('ollama_keep_alive can only be used with Provider::Ollama')
+  })
+
+  it('throws ConfigError naming ollama_num_ctx on a non-ollama provider', () => {
+    const builder = new ClientBuilder().provider('openai').apiKey('sk-test').ollamaNumCtx(4096)
+    expect(() => builder.build()).toThrowError('ollama_num_ctx can only be used with Provider::Ollama')
+  })
+
+  it('joins multiple misused tuning fields in Rust order', () => {
+    const builder = new ClientBuilder()
+      .provider('openai')
+      .apiKey('sk-test')
+      .ollamaThink('high')
+      .ollamaKeepAlive('5m')
+      .ollamaNumCtx(4096)
+    // Rust pushes keep_alive, num_ctx, think in that order (client.rs:982-990).
+    expect(() => builder.build()).toThrowError(
+      'ollama_keep_alive, ollama_num_ctx, ollama_think can only be used with Provider::Ollama',
+    )
+  })
+
+  it('does NOT validate ollamaNative or ollamaBaseUrl on a non-ollama provider', () => {
+    // Rust only guards the three TUNING fields, not native/base_url.
+    const client = new ClientBuilder()
+      .provider('openai')
+      .apiKey('sk-test')
+      .ollamaNative(true)
+      .ollamaBaseUrl('http://x')
+      .build()
+    expect(client).toBeInstanceOf(Client)
+  })
+})
+
+describe('ClientBuilder Ollama native route rejects image input before HTTP', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const imageReq: ChatRequest = {
+    messages: [
+      {
+        role: 'user',
+        content: '',
+        contentBlocks: [
+          { type: 'image', source: { type: 'url', url: 'https://example.com/i.jpg' } },
+        ],
+      },
+    ],
+  }
+
+  it('chat() throws UnsupportedFeatureError on the native route (tuning field set)', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const client = new ClientBuilder().provider('ollama').ollamaThink('high').build()
+    await expect(client.chat(imageReq)).rejects.toThrow(UnsupportedFeatureError)
+    await expect(client.chat(imageReq)).rejects.toThrow('provider does not support image input')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('stream() throws UnsupportedFeatureError on the native route (ollamaNative)', async () => {
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const client = new ClientBuilder().provider('ollama').ollamaNative(true).build()
+    await expect(async () => {
+      for await (const _e of client.stream(imageReq)) {
+        // drain
+      }
+    }).rejects.toThrow('provider does not support image input')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('compat route ALLOWS image input (OpenAIProvider withImage())', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              model: 'llama3.2',
+              choices: [{ index: 0, message: { content: 'ok' }, finish_reason: 'stop' }],
+              usage: { prompt_tokens: 1, completion_tokens: 1 },
+            }),
+            { status: 200 },
+          ),
+      ),
+    )
+    const client = new ClientBuilder().provider('ollama').build() // no tuning → compat
+    const res = await client.chat(imageReq)
+    expect(res.content).toBe('ok')
+  })
+})
