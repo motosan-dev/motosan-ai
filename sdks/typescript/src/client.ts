@@ -12,7 +12,9 @@ import { collectStream, type BoxStream } from './stream.js'
 import { stripThink } from './think_stripper.js'
 import { AnthropicProvider } from './providers/anthropic.js'
 import { MinimaxProvider } from './providers/minimax.js'
+import { OllamaProvider } from './providers/ollama.js'
 import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
+import { DEFAULT_OLLAMA_MODEL } from './models.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
 export type ProviderName = Provider
@@ -34,6 +36,9 @@ const ENV_KEY_BY_PROVIDER: Record<ProviderName, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   openai: 'OPENAI_API_KEY',
   minimax: 'MINIMAX_API_KEY',
+  // Ollama needs no env key; '' keeps the Record total and
+  // process.env[''] yields undefined (harmless — apiKey not required).
+  ollama: '',
 }
 
 function asDispatchProvider(provider: ProviderLike): DispatchProvider {
@@ -64,6 +69,11 @@ export class ClientBuilder {
   protected _openaiChatUrl?: string
   protected _openaiResponsesFallback = false
   protected _openaiResponsesUrl?: string
+  protected _ollamaBaseUrl?: string
+  protected _ollamaNative?: boolean
+  protected _ollamaThink?: string
+  protected _ollamaKeepAlive?: string
+  protected _ollamaNumCtx?: number
 
   provider(p: Provider): this {
     this._provider = p
@@ -131,6 +141,31 @@ export class ClientBuilder {
     return this
   }
 
+  ollamaBaseUrl(u: string): this {
+    this._ollamaBaseUrl = u
+    return this
+  }
+
+  ollamaNative(native: boolean): this {
+    this._ollamaNative = native
+    return this
+  }
+
+  ollamaThink(think: string): this {
+    this._ollamaThink = think
+    return this
+  }
+
+  ollamaKeepAlive(duration: string): this {
+    this._ollamaKeepAlive = duration
+    return this
+  }
+
+  ollamaNumCtx(tokens: number): this {
+    this._ollamaNumCtx = tokens
+    return this
+  }
+
   /**
    * Construct the configured provider with its existing constructor signature,
    * then chain Task 5's mutating `withRetryPolicy(policy): this` setter.
@@ -158,6 +193,37 @@ export class ClientBuilder {
       }
       return openai
     }
+    if (provider === 'ollama') {
+      const ollamaBaseUrl = this._ollamaBaseUrl ?? 'http://localhost:11434'
+
+      // Auto-routing (contract §4 / client.rs:245-248). The SAME constructed
+      // instance serves chat and stream, so routing can never split.
+      const needsNative =
+        this._ollamaNative === true ||
+        this._ollamaKeepAlive !== undefined ||
+        this._ollamaNumCtx !== undefined ||
+        this._ollamaThink !== undefined
+
+      if (needsNative) {
+        // Native /api/chat (text-only). Mirrors build_ollama_native_provider
+        // (client.rs:610-621).
+        const model = this._model ?? DEFAULT_OLLAMA_MODEL
+        return new OllamaProvider(model, ollamaBaseUrl)
+          .withThink(this._ollamaThink)
+          .withKeepAlive(this._ollamaKeepAlive)
+          .withNumCtx(this._ollamaNumCtx)
+          .withRetryPolicy(this._retryPolicy)
+      }
+
+      // OpenAI-compat /v1/chat/completions (reuses OpenAIProvider, empty key,
+      // Bearer). Mirrors build_ollama_provider (client.rs:599-607). Declares
+      // withImage() capabilities (model-dependent accuracy).
+      const model = this._model ?? DEFAULT_OLLAMA_MODEL
+      return new OpenAIProvider('', model)
+        .withChatUrl(`${ollamaBaseUrl.replace(/\/+$/, '')}/v1/chat/completions`)
+        .withAuthStyle({ kind: 'bearer' })
+        .withRetryPolicy(this._retryPolicy)
+    }
     return new MinimaxProvider(apiKey, this._model, this._minimaxBaseUrl).withRetryPolicy(
       this._retryPolicy,
     )
@@ -173,6 +239,16 @@ export class ClientBuilder {
     const apiKey = this._apiKey ?? process.env[ENV_KEY_BY_PROVIDER[this._provider]]
     if (apiKeyRequired && !apiKey) {
       throw new ConfigError(`Missing API key for provider ${this._provider}`)
+    }
+
+    if (this._provider !== 'ollama') {
+      const misused: string[] = []
+      if (this._ollamaKeepAlive !== undefined) misused.push('ollama_keep_alive')
+      if (this._ollamaNumCtx !== undefined) misused.push('ollama_num_ctx')
+      if (this._ollamaThink !== undefined) misused.push('ollama_think')
+      if (misused.length > 0) {
+        throw new ConfigError(`${misused.join(', ')} can only be used with Provider::Ollama`)
+      }
     }
 
     const provider = this.buildProvider(this._provider, apiKey ?? '')
@@ -226,16 +302,24 @@ export class Client {
 
     const provider = opts.provider
     const apiKey = opts.apiKey ?? process.env[ENV_KEY_BY_PROVIDER[provider]]
-    if (!apiKey) {
+    if (!apiKey && provider !== 'ollama') {
       throw new ConfigError(`Missing API key for provider ${provider}`)
     }
 
+    const resolvedApiKey = apiKey ?? ''
     if (provider === 'anthropic') {
-      this.provider = new AnthropicProvider(apiKey, opts.model)
+      this.provider = new AnthropicProvider(resolvedApiKey, opts.model)
     } else if (provider === 'openai') {
-      this.provider = new OpenAIProvider(apiKey, opts.model)
+      this.provider = new OpenAIProvider(resolvedApiKey, opts.model)
+    } else if (provider === 'ollama') {
+      // Legacy ctor has no tuning fields → OpenAI-compat path (empty key,
+      // Bearer) against the default Ollama base URL. For native/tuning, use
+      // Client.builder().
+      this.provider = new OpenAIProvider(resolvedApiKey, opts.model ?? DEFAULT_OLLAMA_MODEL)
+        .withChatUrl('http://localhost:11434/v1/chat/completions')
+        .withAuthStyle({ kind: 'bearer' })
     } else {
-      this.provider = new MinimaxProvider(apiKey, opts.model, opts.minimaxBaseUrl)
+      this.provider = new MinimaxProvider(resolvedApiKey, opts.model, opts.minimaxBaseUrl)
     }
   }
 
