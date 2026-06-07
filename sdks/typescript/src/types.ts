@@ -28,12 +28,13 @@ export type ContentBlock =
 
 /**
  * A tool/function call requested by the model. The arguments field is `input`
- * (NOT `args`/`params`) per project convention, kept as a parsed object.
+ * (NOT `args`/`params`) per project convention, kept as the parsed JSON value
+ * returned by the provider.
  */
 export interface ToolCall {
   id: string
   name: string
-  input: Record<string, unknown>
+  input: unknown
 }
 
 /** A tool definition exposed to the model. */

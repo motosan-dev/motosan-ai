@@ -147,8 +147,9 @@ describe('OllamaProvider chat (native /api/chat)', () => {
     const provider = new OllamaProvider('llama3.2', BASE)
     const res = await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
     expect(res.content).toBe('<think>reasoning</think>\n\nanswer')
-    // native chat() never populates ChatResponse.thinking
+    // native chat() never populates ChatResponse.thinking; omit the optional key.
     expect(res.thinking).toBeUndefined()
+    expect('thinking' in res).toBe(false)
   })
 
   it('uses thinking AS content when content is empty', async () => {
@@ -371,6 +372,38 @@ describe('OllamaProvider stream (native NDJSON adapter)', () => {
     // No terminal done event synthesized (matches Rust Poll::Ready(None)).
     expect(events.every((e) => !e.done)).toBe(true)
     expect(events.map((e) => e.content)).toEqual(['a', 'b'])
+  })
+
+  it('ends without throwing when the NDJSON body errors after yielding data', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        let reads = 0
+        const body = new ReadableStream<Uint8Array>({
+          pull(controller) {
+            reads += 1
+            if (reads === 1) {
+              controller.enqueue(
+                new TextEncoder().encode('{"message":{"content":"partial"},"done":false}\n'),
+              )
+              return
+            }
+            controller.error(new Error('socket closed'))
+          },
+        })
+        return new Response(body, { status: 200 })
+      }),
+    )
+    const provider = new OllamaProvider('llama3.2', BASE)
+    const events: StreamEvent[] = []
+    await expect(
+      (async () => {
+        for await (const e of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+          events.push(e)
+        }
+      })(),
+    ).resolves.toBeUndefined()
+    expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])
   })
 })
 

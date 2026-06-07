@@ -153,9 +153,9 @@ export async function collectStream(stream: BoxStream): Promise<ChatResponse> {
         break
 
       case 'tool_call_end': {
-        let input: Record<string, unknown> = {}
+        let input: unknown = {}
         try {
-          input = JSON.parse(currentToolArgs) as Record<string, unknown>
+          input = JSON.parse(currentToolArgs) as unknown
         } catch {
           // Fallback to empty object on parse failure
         }

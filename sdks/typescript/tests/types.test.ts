@@ -49,6 +49,8 @@ describe('ContentBlock variants roundtrip', () => {
 describe('Message with contentBlocks roundtrips', () => {
   it('preserves blocks, content, and tool fields', () => {
     const tc: ToolCall = { id: 'call_1', name: 'get_weather', input: { city: 'Taipei' } }
+    const rawArgs: ToolCall = { id: 'call_raw', name: 'raw_args', input: 'not json' }
+    expect(roundtrip(rawArgs)).toEqual(rawArgs)
     const msg: Message = {
       role: 'user',
       content: 'look at this',

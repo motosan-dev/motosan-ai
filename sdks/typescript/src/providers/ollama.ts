@@ -262,11 +262,9 @@ export class OllamaProvider {
     const toolCalls: ToolCall[] = native.map((tc) => ({
       id: tc.id,
       name: tc.name,
-      // extractToolCalls keeps the RAW string when JSON.parse fails (Rust
-      // Value::String fallback, ollama.rs), so tc.input may be a string. The
-      // cast is a deliberate escape hatch; ToolCall.input stays Record<...>
-      // (a post-M5 widening of ToolCall.input to unknown is the clean fix).
-      input: tc.input as Record<string, unknown>,
+      // extractToolCalls keeps the RAW JSON value when JSON.parse fails (Rust
+      // Value::String fallback, ollama.rs), so tc.input may be a string.
+      input: tc.input,
     }))
 
     let stopReason: StopReason
@@ -284,7 +282,6 @@ export class OllamaProvider {
       content: finalContent,
       // native chat() folds thinking into content via <think>; it does NOT
       // populate ChatResponse.thinking (ollama.rs never calls .thinking()).
-      thinking: undefined,
       toolCalls,
       model,
       usage: { inputTokens, outputTokens },
@@ -324,42 +321,48 @@ export class OllamaProvider {
     }
 
     // Adapter over parseNdjson: decide termination on done:true.
-    for await (const obj of parseNdjson(responseBody)) {
-      const done = (obj as { done?: unknown }).done === true
-      if (done) {
-        // Rust StreamEvent::done() carries NO stop_reason — plain doneEvent.
-        yield doneEvent()
-        return
-      }
+    try {
+      for await (const obj of parseNdjson(responseBody)) {
+        const done = (obj as { done?: unknown }).done === true
+        if (done) {
+          // Rust StreamEvent::done() carries NO stop_reason — plain doneEvent.
+          yield doneEvent()
+          return
+        }
 
-      const message = (obj as { message?: any }).message
-      const content =
-        typeof message?.content === 'string' ? message.content : ''
-      const thinking =
-        typeof message?.thinking === 'string' ? message.thinking : ''
+        const message = (obj as { message?: any }).message
+        const content =
+          typeof message?.content === 'string' ? message.content : ''
+        const thinking =
+          typeof message?.thinking === 'string' ? message.thinking : ''
 
-      // text selection (ollama.rs:459-465). Streamed thinking is surfaced as
-      // a plain textEvent (folded into the text stream).
-      let text: string
-      if (thinking !== '' && content === '') {
-        text = thinking
-      } else if (content !== '') {
-        text = content
-      } else {
-        text = ''
-      }
-      if (text !== '') {
-        yield textEvent(text)
-      }
+        // text selection (ollama.rs:459-465). Streamed thinking is surfaced as
+        // a plain textEvent (folded into the text stream).
+        let text: string
+        if (thinking !== '' && content === '') {
+          text = thinking
+        } else if (content !== '') {
+          text = content
+        } else {
+          text = ''
+        }
+        if (text !== '') {
+          yield textEvent(text)
+        }
 
-      // 3-event pattern per tool call (ollama.rs:471-483).
-      if (message) {
-        for (const tc of OllamaProvider.extractToolCalls(message)) {
-          yield toolCallStart(tc.id, tc.name)
-          yield toolCallArgsWithId(tc.id, JSON.stringify(tc.input))
-          yield toolCallEndWithId(tc.id)
+        // 3-event pattern per tool call (ollama.rs:471-483).
+        if (message) {
+          for (const tc of OllamaProvider.extractToolCalls(message)) {
+            yield toolCallStart(tc.id, tc.name)
+            yield toolCallArgsWithId(tc.id, JSON.stringify(tc.input))
+            yield toolCallEndWithId(tc.id)
+          }
         }
       }
+    } catch {
+      // Ignore post-start stream body errors, matching Rust's partial-success
+      // stream semantics: end without synthesizing a terminal done event.
+      return
     }
     // EOF without done:true — let the generator end (NO synthesized done),
     // matching Rust Poll::Ready(None). collectStream fabricates a stop_reason.
