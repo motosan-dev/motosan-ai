@@ -1,4 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  Client,
+  GeminiProvider,
+  DEFAULT_GEMINI_MODEL,
+  GEMINI_MODELS,
+  serializeGeminiRequest,
+} from '../src/index.js'
 import type { Provider, ProviderCapabilities } from '../src/index.js'
 
 describe('index.ts public exports', () => {
@@ -60,5 +67,67 @@ describe('index.ts public exports', () => {
 
     const client = builderFactory.builder().provider('anthropic').apiKey('test').build()
     expect(client).toBeInstanceOf(Client)
+  })
+})
+
+describe('M6 Gemini public surface (index re-exports)', () => {
+  it('re-exports DEFAULT_GEMINI_MODEL and GEMINI_MODELS from the root', () => {
+    expect(DEFAULT_GEMINI_MODEL).toBe('gemini-2.5-flash')
+    expect(GEMINI_MODELS).toContain('gemini-2.5-flash')
+    expect(GEMINI_MODELS.length).toBe(8)
+  })
+
+  it('re-exports the GeminiProvider class from the root', () => {
+    const provider = new GeminiProvider('test-key')
+    const caps = provider.capabilities()
+    expect(caps.supportsImage).toBe(true)
+    expect(caps.supportsDocument).toBe(false)
+    expect(caps.supportsMcp).toBe(false)
+  })
+
+  it('re-exports serializeGeminiRequest from the root', () => {
+    const body = serializeGeminiRequest(
+      { messages: [{ role: 'user', content: 'Hello' }] },
+      DEFAULT_GEMINI_MODEL,
+    )
+    const contents = (body as any).contents
+    expect(contents[0].role).toBe('user')
+    expect(contents[0].parts[0].text).toBe('Hello')
+    expect((body as any).model).toBeUndefined()
+  })
+})
+
+describe('M6 Gemini done-criteria smoke (builder round-trip)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    delete process.env.GEMINI_API_KEY
+  })
+
+  it('Client.builder().provider("gemini").apiKey(...).build() returns a Client', () => {
+    const client = Client.builder().provider('gemini').apiKey('smoke-key').build()
+    expect(client).toBeInstanceOf(Client)
+  })
+
+  it('a built gemini Client performs a chat through a mocked fetch (end-to-end)', async () => {
+    const mockFetch = vi.fn(async (url: string) => {
+      expect(url).toContain('/models/gemini-2.5-flash:generateContent')
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            { content: { parts: [{ text: 'pong' }], role: 'model' }, finishReason: 'STOP' },
+          ],
+          usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1 },
+          modelVersion: 'gemini-2.5-flash',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )
+    })
+    vi.stubGlobal('fetch', mockFetch)
+
+    const client = Client.builder().provider('gemini').apiKey('smoke-key').build()
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'ping' }] })
+    expect(resp.content).toBe('pong')
+    expect(resp.stopReason).toBe('end_turn')
+    expect(mockFetch).toHaveBeenCalledTimes(1)
   })
 })
