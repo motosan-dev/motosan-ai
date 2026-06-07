@@ -349,7 +349,7 @@ exponential backoff, respecting the `Retry-After` header.
 ```ts
 import { Client, RetryPolicy } from '@motosan-ai/sdk'
 
-const rp = new RetryPolicy() // tune via its builder methods; e.g. maxRetries / baseDelay / respectRetryAfter
+const rp = new RetryPolicy() // tune via its builder methods, e.g. .withMaxRetries(5).withBaseDelayMs(200).withRespectRetryAfter(true)
 
 const client = Client.builder()
   .provider('openai')
