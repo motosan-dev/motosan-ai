@@ -560,6 +560,18 @@ describe('AnthropicProvider beta headers (M4)', () => {
     )
   })
 
+  it('merges OAuth, MCP, and interleaved-thinking betas for setup-token requests', async () => {
+    const provider = new AnthropicProvider('sk-ant-oat01-k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+      thinking: { budgetTokens: 1024 },
+    })
+    expect(captured?.headers['anthropic-beta']).toBe(
+      'mcp-client-2025-11-20,claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14',
+    )
+  })
+
   it('omits anthropic-beta for a plain request', async () => {
     const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
     await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
