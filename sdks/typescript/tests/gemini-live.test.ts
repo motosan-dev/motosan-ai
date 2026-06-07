@@ -9,7 +9,10 @@ live('GeminiProvider (live)', () => {
     const provider = new GeminiProvider(KEY as string)
     const resp = await provider.chat({
       messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
-      maxTokens: 16,
+      // gemini-2.5-flash does dynamic "thinking" by default; a tiny budget can
+      // be consumed entirely by thinking (finishReason MAX_TOKENS, no text part),
+      // so give enough room for thinking + the text reply.
+      maxTokens: 256,
     })
     expect(resp.content.length).toBeGreaterThan(0)
     expect(['end_turn', 'max_tokens', 'other']).toContain(resp.stopReason)
