@@ -10,6 +10,8 @@ describe('ClientBuilder', () => {
     delete process.env.ANTHROPIC_API_KEY
     delete process.env.OPENAI_API_KEY
     delete process.env.MINIMAX_API_KEY
+    delete process.env.OLLAMA_API_KEY
+    delete process.env.GEMINI_API_KEY
   })
 
   it('throws ConfigError when provider is not set', () => {
@@ -36,10 +38,38 @@ describe('ClientBuilder', () => {
   })
 
   it('builds a Client for each HTTP provider', () => {
-    for (const p of ['anthropic', 'openai', 'minimax'] as const) {
+    for (const p of ['anthropic', 'openai', 'minimax', 'gemini'] as const) {
       const client = new ClientBuilder().provider(p).apiKey('test-key').build()
       expect(client).toBeInstanceOf(Client)
     }
+  })
+
+  it('builds a Client for the gemini provider with an explicit key', () => {
+    const client = new ClientBuilder().provider('gemini').apiKey('test-key').build()
+    expect(client).toBeInstanceOf(Client)
+  })
+
+  it('throws ConfigError when GEMINI_API_KEY is missing for gemini', () => {
+    const builder = new ClientBuilder().provider('gemini')
+    expect(() => builder.build()).toThrowError(ConfigError)
+    expect(() => builder.build()).toThrowError('Missing API key for provider gemini')
+  })
+
+  it('uses GEMINI_API_KEY from the environment for gemini', () => {
+    process.env.GEMINI_API_KEY = 'gemini-env-key'
+    const client = new ClientBuilder().provider('gemini').build()
+    expect(client).toBeInstanceOf(Client)
+  })
+
+  it('supports a geminiBaseUrl override fluently', () => {
+    const client = new ClientBuilder()
+      .provider('gemini')
+      .apiKey('test-key')
+      .geminiBaseUrl('https://gemini.proxy.internal/v1beta')
+      .retryPolicy(new RetryPolicy({ maxRetries: 1 }))
+      .model('gemini-2.5-pro')
+      .build()
+    expect(client).toBeInstanceOf(Client)
   })
 
   it('supports fluent chaining of all base setters', () => {

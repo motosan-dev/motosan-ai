@@ -7,6 +7,8 @@ import {
   MINIMAX_MODELS,
   DEFAULT_MINIMAX_MODEL,
   DEFAULT_OLLAMA_MODEL,
+  GEMINI_MODELS,
+  DEFAULT_GEMINI_MODEL,
 } from '../src/models.js'
 import {
   DEFAULT_ANTHROPIC_MODEL as INDEX_DEFAULT_ANTHROPIC_MODEL,
@@ -149,6 +151,35 @@ describe('models', () => {
     it('MinimaxProvider should use DEFAULT_MINIMAX_MODEL', () => {
       const provider = new MinimaxProvider('test-api-key')
       expect((provider as any).inner.model).toBe(DEFAULT_MINIMAX_MODEL)
+    })
+  })
+
+  describe('GEMINI_MODELS', () => {
+    it('contains the eight Gemini model IDs (models.rs:24-33)', () => {
+      expect(GEMINI_MODELS).toEqual([
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.5-pro',
+        'gemini-flash-latest',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-pro',
+        'gemini-1.5-flash',
+      ])
+    })
+
+    it('is a readonly const tuple (length 8)', () => {
+      expect(GEMINI_MODELS.length).toBe(8)
+    })
+  })
+
+  describe('DEFAULT_GEMINI_MODEL', () => {
+    it('is gemini-2.5-flash (models.rs:22)', () => {
+      expect(DEFAULT_GEMINI_MODEL).toBe('gemini-2.5-flash')
+    })
+
+    it('is a member of GEMINI_MODELS', () => {
+      expect(GEMINI_MODELS).toContain(DEFAULT_GEMINI_MODEL)
     })
   })
 })

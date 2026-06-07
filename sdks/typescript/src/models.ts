@@ -29,3 +29,18 @@ export const DEFAULT_MINIMAX_MODEL = 'MiniMax-M2.7'
 
 /** Default Ollama model (models.rs:3) */
 export const DEFAULT_OLLAMA_MODEL = 'llama3.2'
+
+/** Gemini model IDs (models.rs:24-33) */
+export const GEMINI_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-flash-latest',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-pro',
+  'gemini-1.5-flash',
+] as const
+
+/** Default Gemini model (models.rs:22) */
+export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
