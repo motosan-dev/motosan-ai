@@ -28,6 +28,7 @@ response = await client.chat([Message.user("Hello")])
 |----------|---------|---------|
 | Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.18.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.12.1 |
+| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.10.0 |
 
 ## Install
 
@@ -44,6 +45,11 @@ motosan-ai = { version = "0.18.0", features = ["anthropic"] }
 pip install "motosan-ai[anthropic]"
 pip install "motosan-ai[gemini]"
 pip install "motosan-ai[full]"   # all Python HTTP providers
+```
+
+```bash
+# TypeScript / Node (ESM, Node >= 18)
+npm install @motosan-ai/sdk
 ```
 
 ## Providers

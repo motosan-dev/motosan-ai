@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.12.1 / Rust 0.19.0
+Multi-provider LLM SDK — Python 0.12.1 / Rust 0.19.0 / TypeScript 0.10.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI
 
@@ -27,6 +27,11 @@ motosan-ai = { version = "0.19.0", features = ["anthropic"] }
 
 # Codex OAuth (standalone — get a token for chatgpt.com/backend-api)
 codex-oauth = "0.1"
+```
+
+```bash
+# TypeScript / Node (ESM, Node >= 18)
+npm install @motosan-ai/sdk
 ```
 
 ## Environment Variables
