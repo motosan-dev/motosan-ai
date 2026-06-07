@@ -68,6 +68,55 @@ describe('AnthropicProvider chat', () => {
     expect(response.stopReason).toBe('end_turn')
   })
 
+  it('uses bearer auth and OAuth beta headers for setup tokens', async () => {
+    const provider = new AnthropicProvider(
+      'sk-ant-oat01-test-token',
+      'claude-3-5-sonnet-20241022',
+      'https://api.anthropic.com',
+    )
+
+    await provider.chat({ messages: [{ role: 'user', content: 'Hello' }] })
+
+    expect(capturedRequest?.headers['x-api-key']).toBeUndefined()
+    expect(capturedRequest?.headers.authorization).toBe('Bearer sk-ant-oat01-test-token')
+    expect(capturedRequest?.headers['anthropic-beta']).toContain('claude-code-20250219')
+    expect(capturedRequest?.headers['anthropic-beta']).toContain('oauth-2025-04-20')
+    expect(capturedRequest?.headers['anthropic-beta']).toContain(
+      'fine-grained-tool-streaming-2025-05-14',
+    )
+    expect(capturedRequest?.headers['user-agent']).toBe('claude-code/1.0.33')
+    expect(capturedRequest?.headers['x-app']).toBe('cli')
+    expect(capturedRequest?.body.system).toEqual([
+      {
+        type: 'text',
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        cache_control: { type: 'ephemeral' },
+      },
+    ])
+  })
+
+  it('preserves the user system prompt after OAuth Claude Code identity', async () => {
+    const provider = new AnthropicProvider(
+      'sk-ant-oat01-test-token',
+      'claude-3-5-sonnet-20241022',
+      'https://api.anthropic.com',
+    )
+
+    await provider.chat({
+      messages: [{ role: 'user', content: 'Hello' }],
+      system: 'Reply tersely.',
+    })
+
+    expect(capturedRequest?.body.system).toEqual([
+      {
+        type: 'text',
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        cache_control: { type: 'ephemeral' },
+      },
+      { type: 'text', text: 'Reply tersely.' },
+    ])
+  })
+
   it('parses cache tokens from a non-streaming usage block', async () => {
     vi.stubGlobal(
       'fetch',
@@ -178,7 +227,10 @@ describe('AnthropicProvider stream', () => {
     vi.unstubAllGlobals()
   })
 
-  function streamFromTranscript(sse: string): void {
+  function streamFromTranscript(
+    sse: string,
+    onRequest?: (url: string, options?: RequestInit) => void,
+  ): void {
     const bytes = new TextEncoder().encode(sse)
     const mockStream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -188,14 +240,50 @@ describe('AnthropicProvider stream', () => {
     })
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () =>
-        new Response(mockStream, {
+      vi.fn(async (url: string, options?: RequestInit) => {
+        onRequest?.(url, options)
+        return new Response(mockStream, {
           status: 200,
           headers: { 'content-type': 'text/event-stream' },
-        }),
-      ),
+        })
+      }),
     )
   }
+
+  it('uses bearer auth and OAuth beta headers for setup token streams', async () => {
+    let capturedHeaders: Record<string, string> = {}
+    let capturedBody: any = null
+    streamFromTranscript(
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+      (_url, options) => {
+        capturedHeaders = (options?.headers as Record<string, string>) ?? {}
+        capturedBody = JSON.parse(String(options?.body ?? '{}'))
+      },
+    )
+
+    const provider = new AnthropicProvider(
+      'sk-ant-oat01-stream-token',
+      'claude-3-5-sonnet-20241022',
+    )
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event)
+    }
+
+    expect(events.some((event) => event.done)).toBe(true)
+    expect(capturedHeaders['x-api-key']).toBeUndefined()
+    expect(capturedHeaders.authorization).toBe('Bearer sk-ant-oat01-stream-token')
+    expect(capturedHeaders['anthropic-beta']).toContain('oauth-2025-04-20')
+    expect(capturedHeaders['user-agent']).toBe('claude-code/1.0.33')
+    expect(capturedHeaders['x-app']).toBe('cli')
+    expect(capturedBody.system).toEqual([
+      {
+        type: 'text',
+        text: "You are Claude Code, Anthropic's official CLI for Claude.",
+        cache_control: { type: 'ephemeral' },
+      },
+    ])
+  })
 
   it('maps a full thinking + text + tool_use + usage transcript to StreamEvents', async () => {
     const sse =
@@ -462,6 +550,26 @@ describe('AnthropicProvider beta headers (M4)', () => {
       thinking: { budgetTokens: 1024 },
     })
     expect('anthropic-beta' in (captured?.headers ?? {})).toBe(false)
+  })
+
+  it('uses exactly the OAuth betas for a plain setup-token request', async () => {
+    const provider = new AnthropicProvider('sk-ant-oat01-k', 'claude-sonnet-4-6')
+    await provider.chat({ messages: [{ role: 'user', content: 'hi' }] })
+    expect(captured?.headers['anthropic-beta']).toBe(
+      'claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14',
+    )
+  })
+
+  it('merges OAuth, MCP, and interleaved-thinking betas for setup-token requests', async () => {
+    const provider = new AnthropicProvider('sk-ant-oat01-k', 'claude-sonnet-4-6')
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+      thinking: { budgetTokens: 1024 },
+    })
+    expect(captured?.headers['anthropic-beta']).toBe(
+      'mcp-client-2025-11-20,claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14',
+    )
   })
 
   it('omits anthropic-beta for a plain request', async () => {

@@ -30,6 +30,35 @@ import type {
 } from '../types.js'
 
 const ANTHROPIC_VERSION = '2023-06-01'
+const ANTHROPIC_CLAUDE_CODE_USER_AGENT = 'claude-code/1.0.33'
+
+function isSetupToken(apiKey: string): boolean {
+  return apiKey.startsWith('sk-ant-oat01-')
+}
+
+function claudeCodeSystemBlock(): Record<string, unknown> {
+  return {
+    type: 'text',
+    text: "You are Claude Code, Anthropic's official CLI for Claude.",
+    cache_control: { type: 'ephemeral' },
+  }
+}
+
+function withOAuthSystemIdentity(body: Record<string, any>): Record<string, any> {
+  if (Array.isArray(body.system)) {
+    return { ...body, system: [claudeCodeSystemBlock(), ...body.system] }
+  }
+
+  if (typeof body.system === 'string') {
+    return { ...body, system: [claudeCodeSystemBlock(), { type: 'text', text: body.system }] }
+  }
+
+  if (body.system && typeof body.system === 'object') {
+    return { ...body, system: [claudeCodeSystemBlock(), body.system] }
+  }
+
+  return { ...body, system: [claudeCodeSystemBlock()] }
+}
 
 /**
  * Build the `anthropic-beta` header value (comma-joined, no spaces; `undefined`
@@ -148,6 +177,17 @@ export class AnthropicProvider {
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {
+    if (isSetupToken(this.apiKey)) {
+      return {
+        authorization: `Bearer ${this.apiKey}`,
+        'anthropic-version': ANTHROPIC_VERSION,
+        'content-type': 'application/json',
+        'user-agent': ANTHROPIC_CLAUDE_CODE_USER_AGENT,
+        'x-app': 'cli',
+        ...(extra ?? {}),
+      }
+    }
+
     return {
       'x-api-key': this.apiKey,
       'anthropic-version': ANTHROPIC_VERSION,
@@ -158,7 +198,6 @@ export class AnthropicProvider {
 
   /**
    * Build per-request headers including the beta header when applicable.
-   * isOauth is always false in M4 (no setup-token path in TS).
    * adaptiveThinking is read off the serialized body, matching Rust
    * (anthropic.rs:469/802). Non-adaptive thinking enables the interleaved-thinking beta.
    */
@@ -166,13 +205,14 @@ export class AnthropicProvider {
     const hasMcp = requestHasMcp(req)
     const hasThinking = body?.thinking !== undefined
     const adaptiveThinking = body?.thinking?.type === 'adaptive'
-    const beta = buildBetaHeader(hasMcp, false, adaptiveThinking, hasThinking)
+    const beta = buildBetaHeader(hasMcp, isSetupToken(this.apiKey), adaptiveThinking, hasThinking)
     return this.headers(beta ? { 'anthropic-beta': beta } : {})
   }
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const model = request.model ?? this.model
-    const body = serializeAnthropicRequest(request, model)
+    const serialized = serializeAnthropicRequest(request, model)
+    const body = isSetupToken(this.apiKey) ? withOAuthSystemIdentity(serialized) : serialized
     const headers = this.requestHeaders(request, body)
     const payload = await withRetry(
       this.retryPolicy,
@@ -218,10 +258,11 @@ export class AnthropicProvider {
 
   private async *streamImpl(request: ChatRequest) {
     const model = request.model ?? this.model
-    const body = {
+    const serialized = {
       ...serializeAnthropicRequest(request, model),
       stream: true,
     }
+    const body = isSetupToken(this.apiKey) ? withOAuthSystemIdentity(serialized) : serialized
     const headers = this.requestHeaders(request, body)
     let attempt = 0
     let responseBody: ReadableStream<Uint8Array>
