@@ -265,11 +265,10 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Usage, Option<String>), 
         }
         match stream_json::parse_ndjson_line(line) {
             Some(NdjsonAction::Text(event)) => content.push_str(&event.content),
-            Some(NdjsonAction::SessionStarted(event)) => {
-                if session_id.is_none() {
-                    session_id = event.session_id;
-                }
+            Some(NdjsonAction::SessionStarted(event)) if session_id.is_none() => {
+                session_id = event.session_id;
             }
+            Some(NdjsonAction::SessionStarted(_)) => {}
             Some(NdjsonAction::Result {
                 usage: Some(event), ..
             }) => {

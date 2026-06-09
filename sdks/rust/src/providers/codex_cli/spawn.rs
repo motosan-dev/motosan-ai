@@ -326,11 +326,10 @@ fn parse_collected_stream(
         }
         match stream_json::parse_ndjson_line(line) {
             Some(NdjsonAction::Text(event)) => agent_messages.push(event.content),
-            Some(NdjsonAction::SessionStarted(event)) => {
-                if session_id.is_none() {
-                    session_id = event.session_id;
-                }
+            Some(NdjsonAction::SessionStarted(event)) if session_id.is_none() => {
+                session_id = event.session_id;
             }
+            Some(NdjsonAction::SessionStarted(_)) => {}
             Some(NdjsonAction::Done {
                 usage: Some(event), ..
             }) => {
