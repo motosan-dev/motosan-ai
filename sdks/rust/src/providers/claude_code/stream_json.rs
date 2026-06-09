@@ -26,6 +26,8 @@ pub enum ClaudeStreamEvent {
         result: String,
         #[serde(default)]
         usage: Option<ClaudeStreamUsage>,
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     #[serde(other)]
@@ -62,6 +64,7 @@ pub enum NdjsonAction {
     Result {
         usage: Option<StreamEvent>,
         done: StreamEvent,
+        session_id: Option<String>,
     },
 }
 
@@ -88,7 +91,9 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
                 Some(NdjsonAction::Text(StreamEvent::text(combined)))
             }
         }
-        ClaudeStreamEvent::Result { usage, .. } => {
+        ClaudeStreamEvent::Result {
+            usage, session_id, ..
+        } => {
             let usage_event = usage.map(|u| {
                 StreamEvent::usage(Usage {
                     input_tokens: u.input_tokens.unwrap_or(0) as u32,
@@ -100,6 +105,7 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
             Some(NdjsonAction::Result {
                 usage: usage_event,
                 done: StreamEvent::done(),
+                session_id: session_id.filter(|s| !s.is_empty()),
             })
         }
         _ => None,
@@ -129,7 +135,7 @@ mod tests {
             r#"{"type":"result","result":"done","usage":{"input_tokens":12,"output_tokens":8}}"#;
         let action = parse_ndjson_line(line).expect("should parse");
         match action {
-            NdjsonAction::Result { usage, done } => {
+            NdjsonAction::Result { usage, done, .. } => {
                 let usage = usage.expect("usage should be present");
                 let u = usage.usage.expect("usage field should exist");
                 assert_eq!(u.input_tokens, 12);
@@ -141,11 +147,22 @@ mod tests {
     }
 
     #[test]
+    fn result_event_surfaces_session_id() {
+        let line = r#"{"type":"result","result":"done","session_id":"sess_99"}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::Result { session_id, .. } => {
+                assert_eq!(session_id.as_deref(), Some("sess_99"));
+            }
+            _ => panic!("expected Result action"),
+        }
+    }
+
+    #[test]
     fn parse_result_without_usage() {
         let line = r#"{"type":"result","result":"done"}"#;
         let action = parse_ndjson_line(line).expect("should parse");
         match action {
-            NdjsonAction::Result { usage, done } => {
+            NdjsonAction::Result { usage, done, .. } => {
                 assert!(usage.is_none());
                 assert!(done.done);
             }

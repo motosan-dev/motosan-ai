@@ -379,11 +379,11 @@ fn build_command(config: &SpawnConfig) -> Command {
     cmd
 }
 
-/// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
+/// Invoke the `claude` CLI with `--print` and return `(text, usage, session_id)`.
 pub async fn invoke_cli(
     config: &SpawnConfig,
     prompt: &str,
-) -> Result<(String, Usage), MotosanError> {
+) -> Result<(String, Usage, Option<String>), MotosanError> {
     let mut cmd = build_command(config);
 
     let mut child = cmd
@@ -428,12 +428,13 @@ pub async fn invoke_cli(
                 cache_creation_input_tokens: None,
                 cache_read_input_tokens: None,
             },
+            None,
         ))
     }
 }
 
-/// Parse the JSON output from agent mode, extracting `result` and `usage`.
-fn parse_agent_json(raw: &str) -> Result<(String, Usage), MotosanError> {
+/// Parse the JSON output from agent mode, extracting `result`, `usage`, and `session_id`.
+fn parse_agent_json(raw: &str) -> Result<(String, Usage, Option<String>), MotosanError> {
     let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
         MotosanError::ProviderError(format!("failed to parse claude JSON output: {e}"))
     })?;
@@ -465,7 +466,13 @@ fn parse_agent_json(raw: &str) -> Result<(String, Usage), MotosanError> {
         },
     };
 
-    Ok((text, usage))
+    let session_id = v
+        .get("session_id")
+        .and_then(|s| s.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+
+    Ok((text, usage, session_id))
 }
 
 #[cfg(test)]
