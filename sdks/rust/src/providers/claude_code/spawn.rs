@@ -159,6 +159,8 @@ pub struct SpawnConfig {
     /// `--max-budget-usd <amount>` — dollar cap for API calls during
     /// this session. Only meaningful under `--print`.
     pub max_budget_usd: Option<f64>,
+    /// Working directory for the spawned process; `None` inherits the parent's.
+    pub cwd: Option<PathBuf>,
 }
 
 const TIMEOUT_SECS: u64 = 300;
@@ -361,6 +363,9 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
 /// unit-testable in one place.
 fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
+    if let Some(dir) = &config.cwd {
+        cmd.current_dir(dir);
+    }
     cmd.arg("--print");
     if config.agent_mode {
         cmd.arg("--output-format").arg("json");
@@ -493,6 +498,7 @@ mod tests {
             agent: None,
             no_session_persistence: false,
             max_budget_usd: None,
+            cwd: None,
         }
     }
 
@@ -512,6 +518,23 @@ mod tests {
             .collect();
         assert!(argv.contains(&"--print".to_string()));
         assert_eq!(argv.last().map(String::as_str), Some("-"));
+    }
+
+    #[test]
+    fn build_command_sets_current_dir_when_cwd_present() {
+        let cfg = SpawnConfig {
+            cwd: Some(PathBuf::from("/work/dir")),
+            ..empty_config()
+        };
+        let cmd = build_command(&cfg);
+        assert_eq!(
+            cmd.as_std().get_current_dir(),
+            Some(std::path::Path::new("/work/dir"))
+        );
+        assert_eq!(
+            build_command(&empty_config()).as_std().get_current_dir(),
+            None
+        );
     }
 
     #[test]
@@ -886,6 +909,7 @@ mod tests {
             agent: Some("reviewer".to_string()),
             no_session_persistence: true,
             max_budget_usd: Some(3.0),
+            cwd: None,
         };
         assert_eq!(
             args_as_strings(&common_args(&cfg)),
