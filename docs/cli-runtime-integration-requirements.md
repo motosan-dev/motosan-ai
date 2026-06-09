@@ -20,7 +20,7 @@ Both depend entirely on what each provider's flags expose. The three providers' 
 | Capability | **ClaudeCode** (`claude-code`) | **CodexCli** (`codex-cli`) | **GeminiCli** (`gemini-cli`) |
 |---|---|---|---|
 | Set `cwd` | ✅ `.cwd()` → `Command::current_dir` (`--add-dir` only adds *extra* roots) | ✅ `.cd()` → `--cd` (Codex workspace-root flag, not OS cwd) | ✅ `.cwd()` → `Command::current_dir` (`--include-directories` only adds roots) |
-| Session continuity | ⚠️ can **set** `--session-id <uuid>` / `--resume`, but the created id is **never read back** | ❌ none (`codex exec` only; `--ephemeral` is the opposite; `thread.started` id dropped) | ⚠️ `--resume latest\|index` only; **no `session_id`**, and the `init` event's id is dropped |
+| Session continuity | ✅ can **set** `--session-id <uuid>` / `--resume` and surfaces `result.session_id` | ✅ captures `thread.started.thread_id` and supports `codex exec resume <id>` | ⚠️ surfaces `init.session_id` and forwards `.resume(id)` to `--resume <id>`; arbitrary-id resume is still live-unverified |
 | Per-call budget cap | ✅ `--max-budget-usd` | ❌ none | ❌ none |
 | Permission mode | ✅ `--permission-mode` (6 modes) + `--dangerously-skip-permissions` | ⚠️ coarse only (`--full-auto` / `--sandbox` / bypass); **no interactive approval channel** | ✅ `--approval-mode` (default/auto_edit/yolo/plan) + `--yolo`/`--sandbox` |
 | Text stream events | ✅ | ✅ | ✅ |
@@ -56,9 +56,9 @@ v1's security model is `SecretResolver → ctx.secrets` (per-run key, never pers
 - CodexCli already has `.cd()` → `--cd` — nothing needed; CliRuntime just calls `.cd(ctx.cwd)`.
 
 ### P1 — makes "same-issue session continuity" satisfiable
-- **P1.1 — `CodexCliProvider`: add session resume.** Capture the dropped `thread.started` `thread_id` and support `codex exec resume <thread_id>`. (Biggest Codex gap; `codex_cli/mod.rs:48-49`, `stream_json.rs:54-56`.)
-- **P1.2 — surface created session ids on all three** (ClaudeCode `result`, Codex `thread.started`, Gemini `init` all parse the id away). Needed for deterministic cross-run resume. (ClaudeCode has the mint-your-own workaround; Codex/Gemini do not.)
-- **P1.3 — `GeminiCliProvider`: expose a readable `session_id`** so a *specific* conversation can be resumed (today only `--resume latest|index`).
+- **P1.1 — `CodexCliProvider`: session resume landed.** Captures `thread.started.thread_id`, surfaces it on `ChatResponse::session_id` / streamed `StreamEvent::session_id`, and supports `codex exec resume <thread_id>`. A `#[ignore]` live round-trip test (`codex_resume_roundtrip`) pins the CLI subcommand shape.
+- **P1.2 — created session ids surface on all three.** ClaudeCode `result.session_id`, Codex `thread.started.thread_id`, and Gemini `init.session_id` now flow through the additive SDK `session_id` fields.
+- **P1.3 — `GeminiCliProvider`: readable `session_id` surfaced; arbitrary-id resume unverified.** The SDK forwards `.resume(id)` verbatim to `--resume <id>`, but whether the Gemini CLI honors arbitrary captured ids (vs only `latest`/index) still needs live CLI verification.
 
 ### P2 — agent-backend quality
 - **P2.1 — `env`/`envs()` injection** on all providers, so a per-run `SecretBundle` can reach the child (aligns with the org's `SecretResolver` model).
@@ -163,10 +163,10 @@ Both providers spawn at **two** sites (a blocking path and an inline streaming p
 ## 6. Viable paths today (with the degradations)
 
 - **ClaudeCode** — cwd ✅ (`.cwd(ctx.cwd)` landed), session ✅ (self-minted UUID via `--session-id`/`--resume`), budget ✅, permission ✅, tool events ❌ (synthesize `Started`/`Finished`). This is the intended flagship path; P0 is landed.
-- **CodexCli** — cwd ✅ (`.cd(ctx.cwd)` → `--cd`, not OS `current_dir`), **session ❌** → continuity degrades to "stateless-per-run, context carried by persistent files inside `cwd`"; budget/permission weak. Usable today *if* you accept stateless heartbeats.
-- **GeminiCli** — cwd ✅ (`.cwd(ctx.cwd)` landed) and session ⚠️ → still needs P1.3; lowest priority.
+- **CodexCli** — cwd ✅ (`.cd(ctx.cwd)` → `--cd`, not OS `current_dir`), session ✅ (`thread.started.thread_id` + `.resume(id)`), budget/permission weak. The ignored `codex_resume_roundtrip` live test verifies the real CLI subcommand when run.
+- **GeminiCli** — cwd ✅ (`.cwd(ctx.cwd)` landed), session readback ✅ (`init.session_id`), and `.resume(id)` forwarding ✅; arbitrary-id resume remains a live CLI assumption until verified.
 
-→ The two CLI paths each miss a complementary piece, and **both missing pieces live in motosan-ai**. That is the hard gate behind the v1.x deferral.
+→ With P0/P1 landed, CLI session/cwd feasibility is no longer blocked in the SDK. The remaining hard gaps are P2 quality/security surfaces (env injection, tool events, stream errors/stop reasons/timeouts/cancel).
 
 ## 7. What CliRuntime (org side) does once P0/P1 land
 
@@ -177,4 +177,4 @@ For reference, the org-side adapter is a thin `AgentRuntime` over a `motosan_ai:
 - Conclusion: parse the §8 JSON block from the CLI's final output (same mechanism as LoopRuntime); parse failure → `Progress`.
 - Budget: map `ctx.budget_remaining_minor` → `--max-budget-usd` where available (ClaudeCode only) as double-insurance; orchestrator stage-2b hard-stop is the real gate elsewhere.
 
-With P0 landed, v1 still recommends **LoopRuntime** until P1.1 lands; the two already-validated CLI fallbacks are **CodexCli** (cwd via `--cd`, no session → stateless) and **ClaudeCode** (cwd + session).
+With P0/P1 landed, v1 can evaluate CliRuntime behind its planned feature gate; **LoopRuntime** remains the conservative default until P2 quality/security surfaces land and live CLI resume checks (including Gemini arbitrary ids) are verified.

@@ -655,6 +655,31 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -p motosan-ai -- --ignored codex_resume_roundtrip`
+    async fn codex_resume_roundtrip() {
+        let first = CodexCliProvider::new()
+            .chat(pong_request())
+            .await
+            .expect("initial codex turn should succeed");
+        let session_id = first
+            .session_id
+            .as_deref()
+            .expect("codex should surface thread.started thread_id")
+            .to_string();
+
+        let second = CodexCliProvider::new()
+            .resume(session_id)
+            .chat(pong_request())
+            .await
+            .expect("resumed codex turn should succeed");
+        assert!(
+            second.content.to_lowercase().contains("pong"),
+            "expected 'pong' in resumed response, got: {}",
+            second.content
+        );
+    }
+
+    #[tokio::test]
     #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -- --ignored`
     async fn integration_chat_roundtrip() {
         let client = CodexCliProvider::new();
