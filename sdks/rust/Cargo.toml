@@ -27,13 +27,7 @@ openai = [
   "dep:tokio",
 ]
 minimax = ["anthropic"]
-ollama = [
-  "openai",
-  "dep:reqwest",
-  "dep:tokio",
-  "dep:tokio-stream",
-  "dep:bytes",
-]
+ollama = ["openai", "dep:reqwest", "dep:tokio", "dep:tokio-stream", "dep:bytes"]
 # Retained as an alias for backwards compatibility. The `ollama_native(true)`
 # runtime flag still controls explicit routing — see ClientBuilder::ollama_native.
 # As of 0.15.0 the OllamaProvider (/api/chat) is also auto-selected whenever
