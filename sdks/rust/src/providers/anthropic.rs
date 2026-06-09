@@ -1137,7 +1137,9 @@ mod tests {
 
             let msgs = body["messages"].as_array().expect("messages array");
             let last = msgs.last().expect("a message");
-            let blocks = last["content"].as_array().expect("content must be a block array");
+            let blocks = last["content"]
+                .as_array()
+                .expect("content must be a block array");
             let cc = &blocks.last().expect("a content block")["cache_control"]["type"];
             assert_eq!(cc, "ephemeral", "oauth={oauth}");
         }
@@ -1164,9 +1166,7 @@ mod tests {
                 AnthropicRequestBuilder::new(req, "claude-opus-4-8".to_string(), oauth).build();
 
             let msgs = body["messages"].as_array().expect("messages array");
-            let blocks = msgs
-                .last()
-                .expect("a message")["content"]
+            let blocks = msgs.last().expect("a message")["content"]
                 .as_array()
                 .expect("content blocks");
             let cc = &blocks.last().expect("a content block")["cache_control"]["type"];
