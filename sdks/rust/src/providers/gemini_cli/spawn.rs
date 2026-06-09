@@ -89,6 +89,8 @@ pub struct SpawnConfig {
     /// `"latest"` or a numeric index matching `gemini --list-sessions`.
     /// Blank strings are skipped.
     pub resume: Option<String>,
+    /// Working directory for the spawned process; `None` inherits the parent's.
+    pub cwd: Option<PathBuf>,
 }
 
 /// Hard timeout for a single `gemini -p` invocation.
@@ -178,6 +180,9 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
 /// Assemble a ready-to-spawn [`Command`] for a blocking `gemini` call.
 fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
+    if let Some(dir) = &config.cwd {
+        cmd.current_dir(dir);
+    }
     cmd.args(common_args(config));
 
     cmd.kill_on_drop(true);
@@ -292,6 +297,7 @@ mod tests {
             extensions: Vec::new(),
             allowed_mcp_servers: Vec::new(),
             resume: None,
+            cwd: None,
         }
     }
 
@@ -299,6 +305,22 @@ mod tests {
         args.iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn build_command_sets_current_dir_when_cwd_present() {
+        let cfg = SpawnConfig {
+            cwd: Some(PathBuf::from("/work/dir")),
+            ..empty_config()
+        };
+        assert_eq!(
+            build_command(&cfg).as_std().get_current_dir(),
+            Some(std::path::Path::new("/work/dir"))
+        );
+        assert_eq!(
+            build_command(&empty_config()).as_std().get_current_dir(),
+            None
+        );
     }
 
     #[test]
@@ -504,6 +526,7 @@ mod tests {
             extensions: vec!["fast".to_string()],
             allowed_mcp_servers: vec!["fs".to_string()],
             resume: Some("latest".to_string()),
+            cwd: None,
         };
         assert_eq!(
             args_as_strings(&common_args(&cfg)),

@@ -27,13 +27,7 @@ openai = [
   "dep:tokio",
 ]
 minimax = ["anthropic"]
-ollama = [
-  "openai",
-  "dep:reqwest",
-  "dep:tokio",
-  "dep:tokio-stream",
-  "dep:bytes",
-]
+ollama = ["openai", "dep:reqwest", "dep:tokio", "dep:tokio-stream", "dep:bytes"]
 # Retained as an alias for backwards compatibility. The `ollama_native(true)`
 # runtime flag still controls explicit routing — see ClientBuilder::ollama_native.
 # As of 0.15.0 the OllamaProvider (/api/chat) is also auto-selected whenever
@@ -74,7 +68,7 @@ serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
 
-motosan-agent-primitives = { path = "../../../motosan-agent-primitives", version = "0.4.0" }
+motosan-agent-primitives = "0.4.0"
 bytes = { version = "1", optional = true }
 reqwest = { version = "0.12", optional = true, features = [
   "json",

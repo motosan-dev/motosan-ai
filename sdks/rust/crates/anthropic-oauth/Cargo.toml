@@ -12,7 +12,9 @@ keywords = ["anthropic", "claude", "oauth", "authentication"]
 categories = ["authentication", "api-bindings"]
 
 [dependencies]
-motosan-ai-oauth = { version = "0.2", path = "../motosan-ai-oauth", features = ["anthropic"] }
+motosan-ai-oauth = { version = "0.2", path = "../motosan-ai-oauth", features = [
+  "anthropic",
+] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt"] }

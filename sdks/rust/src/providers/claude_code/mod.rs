@@ -126,6 +126,10 @@ pub struct ClaudeCodeProvider {
     pub no_session_persistence: bool,
     /// `--max-budget-usd <amount>`.
     pub max_budget_usd: Option<f64>,
+    /// Working directory for the spawned `claude` process. When set, the child
+    /// runs with this cwd (`Command::current_dir`) instead of inheriting the
+    /// parent's. The §6.2 `CliRuntime` cwd contract requires this.
+    pub cwd: Option<PathBuf>,
 }
 
 impl ClaudeCodeProvider {
@@ -159,6 +163,7 @@ impl ClaudeCodeProvider {
             agent: None,
             no_session_persistence: false,
             max_budget_usd: None,
+            cwd: None,
         }
     }
 
@@ -349,6 +354,12 @@ impl ClaudeCodeProvider {
         self
     }
 
+    /// Set the working directory for the spawned process (`Command::current_dir`).
+    pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(dir.into());
+        self
+    }
+
     fn build_spawn_config(
         &self,
         request_model: Option<String>,
@@ -379,6 +390,7 @@ impl ClaudeCodeProvider {
             agent: self.agent.clone(),
             no_session_persistence: self.no_session_persistence,
             max_budget_usd: self.max_budget_usd,
+            cwd: self.cwd.clone(),
         }
     }
 
@@ -416,6 +428,9 @@ impl ClaudeCodeProvider {
         let config = self.build_spawn_config(request.model, append_system_prompt);
 
         let mut cmd = Command::new(&config.binary_path);
+        if let Some(dir) = &config.cwd {
+            cmd.current_dir(dir);
+        }
         // `--verbose` is required by `claude` ≥ 2.1.x when combining `--print`
         // with `--output-format=stream-json`. Without it the CLI exits with
         // "Error: When using --print, --output-format=stream-json requires
@@ -522,6 +537,13 @@ mod tests {
     fn claude_code_client_implements_provider_impl() {
         use crate::providers::ProviderImpl;
         let _client: Box<dyn ProviderImpl> = Box::new(ClaudeCodeProvider::new());
+    }
+
+    #[test]
+    fn cwd_builder_threads_into_spawn_config() {
+        let provider = ClaudeCodeProvider::new().cwd("/work/dir");
+        let cfg = provider.build_spawn_config(None, None);
+        assert_eq!(cfg.cwd.as_deref(), Some(std::path::Path::new("/work/dir")));
     }
 
     #[test]
