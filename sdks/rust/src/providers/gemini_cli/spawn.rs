@@ -194,7 +194,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 
 /// Spawn `gemini`, feed it `prompt` on stdin, and collect the turn.
 ///
-/// Returns `(content, usage)` where `content` is the concatenation of
+/// Returns `(content, usage, session_id)` where `content` is the concatenation of
 /// every `assistant` delta chunk and `usage` is the token tally from
 /// the terminal `result` event. Gemini CLI does not expose a separate
 /// reasoning stream in headless output, so there is no `thinking`
@@ -208,7 +208,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 pub async fn invoke_cli(
     config: &SpawnConfig,
     prompt: &str,
-) -> Result<(String, Usage), MotosanError> {
+) -> Result<(String, Usage, Option<String>), MotosanError> {
     let mut cmd = build_command(config);
 
     let mut child = cmd
@@ -243,13 +243,14 @@ pub async fn invoke_cli(
     parse_collected_stream(&stdout)
 }
 
-/// Accumulate the NDJSON stream-json output into `(content, usage)`.
+/// Accumulate the NDJSON stream-json output into `(content, usage, session_id)`.
 ///
 /// Assistant deltas are concatenated in arrival order. The last
 /// `result` event with `stats` wins for usage. A non-success `result`
 /// is surfaced as an error.
-fn parse_collected_stream(raw: &str) -> Result<(String, Usage), MotosanError> {
+fn parse_collected_stream(raw: &str) -> Result<(String, Usage, Option<String>), MotosanError> {
     let mut content = String::new();
+    let mut session_id: Option<String> = None;
     let mut usage = Usage {
         input_tokens: 0,
         output_tokens: 0,
@@ -264,6 +265,11 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Usage), MotosanError> {
         }
         match stream_json::parse_ndjson_line(line) {
             Some(NdjsonAction::Text(event)) => content.push_str(&event.content),
+            Some(NdjsonAction::SessionStarted(event)) => {
+                if session_id.is_none() {
+                    session_id = event.session_id;
+                }
+            }
             Some(NdjsonAction::Result {
                 usage: Some(event), ..
             }) => {
@@ -279,7 +285,7 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Usage), MotosanError> {
         }
     }
 
-    Ok((content, usage))
+    Ok((content, usage, session_id))
 }
 
 #[cfg(test)]
@@ -584,7 +590,7 @@ mod tests {
             r#"{"type":"result","status":"success","stats":{"input_tokens":10,"output_tokens":5,"cached":3}}"#,
             "\n",
         );
-        let (content, usage) = parse_collected_stream(raw).expect("should parse");
+        let (content, usage, _session_id) = parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "pong");
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 5);
@@ -604,7 +610,7 @@ mod tests {
     #[test]
     fn parse_collected_stream_ignores_blank_lines() {
         let raw = "\n\n   \n";
-        let (content, usage) = parse_collected_stream(raw).expect("should parse");
+        let (content, usage, _session_id) = parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "");
         assert_eq!(usage.input_tokens, 0);
     }

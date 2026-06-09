@@ -1,7 +1,7 @@
 //! Parser for Gemini CLI's `--output-format stream-json` NDJSON events.
 //!
 //! Gemini CLI emits four event shapes, all on their own line:
-//! - `{"type":"init",...}` — session metadata; ignored.
+//! - `{"type":"init",...}` — session metadata; `session_id` is surfaced for resume.
 //! - `{"type":"message","role":"user","content":"..."}` — echo of the
 //!   stdin prompt; ignored.
 //! - `{"type":"message","role":"assistant","content":"...","delta":true}`
@@ -24,7 +24,10 @@ use crate::types::{StreamEvent, Usage};
 #[serde(tag = "type")]
 pub enum GeminiStreamEvent {
     #[serde(rename = "init")]
-    Init {},
+    Init {
+        #[serde(default)]
+        session_id: Option<String>,
+    },
 
     #[serde(rename = "message")]
     Message {
@@ -72,6 +75,8 @@ pub struct GeminiStats {
 pub enum NdjsonAction {
     /// An assistant content chunk to forward to the consumer.
     Text(StreamEvent),
+    /// The `init` event announced the session id used by `--resume <id>`.
+    SessionStarted(StreamEvent),
     /// Terminal `result` event. `usage` is populated when `stats` was
     /// present, and `done` is always emitted.
     Result {
@@ -100,6 +105,9 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
         } if role == "assistant" && delta && !content.is_empty() => {
             Some(NdjsonAction::Text(StreamEvent::text(content)))
         }
+        GeminiStreamEvent::Init { session_id } => session_id
+            .filter(|s| !s.is_empty())
+            .map(|id| NdjsonAction::SessionStarted(StreamEvent::session_started(id))),
         GeminiStreamEvent::Result { status, stats } => {
             let status_ref = status.as_deref().unwrap_or("success");
             if status_ref != "success" {
@@ -162,9 +170,30 @@ mod tests {
     }
 
     #[test]
+    fn init_event_captures_session_id() {
+        let line = r#"{"type":"init","session_id":"sess_42","model":"auto-gemini-3"}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::SessionStarted(event) => {
+                assert_eq!(event.session_id.as_deref(), Some("sess_42"));
+            }
+            _ => panic!("expected SessionStarted"),
+        }
+    }
+
+    #[test]
+    fn init_event_without_session_id_is_ignored() {
+        assert!(parse_ndjson_line(r#"{"type":"init","model":"auto-gemini-3"}"#).is_none());
+    }
+
+    #[test]
     fn skip_init_event() {
         let line = r#"{"type":"init","session_id":"abc","model":"auto-gemini-3"}"#;
-        assert!(parse_ndjson_line(line).is_none());
+        match parse_ndjson_line(line) {
+            Some(NdjsonAction::SessionStarted(event)) => {
+                assert_eq!(event.session_id.as_deref(), Some("abc"));
+            }
+            _ => panic!("expected SessionStarted"),
+        }
     }
 
     #[test]
