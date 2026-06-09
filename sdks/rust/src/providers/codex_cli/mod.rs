@@ -368,6 +368,7 @@ impl CodexCliProvider {
             model: config.model.unwrap_or_default(),
             usage,
             stop_reason: StopReason::EndTurn,
+            session_id: None,
         })
     }
 

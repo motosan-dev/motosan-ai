@@ -40,6 +40,7 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut cache_creation_input_tokens: Option<u32> = None;
     let mut cache_read_input_tokens: Option<u32> = None;
     let mut explicit_stop_reason: Option<StopReason> = None;
+    let mut session_id: Option<String> = None;
     // Thinking accumulation. `thinking_delta_buf` collects every
     // ThinkingDelta as a fallback in case the provider does not emit
     // ThinkingDone. `thinking_done_buf` holds the explicit final text
@@ -48,6 +49,9 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut thinking_done_buf: Option<String> = None;
 
     while let Some(event) = stream.next().await {
+        if event.session_id.is_some() {
+            session_id = event.session_id.clone();
+        }
         if event.done {
             // The terminal event may carry a provider-reported stop reason
             // (Anthropic message_delta.stop_reason, OpenAI finish_reason).
@@ -132,6 +136,7 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
             cache_read_input_tokens,
         },
         stop_reason,
+        session_id,
         tool_calls,
     }
 }
