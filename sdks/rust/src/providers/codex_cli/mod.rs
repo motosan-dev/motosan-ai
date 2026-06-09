@@ -45,8 +45,10 @@
 //!
 //! # Relationship to Codex CLI subcommands
 //!
-//! Only `codex exec` is supported today. The `resume` and `review` subcommands
-//! will require a separate API surface and are out of scope.
+//! `codex exec` (one-shot) and `codex exec resume <thread_id>` (continue a prior
+//! thread, via [`CodexCliProvider::resume`]) are supported. The thread id is
+//! captured from `thread.started` and surfaced on [`ChatResponse::session_id`] /
+//! [`StreamEvent::session_id`]. The `review` subcommand is still out of scope.
 //!
 //! # Example
 //!
@@ -161,6 +163,11 @@ pub struct CodexCliProvider {
     /// Selects the local provider (`lmstudio` / `ollama`) when
     /// [`oss`](Self::oss) is enabled. See [`LocalProvider`].
     pub local_provider: Option<LocalProvider>,
+
+    /// Thread id to resume. When set, each turn runs `codex exec resume <id>`
+    /// instead of starting a fresh thread. Capture from [`ChatResponse::session_id`]
+    /// or a streamed [`StreamEvent::session_id`]. Blank → new thread.
+    pub resume: Option<String>,
 }
 
 impl CodexCliProvider {
@@ -195,6 +202,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: false,
             oss: false,
             local_provider: None,
+            resume: None,
         }
     }
 
@@ -311,6 +319,12 @@ impl CodexCliProvider {
         self
     }
 
+    /// Resume a previous Codex thread (`codex exec resume <id>`).
+    pub fn resume(mut self, thread_id: impl Into<String>) -> Self {
+        self.resume = Some(thread_id.into());
+        self
+    }
+
     /// Build the internal [`spawn::SpawnConfig`] from this client's state.
     ///
     /// A per-request `request_model` (from [`ChatRequest::model`]) takes
@@ -331,6 +345,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: self.dangerously_bypass_approvals_and_sandbox,
             oss: self.oss,
             local_provider: self.local_provider,
+            resume: self.resume.clone(),
         }
     }
 
@@ -359,7 +374,7 @@ impl CodexCliProvider {
 
         let config = self.build_spawn_config(request.model.clone());
 
-        let (content, thinking, usage) = spawn::invoke_cli(&config, &composed).await?;
+        let (content, thinking, usage, session_id) = spawn::invoke_cli(&config, &composed).await?;
 
         Ok(ChatResponse {
             content,
@@ -368,6 +383,7 @@ impl CodexCliProvider {
             model: config.model.unwrap_or_default(),
             usage,
             stop_reason: StopReason::EndTurn,
+            session_id,
         })
     }
 
@@ -381,9 +397,10 @@ impl CodexCliProvider {
     /// finalized agent message — callers should not expect per-token
     /// streaming. The event order is:
     ///
-    /// 1. Zero or more `Text` events (preamble + final answer),
-    /// 2. Optional `Usage` event (from `turn.completed`),
-    /// 3. A terminal `done` event.
+    /// 1. Optional `SessionStarted` event (from `thread.started.thread_id`),
+    /// 2. Zero or more `Text` events (preamble + final answer),
+    /// 3. Optional `Usage` event (from `turn.completed`),
+    /// 4. A terminal `done` event.
     ///
     /// Non-`agent_message` items (reasoning, command execution, file
     /// changes, etc.) are filtered out.
@@ -405,7 +422,8 @@ impl CodexCliProvider {
         let config = self.build_spawn_config(request.model.clone());
 
         let mut cmd = Command::new(&config.binary_path);
-        cmd.arg("exec").arg("--json").arg("--skip-git-repo-check");
+        spawn::push_exec_subcommand(&mut cmd, &config);
+        cmd.arg("--json").arg("--skip-git-repo-check");
         spawn::apply_common_args(&mut cmd, &config);
 
         cmd.arg("-");
@@ -445,6 +463,9 @@ impl CodexCliProvider {
                 if let Some(action) = stream_json::parse_ndjson_line(&line) {
                     match action {
                         stream_json::NdjsonAction::Text(event) => {
+                            yield event;
+                        }
+                        stream_json::NdjsonAction::SessionStarted(event) => {
                             yield event;
                         }
                         stream_json::NdjsonAction::Done { usage, done } => {
@@ -512,11 +533,11 @@ mod tests {
         let _client: Box<dyn ProviderImpl> = Box::new(CodexCliProvider::new());
     }
 
-    fn pong_request() -> ChatRequest {
+    fn user_request(content: impl Into<String>) -> ChatRequest {
         ChatRequest {
             messages: vec![Message {
                 role: Role::User,
-                content: "Reply with only the word 'pong'.".to_string(),
+                content: content.into(),
                 content_blocks: vec![],
                 tool_call_id: None,
                 tool_calls: vec![],
@@ -536,6 +557,10 @@ mod tests {
             thinking: None,
             stop_sequences: None,
         }
+    }
+
+    fn pong_request() -> ChatRequest {
+        user_request("Reply with only the word 'pong'.")
     }
 
     #[tokio::test]
@@ -631,6 +656,37 @@ mod tests {
         assert!(
             content.to_lowercase().contains("pong"),
             "expected 'pong' in streamed content, got: {content}"
+        );
+    }
+
+    #[tokio::test]
+    #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -p motosan-ai -- --ignored codex_resume_roundtrip`
+    async fn codex_resume_roundtrip() {
+        const NONCE: &str = "motosan_resume_nonce_7f3a9c2b";
+
+        let first = CodexCliProvider::new()
+            .chat(user_request(format!(
+                "Remember this exact nonce for the next turn: {NONCE}. Reply only READY."
+            )))
+            .await
+            .expect("initial codex turn should succeed");
+        let session_id = first
+            .session_id
+            .as_deref()
+            .expect("codex should surface thread.started thread_id")
+            .to_string();
+
+        let second = CodexCliProvider::new()
+            .resume(session_id)
+            .chat(user_request(
+                "What exact nonce did I ask you to remember? Reply only the nonce.",
+            ))
+            .await
+            .expect("resumed codex turn should succeed");
+        assert!(
+            second.content.contains(NONCE),
+            "expected resumed context to include nonce {NONCE}, got: {}",
+            second.content
         );
     }
 

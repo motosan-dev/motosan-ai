@@ -620,6 +620,11 @@ pub struct ChatResponse {
     pub model: String,
     pub usage: Usage,
     pub stop_reason: StopReason,
+    /// Provider-minted session / thread id captured during this turn, when the
+    /// backend reports one (CLI providers). `None` for HTTP providers. Persist
+    /// to resume the conversation later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -743,6 +748,12 @@ pub struct StreamEvent {
     /// `finish_reason`, etc.). `None` on intermediate events.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<StopReason>,
+    /// Provider-minted session / thread id, attached to one event of a CLI turn
+    /// when the backend reports one (Claude Code `result.session_id`, Codex
+    /// `thread.started.thread_id`, Gemini `init.session_id`). `None` on every
+    /// other event and for all HTTP providers. Persist it to resume later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
 }
 
 impl StreamEvent {
@@ -756,6 +767,7 @@ impl StreamEvent {
             event_type: StreamEventType::Text,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -769,6 +781,7 @@ impl StreamEvent {
             event_type: StreamEventType::Text,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -783,6 +796,7 @@ impl StreamEvent {
             event_type: StreamEventType::Text,
             usage: None,
             stop_reason: Some(stop_reason),
+            session_id: None,
         }
     }
 
@@ -796,6 +810,7 @@ impl StreamEvent {
             event_type: StreamEventType::Usage,
             usage: Some(usage),
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -809,6 +824,7 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallStart,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -822,6 +838,7 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallArgs,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -835,6 +852,7 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallArgs,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -848,6 +866,7 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallEnd,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -861,6 +880,7 @@ impl StreamEvent {
             event_type: StreamEventType::ToolCallEnd,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -878,6 +898,7 @@ impl StreamEvent {
             event_type: StreamEventType::ThinkingDelta,
             usage: None,
             stop_reason: None,
+            session_id: None,
         }
     }
 
@@ -896,10 +917,26 @@ impl StreamEvent {
             event_type: StreamEventType::ThinkingDone,
             usage: None,
             stop_reason: None,
+            session_id: None,
+        }
+    }
+
+    /// Build a non-terminal event announcing a provider-minted session/thread id.
+    /// Emitted once per CLI turn. Carries no text and is not `done`.
+    pub fn session_started(id: impl Into<String>) -> Self {
+        Self {
+            content: String::new(),
+            done: false,
+            tool_call_id: None,
+            tool_call_name: None,
+            tool_call_args_delta: None,
+            event_type: StreamEventType::Text,
+            usage: None,
+            stop_reason: None,
+            session_id: Some(id.into()),
         }
     }
 }
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProviderCapabilities {
     pub supports_image: bool,
@@ -1263,5 +1300,28 @@ mod stream_event_thinking_tests {
         assert_eq!(s, "\"thinking_done\"");
         let d: StreamEventType = serde_json::from_str("\"thinking_done\"").unwrap();
         assert_eq!(d, StreamEventType::ThinkingDone);
+    }
+
+    #[test]
+    fn session_started_constructor_sets_only_session_id() {
+        let ev = StreamEvent::session_started("sid-1");
+        assert_eq!(ev.session_id.as_deref(), Some("sid-1"));
+        assert!(!ev.done);
+        assert_eq!(ev.content, "");
+        assert!(ev.usage.is_none());
+        assert!(ev.stop_reason.is_none());
+        assert!(StreamEvent::text("hi").session_id.is_none());
+        assert!(StreamEvent::done().session_id.is_none());
+    }
+
+    #[test]
+    fn stream_event_session_id_is_serde_skipped_when_none() {
+        let json = serde_json::to_string(&StreamEvent::text("hi")).unwrap();
+        assert!(
+            !json.contains("session_id"),
+            "None session_id must not serialize"
+        );
+        let json2 = serde_json::to_string(&StreamEvent::session_started("x")).unwrap();
+        assert!(json2.contains("\"session_id\":\"x\""));
     }
 }

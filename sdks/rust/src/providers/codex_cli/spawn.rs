@@ -103,6 +103,9 @@ pub struct SpawnConfig {
     pub oss: bool,
     /// `--local-provider <p>` — selects the OSS provider used with `--oss`.
     pub local_provider: Option<LocalProvider>,
+    /// Thread id to resume, forwarded as the `resume <id>` subcommand of
+    /// `codex exec` (`codex exec resume <id> --json ...`). Blank → fresh thread.
+    pub resume: Option<String>,
 }
 
 /// Hard timeout for a single `codex exec` invocation.
@@ -202,6 +205,19 @@ pub(crate) fn apply_common_args(cmd: &mut Command, config: &SpawnConfig) {
     cmd.args(common_args(config));
 }
 
+/// Push the `exec` subcommand (plus `resume <id>` when resuming) onto `cmd`.
+/// Shared by the blocking and streaming spawn sites so the surface is identical.
+pub(crate) fn push_exec_subcommand(cmd: &mut Command, config: &SpawnConfig) {
+    cmd.arg("exec");
+    if let Some(ref id) = config.resume {
+        let trimmed = id.trim();
+        if !trimmed.is_empty() {
+            cmd.arg("resume");
+            cmd.arg(trimmed);
+        }
+    }
+}
+
 /// Normalize a user-supplied model string for `--model <value>`.
 ///
 /// Returns the trimmed value or `None` if the caller effectively meant
@@ -224,7 +240,8 @@ pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
 /// reaped if the future is cancelled mid-flight.
 fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
-    cmd.arg("exec").arg("--json").arg("--skip-git-repo-check");
+    push_exec_subcommand(&mut cmd, config);
+    cmd.arg("--json").arg("--skip-git-repo-check");
     apply_common_args(&mut cmd, config);
     cmd.arg("-"); // stdin
 
@@ -237,7 +254,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 
 /// Spawn `codex exec`, feed it `prompt` on stdin, and collect the turn.
 ///
-/// Returns `(content, thinking, usage)` where:
+/// Returns `(content, thinking, usage, session_id)` where:
 /// - `content` is the **last** `agent_message` item (Codex's final answer),
 /// - `thinking` is all prior `agent_message` items joined with blank lines
 ///   (preamble + tool narration), or `None` if only one message was emitted,
@@ -251,7 +268,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 pub async fn invoke_cli(
     config: &SpawnConfig,
     prompt: &str,
-) -> Result<(String, Option<String>, Usage), MotosanError> {
+) -> Result<(String, Option<String>, Usage, Option<String>), MotosanError> {
     let mut cmd = build_command(config);
 
     let mut child = cmd
@@ -284,14 +301,17 @@ pub async fn invoke_cli(
     parse_collected_stream(&stdout)
 }
 
-/// Parse accumulated JSONL output into `(content, thinking, usage)`.
+/// Parse accumulated JSONL output into `(content, thinking, usage, session_id)`.
 ///
 /// `content` is the last `agent_message` item. Any earlier `agent_message`
 /// items become `thinking` (joined with blank lines). Codex often emits a
 /// preamble message before running tools and a separate final answer; this
 /// split matches how other providers expose reasoning vs final answer.
-fn parse_collected_stream(raw: &str) -> Result<(String, Option<String>, Usage), MotosanError> {
+fn parse_collected_stream(
+    raw: &str,
+) -> Result<(String, Option<String>, Usage, Option<String>), MotosanError> {
     let mut agent_messages: Vec<String> = Vec::new();
+    let mut session_id: Option<String> = None;
     let mut usage = Usage {
         input_tokens: 0,
         output_tokens: 0,
@@ -306,6 +326,10 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Option<String>, Usage), 
         }
         match stream_json::parse_ndjson_line(line) {
             Some(NdjsonAction::Text(event)) => agent_messages.push(event.content),
+            Some(NdjsonAction::SessionStarted(event)) if session_id.is_none() => {
+                session_id = event.session_id;
+            }
+            Some(NdjsonAction::SessionStarted(_)) => {}
             Some(NdjsonAction::Done {
                 usage: Some(event), ..
             }) => {
@@ -328,7 +352,7 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Option<String>, Usage), 
         Some(agent_messages.join("\n\n"))
     };
 
-    Ok((content, thinking, usage))
+    Ok((content, thinking, usage, session_id))
 }
 
 #[cfg(test)]
@@ -351,6 +375,7 @@ mod tests {
             dangerously_bypass_approvals_and_sandbox: false,
             oss: false,
             local_provider: None,
+            resume: None,
         }
     }
 
@@ -586,6 +611,32 @@ mod tests {
     }
 
     #[test]
+    fn resume_inserts_exec_resume_subcommand() {
+        let cfg = SpawnConfig {
+            resume: Some("th_abc123".to_string()),
+            ..empty_config()
+        };
+        let argv: Vec<String> = build_command(&cfg)
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&argv[0..4], &["exec", "resume", "th_abc123", "--json"]);
+        assert_eq!(argv.last().map(String::as_str), Some("-"));
+    }
+
+    #[test]
+    fn no_resume_keeps_bare_exec() {
+        let argv: Vec<String> = build_command(&empty_config())
+            .as_std()
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(&argv[0..3], &["exec", "--json", "--skip-git-repo-check"]);
+        assert!(!argv.iter().any(|a| a == "resume"));
+    }
+
+    #[test]
     fn common_args_full_loadout_order_is_stable() {
         // Every flag set; locks the documented order so future edits to
         // `common_args` can't silently reorder the spawned command line.
@@ -604,6 +655,7 @@ mod tests {
             enabled_features: vec!["fast".to_string()],
             disabled_features: vec!["slow".to_string()],
             config_overrides: vec![("k".to_string(), "v".to_string())],
+            resume: None,
         };
         assert_eq!(
             args_as_strings(&common_args(&cfg)),
@@ -662,7 +714,8 @@ mod tests {
             r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5,"cached_input_tokens":3}}"#,
             "\n",
         );
-        let (content, thinking, usage) = parse_collected_stream(raw).expect("should parse");
+        let (content, thinking, usage, _session_id) =
+            parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "pong");
         assert_eq!(
             thinking.as_deref(),
@@ -681,9 +734,25 @@ mod tests {
             r#"{"type":"turn.completed"}"#,
             "\n",
         );
-        let (content, thinking, _) = parse_collected_stream(raw).expect("should parse");
+        let (content, thinking, _, _session_id) =
+            parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "pong");
         assert_eq!(thinking, None);
+    }
+
+    #[test]
+    fn parse_collected_stream_captures_thread_id() {
+        let raw = concat!(
+            r#"{"type":"thread.started","thread_id":"th_xyz"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"pong"}}"#,
+            "\n",
+            r#"{"type":"turn.completed"}"#,
+            "\n",
+        );
+        let (content, _thinking, _usage, session_id) = parse_collected_stream(raw).expect("parse");
+        assert_eq!(content, "pong");
+        assert_eq!(session_id.as_deref(), Some("th_xyz"));
     }
 
     #[test]
@@ -699,7 +768,8 @@ mod tests {
     #[test]
     fn parse_collected_stream_ignores_blank_lines() {
         let raw = "\n\n   \n";
-        let (content, thinking, _) = parse_collected_stream(raw).expect("should parse");
+        let (content, thinking, _, _session_id) =
+            parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "");
         assert_eq!(thinking, None);
     }

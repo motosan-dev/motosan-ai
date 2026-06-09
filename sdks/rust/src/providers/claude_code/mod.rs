@@ -402,7 +402,7 @@ impl ClaudeCodeProvider {
 
         let config = self.build_spawn_config(request.model, append_system_prompt);
 
-        let (text, usage) = spawn::invoke_cli(&config, &user_prompt).await?;
+        let (text, usage, session_id) = spawn::invoke_cli(&config, &user_prompt).await?;
 
         Ok(ChatResponse {
             content: text,
@@ -411,6 +411,7 @@ impl ClaudeCodeProvider {
             model: config.model.unwrap_or_default(),
             usage,
             stop_reason: StopReason::EndTurn,
+            session_id,
         })
     }
 
@@ -483,7 +484,10 @@ impl ClaudeCodeProvider {
                         stream_json::NdjsonAction::Text(event) => {
                             yield event;
                         }
-                        stream_json::NdjsonAction::Result { usage, done } => {
+                        stream_json::NdjsonAction::Result { usage, done, session_id } => {
+                            if let Some(id) = session_id {
+                                yield crate::types::StreamEvent::session_started(id);
+                            }
                             if let Some(usage_event) = usage {
                                 yield usage_event;
                             }

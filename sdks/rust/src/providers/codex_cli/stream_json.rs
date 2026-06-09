@@ -2,7 +2,8 @@
 //! crate-level [`StreamEvent`]s.
 //!
 //! Codex emits newline-delimited JSON events with a `type` discriminator:
-//! - `thread.started` / `turn.started` — ignored (lifecycle bookkeeping)
+//! - `thread.started` — surfaced as [`StreamEvent::session_id`] for resume
+//! - `turn.started` — ignored (lifecycle bookkeeping)
 //! - `item.started` — ignored (partial items, we wait for completion)
 //! - `item.completed` — surfaced only when `item.type == "agent_message"`
 //! - `turn.completed` — produces a usage event plus a terminal done event
@@ -51,7 +52,15 @@ pub enum CodexStreamEvent {
         message: Option<String>,
     },
 
-    /// Any unmodeled event (`thread.started`, `item.started`, etc.).
+    /// Emitted once at the start of a turn. Carries the persistent thread id
+    /// used to resume via `codex exec resume <thread_id>`.
+    #[serde(rename = "thread.started")]
+    ThreadStarted {
+        #[serde(default)]
+        thread_id: Option<String>,
+    },
+
+    /// Any unmodeled event (`item.started`, etc.).
     #[serde(other)]
     Other,
 }
@@ -99,6 +108,9 @@ pub enum NdjsonAction {
     /// An `agent_message` item with non-empty text, already converted to a
     /// [`StreamEvent::text`] event.
     Text(StreamEvent),
+    /// The turn announced its persistent thread id (`thread.started`),
+    /// already converted to a [`StreamEvent::session_started`] event.
+    SessionStarted(StreamEvent),
     /// Terminal: the turn completed. `usage` is `Some` when the
     /// `turn.completed` event included token counts. `done` is always a
     /// [`StreamEvent::done`] marker.
@@ -155,6 +167,9 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
         CodexStreamEvent::Error { message } => Some(NdjsonAction::Error(
             message.unwrap_or_else(|| "codex error".to_string()),
         )),
+        CodexStreamEvent::ThreadStarted { thread_id } => thread_id
+            .filter(|id| !id.is_empty())
+            .map(|id| NdjsonAction::SessionStarted(StreamEvent::session_started(id))),
         CodexStreamEvent::Other => None,
     }
 }
@@ -237,8 +252,26 @@ mod tests {
     }
 
     #[test]
+    fn thread_started_captures_thread_id() {
+        let line = r#"{"type":"thread.started","thread_id":"th_abc123"}"#;
+        match parse_ndjson_line(line).expect("thread.started should now parse") {
+            NdjsonAction::SessionStarted(event) => {
+                assert_eq!(event.session_id.as_deref(), Some("th_abc123"));
+                assert!(!event.done);
+                assert_eq!(event.content, "");
+            }
+            _ => panic!("expected SessionStarted action"),
+        }
+    }
+
+    #[test]
+    fn thread_started_without_id_is_ignored() {
+        assert!(parse_ndjson_line(r#"{"type":"thread.started"}"#).is_none());
+    }
+
+    #[test]
     fn ignore_unknown_event() {
-        let line = r#"{"type":"thread.started","thread_id":"abc"}"#;
+        let line = r#"{"type":"item.started","item_id":"abc"}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
 

@@ -155,8 +155,10 @@ impl GeminiCliProvider {
         self
     }
 
-    /// Resume a previous session (`--resume latest` or an index as a
-    /// stringified integer). Pass an empty string to clear.
+    /// Resume a previous session by forwarding this value verbatim to
+    /// `--resume <value>`. Known Gemini CLI values include `latest` and
+    /// numeric indexes; captured `session_id` values are forwarded unchanged,
+    /// but arbitrary-id resume requires live CLI verification.
     pub fn resume(mut self, session: impl Into<String>) -> Self {
         self.resume = Some(session.into());
         self
@@ -190,7 +192,7 @@ impl GeminiCliProvider {
         let stdin_payload = merge_system_into_prompt(system_prompt.as_deref(), &user_prompt);
 
         let config = self.build_spawn_config(request.model);
-        let (text, usage) = spawn::invoke_cli(&config, &stdin_payload).await?;
+        let (text, usage, session_id) = spawn::invoke_cli(&config, &stdin_payload).await?;
 
         Ok(ChatResponse {
             content: text,
@@ -199,6 +201,7 @@ impl GeminiCliProvider {
             model: config.model.unwrap_or_default(),
             usage,
             stop_reason: StopReason::EndTurn,
+            session_id,
         })
     }
 
@@ -259,6 +262,9 @@ impl GeminiCliProvider {
 
                 match stream_json::parse_ndjson_line(&line) {
                     Some(stream_json::NdjsonAction::Text(event)) => {
+                        yield event;
+                    }
+                    Some(stream_json::NdjsonAction::SessionStarted(event)) => {
                         yield event;
                     }
                     Some(stream_json::NdjsonAction::Result { usage, done }) => {

@@ -194,6 +194,7 @@ impl ChatResponseBuilder {
             model: self.model,
             usage: self.usage,
             stop_reason: self.stop_reason,
+            session_id: None,
         }
     }
 }

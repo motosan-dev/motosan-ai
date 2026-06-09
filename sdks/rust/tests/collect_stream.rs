@@ -30,6 +30,19 @@ async fn collect_stream_text_only() {
 }
 
 #[tokio::test]
+async fn collect_stream_preserves_session_id_without_text() {
+    let events = vec![
+        StreamEvent::session_started("sid-collect"),
+        StreamEvent::text("hello"),
+        StreamEvent::done(),
+    ];
+    let response = collect_stream(boxed_stream(events)).await;
+
+    assert_eq!(response.content, "hello");
+    assert_eq!(response.session_id.as_deref(), Some("sid-collect"));
+}
+
+#[tokio::test]
 async fn collect_stream_with_tool_calls() {
     let events = vec![
         StreamEvent::text("Let me check"),
