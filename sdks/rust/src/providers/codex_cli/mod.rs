@@ -45,8 +45,10 @@
 //!
 //! # Relationship to Codex CLI subcommands
 //!
-//! Only `codex exec` is supported today. The `resume` and `review` subcommands
-//! will require a separate API surface and are out of scope.
+//! `codex exec` (one-shot) and `codex exec resume <thread_id>` (continue a prior
+//! thread, via [`CodexCliProvider::resume`]) are supported. The thread id is
+//! captured from `thread.started` and surfaced on [`ChatResponse::session_id`] /
+//! [`StreamEvent::session_id`]. The `review` subcommand is still out of scope.
 //!
 //! # Example
 //!
@@ -161,6 +163,11 @@ pub struct CodexCliProvider {
     /// Selects the local provider (`lmstudio` / `ollama`) when
     /// [`oss`](Self::oss) is enabled. See [`LocalProvider`].
     pub local_provider: Option<LocalProvider>,
+
+    /// Thread id to resume. When set, each turn runs `codex exec resume <id>`
+    /// instead of starting a fresh thread. Capture from [`ChatResponse::session_id`]
+    /// or a streamed [`StreamEvent::session_id`]. Blank → new thread.
+    pub resume: Option<String>,
 }
 
 impl CodexCliProvider {
@@ -195,6 +202,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: false,
             oss: false,
             local_provider: None,
+            resume: None,
         }
     }
 
@@ -311,6 +319,12 @@ impl CodexCliProvider {
         self
     }
 
+    /// Resume a previous Codex thread (`codex exec resume <id>`).
+    pub fn resume(mut self, thread_id: impl Into<String>) -> Self {
+        self.resume = Some(thread_id.into());
+        self
+    }
+
     /// Build the internal [`spawn::SpawnConfig`] from this client's state.
     ///
     /// A per-request `request_model` (from [`ChatRequest::model`]) takes
@@ -331,6 +345,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: self.dangerously_bypass_approvals_and_sandbox,
             oss: self.oss,
             local_provider: self.local_provider,
+            resume: self.resume.clone(),
         }
     }
 
@@ -359,7 +374,7 @@ impl CodexCliProvider {
 
         let config = self.build_spawn_config(request.model.clone());
 
-        let (content, thinking, usage) = spawn::invoke_cli(&config, &composed).await?;
+        let (content, thinking, usage, session_id) = spawn::invoke_cli(&config, &composed).await?;
 
         Ok(ChatResponse {
             content,
@@ -368,7 +383,7 @@ impl CodexCliProvider {
             model: config.model.unwrap_or_default(),
             usage,
             stop_reason: StopReason::EndTurn,
-            session_id: None,
+            session_id,
         })
     }
 
@@ -406,7 +421,8 @@ impl CodexCliProvider {
         let config = self.build_spawn_config(request.model.clone());
 
         let mut cmd = Command::new(&config.binary_path);
-        cmd.arg("exec").arg("--json").arg("--skip-git-repo-check");
+        spawn::push_exec_subcommand(&mut cmd, &config);
+        cmd.arg("--json").arg("--skip-git-repo-check");
         spawn::apply_common_args(&mut cmd, &config);
 
         cmd.arg("-");
@@ -446,6 +462,9 @@ impl CodexCliProvider {
                 if let Some(action) = stream_json::parse_ndjson_line(&line) {
                     match action {
                         stream_json::NdjsonAction::Text(event) => {
+                            yield event;
+                        }
+                        stream_json::NdjsonAction::SessionStarted(event) => {
                             yield event;
                         }
                         stream_json::NdjsonAction::Done { usage, done } => {
