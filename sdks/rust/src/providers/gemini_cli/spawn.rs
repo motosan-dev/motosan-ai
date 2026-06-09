@@ -589,11 +589,14 @@ mod tests {
             r#"{"type":"result","status":"success","stats":{"input_tokens":10,"output_tokens":5,"cached":3}}"#,
             "\n",
         );
-        let (content, usage, _session_id) = parse_collected_stream(raw).expect("should parse");
+        let (content, usage, session_id) = parse_collected_stream(raw).expect("should parse");
         assert_eq!(content, "pong");
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 5);
         assert_eq!(usage.cache_read_input_tokens, Some(3));
+        // Blocking-path (chat()) session-id readback: the `init` event's id must
+        // be captured by the collector, not dropped.
+        assert_eq!(session_id.as_deref(), Some("s"));
     }
 
     #[test]

@@ -158,6 +158,22 @@ mod tests {
     }
 
     #[test]
+    fn result_event_empty_session_id_is_none() {
+        // An empty/absent session_id must filter to None (no empty session_started).
+        for line in [
+            r#"{"type":"result","result":"done","session_id":""}"#,
+            r#"{"type":"result","result":"done"}"#,
+        ] {
+            match parse_ndjson_line(line).expect("parse") {
+                NdjsonAction::Result { session_id, .. } => {
+                    assert_eq!(session_id, None, "line={line}");
+                }
+                _ => panic!("expected Result action"),
+            }
+        }
+    }
+
+    #[test]
     fn parse_result_without_usage() {
         let line = r#"{"type":"result","result":"done"}"#;
         let action = parse_ndjson_line(line).expect("should parse");
