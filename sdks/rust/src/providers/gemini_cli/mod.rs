@@ -58,6 +58,9 @@ pub struct GeminiCliProvider {
     /// Session to resume, forwarded as `--resume <value>` (accepts
     /// `"latest"` or a numeric index).
     pub resume: Option<String>,
+    /// Working directory for the spawned `gemini` process. When set, the child
+    /// runs with this cwd (`Command::current_dir`) instead of inheriting the parent's.
+    pub cwd: Option<PathBuf>,
 }
 
 impl GeminiCliProvider {
@@ -78,6 +81,7 @@ impl GeminiCliProvider {
             extensions: Vec::new(),
             allowed_mcp_servers: Vec::new(),
             resume: None,
+            cwd: None,
         }
     }
 
@@ -158,6 +162,12 @@ impl GeminiCliProvider {
         self
     }
 
+    /// Set the working directory for the spawned process (`Command::current_dir`).
+    pub fn cwd(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.cwd = Some(dir.into());
+        self
+    }
+
     fn build_spawn_config(&self, request_model: Option<String>) -> spawn::SpawnConfig {
         spawn::SpawnConfig {
             binary_path: self.binary_path.clone(),
@@ -169,6 +179,7 @@ impl GeminiCliProvider {
             extensions: self.extensions.clone(),
             allowed_mcp_servers: self.allowed_mcp_servers.clone(),
             resume: self.resume.clone(),
+            cwd: self.cwd.clone(),
         }
     }
 
@@ -206,6 +217,9 @@ impl GeminiCliProvider {
         let config = self.build_spawn_config(request.model);
 
         let mut cmd = Command::new(&config.binary_path);
+        if let Some(dir) = &config.cwd {
+            cmd.current_dir(dir);
+        }
         cmd.args(spawn::common_args(&config));
         cmd.kill_on_drop(true);
         cmd.stdin(std::process::Stdio::piped());
@@ -313,6 +327,14 @@ mod tests {
     fn gemini_cli_client_implements_provider_impl() {
         use crate::providers::ProviderImpl;
         let _client: Box<dyn ProviderImpl> = Box::new(GeminiCliProvider::new());
+    }
+
+    #[test]
+    fn cwd_builder_threads_into_spawn_config() {
+        let cfg = GeminiCliProvider::new()
+            .cwd("/work/dir")
+            .build_spawn_config(None);
+        assert_eq!(cfg.cwd.as_deref(), Some(std::path::Path::new("/work/dir")));
     }
 
     #[test]
