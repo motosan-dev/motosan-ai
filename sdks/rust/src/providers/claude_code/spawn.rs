@@ -356,29 +356,30 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
     args
 }
 
+/// Build the blocking `claude --print ...` Command (everything except spawn).
+/// Shared construction point so working-directory / env wiring is applied and
+/// unit-testable in one place.
+fn build_command(config: &SpawnConfig) -> Command {
+    let mut cmd = Command::new(&config.binary_path);
+    cmd.arg("--print");
+    if config.agent_mode {
+        cmd.arg("--output-format").arg("json");
+    }
+    cmd.args(common_args(config));
+    cmd.arg("-"); // read prompt from stdin
+    cmd.kill_on_drop(true);
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd
+}
+
 /// Invoke the `claude` CLI with `--print` and return `(text, usage)`.
 pub async fn invoke_cli(
     config: &SpawnConfig,
     prompt: &str,
 ) -> Result<(String, Usage), MotosanError> {
-    let mut cmd = Command::new(&config.binary_path);
-    cmd.arg("--print");
-
-    if config.agent_mode {
-        // Agent mode requires structured output so we can extract token
-        // usage from the `usage` field.
-        cmd.arg("--output-format").arg("json");
-    }
-
-    cmd.args(common_args(config));
-
-    // Read prompt from stdin.
-    cmd.arg("-");
-
-    cmd.kill_on_drop(true);
-    cmd.stdin(std::process::Stdio::piped());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
+    let mut cmd = build_command(config);
 
     let mut child = cmd
         .spawn()
@@ -499,6 +500,18 @@ mod tests {
         args.iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
+    }
+
+    #[test]
+    fn build_command_uses_binary_and_print_args() {
+        let cmd = build_command(&empty_config());
+        let std_cmd = cmd.as_std();
+        let argv: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(argv.contains(&"--print".to_string()));
+        assert_eq!(argv.last().map(String::as_str), Some("-"));
     }
 
     #[test]
