@@ -397,9 +397,10 @@ impl CodexCliProvider {
     /// finalized agent message — callers should not expect per-token
     /// streaming. The event order is:
     ///
-    /// 1. Zero or more `Text` events (preamble + final answer),
-    /// 2. Optional `Usage` event (from `turn.completed`),
-    /// 3. A terminal `done` event.
+    /// 1. Optional `SessionStarted` event (from `thread.started.thread_id`),
+    /// 2. Zero or more `Text` events (preamble + final answer),
+    /// 3. Optional `Usage` event (from `turn.completed`),
+    /// 4. A terminal `done` event.
     ///
     /// Non-`agent_message` items (reasoning, command execution, file
     /// changes, etc.) are filtered out.
@@ -532,11 +533,11 @@ mod tests {
         let _client: Box<dyn ProviderImpl> = Box::new(CodexCliProvider::new());
     }
 
-    fn pong_request() -> ChatRequest {
+    fn user_request(content: impl Into<String>) -> ChatRequest {
         ChatRequest {
             messages: vec![Message {
                 role: Role::User,
-                content: "Reply with only the word 'pong'.".to_string(),
+                content: content.into(),
                 content_blocks: vec![],
                 tool_call_id: None,
                 tool_calls: vec![],
@@ -556,6 +557,10 @@ mod tests {
             thinking: None,
             stop_sequences: None,
         }
+    }
+
+    fn pong_request() -> ChatRequest {
+        user_request("Reply with only the word 'pong'.")
     }
 
     #[tokio::test]
@@ -657,8 +662,12 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires `codex` CLI installed + auth; run with `cargo test --features codex-cli -p motosan-ai -- --ignored codex_resume_roundtrip`
     async fn codex_resume_roundtrip() {
+        const NONCE: &str = "motosan_resume_nonce_7f3a9c2b";
+
         let first = CodexCliProvider::new()
-            .chat(pong_request())
+            .chat(user_request(format!(
+                "Remember this exact nonce for the next turn: {NONCE}. Reply only READY."
+            )))
             .await
             .expect("initial codex turn should succeed");
         let session_id = first
@@ -669,12 +678,14 @@ mod tests {
 
         let second = CodexCliProvider::new()
             .resume(session_id)
-            .chat(pong_request())
+            .chat(user_request(
+                "What exact nonce did I ask you to remember? Reply only the nonce.",
+            ))
             .await
             .expect("resumed codex turn should succeed");
         assert!(
-            second.content.to_lowercase().contains("pong"),
-            "expected 'pong' in resumed response, got: {}",
+            second.content.contains(NONCE),
+            "expected resumed context to include nonce {NONCE}, got: {}",
             second.content
         );
     }

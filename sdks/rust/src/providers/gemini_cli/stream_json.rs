@@ -91,7 +91,7 @@ pub enum NdjsonAction {
 ///
 /// Returns `None` for:
 /// - Malformed JSON (ignored, consistent with sibling providers).
-/// - `init` events.
+/// - `init` events without a `session_id`; `init.session_id` becomes `SessionStarted`.
 /// - `message` events from the `user` role (stdin echo).
 /// - `message` events with `delta: false` or empty content.
 /// - Any future event type that lands in [`GeminiStreamEvent::Other`].
