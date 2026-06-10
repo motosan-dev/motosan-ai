@@ -12,7 +12,8 @@ pub enum ClaudeStreamEvent {
 
     // Current shape (claude ≥ 2.1.x): assistant turns ship one event per
     // turn with a `message.content` array of typed blocks. We pull text out
-    // of the `text` blocks and ignore `thinking` / `tool_use` for now.
+    // of the `text` blocks and surface `tool_use` blocks as tool-call stream
+    // events.
     #[serde(rename = "assistant")]
     Assistant { message: AssistantMessage },
 
@@ -48,9 +49,15 @@ pub enum AssistantContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
 
-    // `thinking`, `tool_use`, etc — ignored for now; capo doesn't surface
-    // these to the user and motosan-ai's CLI bridge has no Stream variant
-    // for them yet.
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        id: String,
+        name: String,
+        #[serde(default)]
+        input: serde_json::Value,
+    },
+
+    // `thinking`, etc — ignored.
     #[serde(other)]
     Other,
 }
@@ -64,6 +71,7 @@ pub struct ClaudeStreamUsage {
 /// Action produced by parsing a single NDJSON line.
 pub enum NdjsonAction {
     Text(StreamEvent),
+    ToolCalls(Vec<StreamEvent>),
     Result {
         usage: Option<StreamEvent>,
         done: StreamEvent,
@@ -81,18 +89,36 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
             Some(NdjsonAction::Text(StreamEvent::text(text)))
         }
         ClaudeStreamEvent::Assistant { message } => {
-            let combined: String = message
-                .content
-                .iter()
-                .filter_map(|block| match block {
-                    AssistantContentBlock::Text { text } => Some(text.as_str()),
-                    AssistantContentBlock::Other => None,
-                })
-                .collect();
-            if combined.is_empty() {
-                None
+            let mut events: Vec<StreamEvent> = Vec::new();
+            let mut text = String::new();
+            let mut had_tool = false;
+
+            for block in &message.content {
+                match block {
+                    AssistantContentBlock::Text { text: t } => text.push_str(t),
+                    AssistantContentBlock::ToolUse { id, name, input } => {
+                        if !text.is_empty() {
+                            events.push(StreamEvent::text(std::mem::take(&mut text)));
+                        }
+                        had_tool = true;
+                        events.push(StreamEvent::tool_call_start(id.clone(), name.clone()));
+                        let args =
+                            serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
+                        events.push(StreamEvent::tool_call_args_with_id(id.clone(), args));
+                        events.push(StreamEvent::tool_call_end_with_id(id.clone()));
+                    }
+                    AssistantContentBlock::Other => {}
+                }
+            }
+
+            if !text.is_empty() {
+                events.push(StreamEvent::text(text));
+            }
+
+            if had_tool {
+                Some(NdjsonAction::ToolCalls(events))
             } else {
-                Some(NdjsonAction::Text(StreamEvent::text(combined)))
+                events.pop().map(NdjsonAction::Text)
             }
         }
         ClaudeStreamEvent::Result {
@@ -259,9 +285,58 @@ mod tests {
     }
 
     #[test]
+    fn tool_use_block_yields_tool_call_events() {
+        use crate::types::StreamEventType;
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"/tmp/x"}}]}}"#;
+        let events = match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::ToolCalls(events) => events,
+            _ => panic!("expected ToolCalls"),
+        };
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].event_type, StreamEventType::ToolCallStart);
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("toolu_01"));
+        assert_eq!(events[0].tool_call_name.as_deref(), Some("Read"));
+        assert_eq!(
+            events[1].tool_call_args_delta.as_deref(),
+            Some(r#"{"path":"/tmp/x"}"#)
+        );
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallEnd);
+        assert_eq!(events[2].tool_call_id.as_deref(), Some("toolu_01"));
+    }
+
+    #[test]
+    fn assistant_text_only_still_yields_text() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"pong"}]}}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::Text(event) => assert_eq!(event.content, "pong"),
+            _ => panic!("expected Text"),
+        }
+    }
+
+    #[test]
+    fn assistant_text_and_tool_use_preserves_text() {
+        use crate::types::StreamEventType;
+        // Mixed turn: narration text + a tool_use block in one content[].
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"let me read it"},{"type":"tool_use","id":"toolu_2","name":"Read","input":{"path":"/x"}}]}}"#;
+        let events = match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::ToolCalls(events) => events,
+            _ => panic!("expected ToolCalls"),
+        };
+        // Full shape: text first, then the complete start→args→end triplet.
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].event_type, StreamEventType::Text);
+        assert_eq!(events[0].content, "let me read it");
+        assert_eq!(events[1].event_type, StreamEventType::ToolCallStart);
+        assert_eq!(events[1].tool_call_name.as_deref(), Some("Read"));
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallArgs);
+        assert_eq!(events[3].event_type, StreamEventType::ToolCallEnd);
+    }
+
+    #[test]
     fn assistant_event_with_only_non_text_blocks_is_dropped() {
-        // tool_use-only assistant turn: nothing to surface as text.
-        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"x","input":{}}]}}"#;
+        // Unknown-only assistant turn: nothing to surface as text.
+        let line =
+            r#"{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"x"}]}}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
 

@@ -5,7 +5,7 @@
 //! - `thread.started` — surfaced as [`StreamEvent::session_id`] for resume
 //! - `turn.started` — ignored (lifecycle bookkeeping)
 //! - `item.started` — ignored (partial items, we wait for completion)
-//! - `item.completed` — surfaced only when `item.type == "agent_message"`
+//! - `item.completed` — surfaced when `item.type == "agent_message"` or a tool item
 //! - `turn.completed` — produces a usage event plus a terminal done event
 //! - `turn.failed` / `error` — mapped to [`NdjsonAction::Error`]
 //! - Anything else — silently dropped via [`CodexStreamEvent::Other`]
@@ -26,7 +26,7 @@ use crate::types::{StreamEvent, Usage};
 #[serde(tag = "type")]
 pub enum CodexStreamEvent {
     /// An item finished (agent message, command execution, reasoning, …).
-    /// Only `agent_message` items are surfaced downstream.
+    /// Agent messages and tool items are surfaced downstream.
     #[serde(rename = "item.completed")]
     ItemCompleted { item: CodexItem },
 
@@ -69,7 +69,7 @@ pub enum CodexStreamEvent {
 /// event.
 ///
 /// Codex emits many item subtypes (`agent_message`, `reasoning`,
-/// `command_execution`, `file_changes`, `mcp_tool_calls`, `web_searches`,
+/// `command_execution`, `file_changes`, `mcp_tool_call`, `web_searches`,
 /// `plan_updates`); we inspect [`item_type`](Self::item_type) to decide
 /// whether to surface the item.
 #[derive(Deserialize)]
@@ -77,10 +77,22 @@ pub struct CodexItem {
     /// The item subtype string, e.g. `"agent_message"`.
     #[serde(rename = "type")]
     pub item_type: String,
+    /// Item id used as the tool-call id when surfacing tool items.
+    #[serde(default)]
+    pub id: Option<String>,
     /// Text payload for text-bearing items. Absent for most non-message
     /// item types.
     #[serde(default)]
     pub text: Option<String>,
+    /// MCP tool name for `mcp_tool_call` items.
+    #[serde(default)]
+    pub tool: Option<String>,
+    /// Shell command for `command_execution` items.
+    #[serde(default)]
+    pub command: Option<String>,
+    /// Arguments payload for MCP tool calls.
+    #[serde(default)]
+    pub arguments: Option<serde_json::Value>,
 }
 
 /// Token usage reported on `turn.completed`.
@@ -108,6 +120,8 @@ pub enum NdjsonAction {
     /// An `agent_message` item with non-empty text, already converted to a
     /// [`StreamEvent::text`] event.
     Text(StreamEvent),
+    /// A command/MCP tool item, already expanded to start/args/end events.
+    ToolCalls(Vec<StreamEvent>),
     /// The turn announced its persistent thread id (`thread.started`),
     /// already converted to a [`StreamEvent::session_started`] event.
     SessionStarted(StreamEvent),
@@ -132,18 +146,33 @@ pub enum NdjsonAction {
 pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
     let event: CodexStreamEvent = serde_json::from_str(line).ok()?;
     match event {
-        CodexStreamEvent::ItemCompleted { item } => {
-            if item.item_type == "agent_message" {
+        CodexStreamEvent::ItemCompleted { item } => match item.item_type.as_str() {
+            "agent_message" => {
                 let text = item.text.unwrap_or_default();
                 if text.is_empty() {
                     None
                 } else {
                     Some(NdjsonAction::Text(StreamEvent::text(text)))
                 }
-            } else {
-                None
             }
-        }
+            "command_execution" | "mcp_tool_call" => {
+                let id = item.id.clone().unwrap_or_default();
+                let name = item.tool.clone().unwrap_or_else(|| item.item_type.clone());
+                let args = match item.arguments {
+                    Some(ref v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
+                    None => match item.command {
+                        Some(ref cmd) => serde_json::json!({ "command": cmd }).to_string(),
+                        None => "{}".to_string(),
+                    },
+                };
+                Some(NdjsonAction::ToolCalls(vec![
+                    StreamEvent::tool_call_start(id.clone(), name),
+                    StreamEvent::tool_call_args_with_id(id.clone(), args),
+                    StreamEvent::tool_call_end_with_id(id),
+                ]))
+            }
+            _ => None,
+        },
         CodexStreamEvent::TurnCompleted { usage } => {
             let usage_event = usage.map(|u| {
                 StreamEvent::usage(Usage {
@@ -201,6 +230,57 @@ mod tests {
     fn ignore_empty_agent_message() {
         let line =
             r#"{"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":""}}"#;
+        assert!(parse_ndjson_line(line).is_none());
+    }
+
+    #[test]
+    fn command_execution_item_yields_tool_call_events() {
+        use crate::types::StreamEventType;
+        // VERIFIED against real `codex exec --json` (codex-cli 0.130.0, 2026-06-10):
+        // the item is `command_execution` (singular) carrying id + command, plus the
+        // folded-in RESULT fields (aggregated_output / exit_code / status) which we
+        // drop — `#[serde(default)]` makes the extra fields ignored.
+        let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"ls -la","aggregated_output":"total 8\n","exit_code":0,"status":"completed"}}"#;
+        let events = match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::ToolCalls(events) => events,
+            _ => panic!("expected ToolCalls"),
+        };
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("item_0"));
+        assert_eq!(
+            events[0].tool_call_name.as_deref(),
+            Some("command_execution")
+        );
+        assert_eq!(
+            events[1].tool_call_args_delta.as_deref(),
+            Some(r#"{"command":"ls -la"}"#)
+        );
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallEnd);
+    }
+
+    #[test]
+    fn mcp_tool_call_item_uses_tool_name() {
+        // INFERRED — NOT yet captured from a real transcript (the 2026-06-10 capture
+        // only triggered `command_execution`; no MCP server was configured). The
+        // `mcp_tool_call` type string is singular by convention (consistent with the
+        // verified `command_execution`/`agent_message`); confirm against a real MCP
+        // turn before relying on it. A wrong type string degrades to drop-not-crash.
+        let line = r#"{"type":"item.completed","item":{"id":"item_7","type":"mcp_tool_call","tool":"search","arguments":{"q":"rust"}}}"#;
+        let events = match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::ToolCalls(events) => events,
+            _ => panic!("expected ToolCalls"),
+        };
+        assert_eq!(events[0].tool_call_name.as_deref(), Some("search"));
+        assert_eq!(
+            events[1].tool_call_args_delta.as_deref(),
+            Some(r#"{"q":"rust"}"#)
+        );
+    }
+
+    #[test]
+    fn non_tool_non_message_item_still_dropped() {
+        let line =
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"file_changes","text":""}}"#;
         assert!(parse_ndjson_line(line).is_none());
     }
 

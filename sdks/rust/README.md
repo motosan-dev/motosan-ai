@@ -420,7 +420,8 @@ All setters return `Self` for chaining. Omitted setters leave the corresponding 
 
 Notes:
 - Authentication: `claude` uses your existing local login state — motosan-ai does not pass any credentials through.
-- `tool_calls` is always empty — tools run inside the CLI and are not surfaced on `ChatResponse`.
+- Blocking `ChatResponse.tool_calls` is always empty — tools run inside the CLI and are not folded into `chat()` responses.
+- `stream()` surfaces CLI tool-use blocks as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd` events.
 - Argv order is stable and locked by the `common_args_full_loadout_order_is_stable` unit test. Changing the order may break callers that grep spawned command lines for debugging.
 - Live integration tests that actually spawn `claude` and verify each flag group are gated behind `#[ignore]` — run with `cargo test --features claude-code -- --ignored`.
 
@@ -482,7 +483,8 @@ let stream = client.stream(request).await?;
 Notes:
 - Codex emits **complete** `agent_message` items, not token deltas — `stream()` yields one text event per finalized message.
 - `chat()` treats the **last** `agent_message` as `ChatResponse.content` and folds prior messages (preamble / tool narration) into `ChatResponse.thinking`.
-- `tool_calls` is always empty — Codex runs tools internally via its sandboxed shell, those invocations are not surfaced.
+- Blocking `ChatResponse.tool_calls` is always empty — Codex tool invocations are not folded into `chat()` responses.
+- `stream()` surfaces `command_execution` and `mcp_tool_call` items as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd` events.
 - Authentication: Codex CLI uses `CODEX_API_KEY` or `~/.codex/auth.json`, not `OPENAI_API_KEY`.
 - `agent_mode(true)` passes `--full-auto` (workspace-write sandbox + approvals off); can coexist with an explicit `sandbox()`.
 - `dangerously_bypass_approvals_and_sandbox(true)` should ONLY be used inside an externally sandboxed environment (disposable container, ephemeral VM).
@@ -532,7 +534,7 @@ Notes:
 - **System prompts**: Gemini CLI has no `--system-prompt` flag, so motosan-ai merges system text into the stdin payload as a blank-line-separated prefix. This matches how the CLI treats `GEMINI.md` context.
 - **Streaming**: Gemini emits delta chunks (`{"type":"message","role":"assistant","content":"...","delta":true}`) followed by a terminal `{"type":"result","stats":{...}}` that carries token usage. Both `chat()` and `stream()` use the same parser.
 - **Usage**: populated from `result.stats.input_tokens` / `output_tokens` / `cached` (mapped to `cache_read_input_tokens`). Gemini CLI does not expose cache-creation tokens.
-- **`tool_calls`**: always empty — Gemini runs tools internally. Tool-loop use cases belong on the HTTP providers.
+- **Tool calls**: blocking `ChatResponse.tool_calls` is always empty, but `stream()` surfaces Gemini `tool_use` events as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd`. Gemini `tool_result` events are ignored.
 - **Model selection**: `-m` is forwarded when the model string is non-empty and not `"default"` (case-insensitive).
 
 ## Publishing

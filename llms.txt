@@ -778,7 +778,7 @@ resp = await client.chat(ChatRequest(messages=[Message.user("hi")]))
 Key notes:
 - Runs `claude --print --output-format stream-json` / `codex exec --json --skip-git-repo-check -` / `gemini -p "" -o stream-json` with the prompt on stdin.
 - Authentication: `claude` uses your existing login state; `codex` uses `CODEX_API_KEY` env var or `~/.codex/auth.json` (**not** `OPENAI_API_KEY`); `gemini` uses its own local auth (`gemini auth` once — personal Google account or API key).
-- `tool_calls` always empty on all three — tools run inside the CLI sandbox and aren't surfaced.
+- Blocking `chat().tool_calls` is always empty on all three. But `stream()` now surfaces CLI tool use as `ToolCallStart → ToolCallArgs → ToolCallEnd` events (Claude `tool_use`; Codex `command_execution` / `mcp_tool_call`; Gemini `tool_use`). Tool *results* run inside the CLI sandbox and are not surfaced.
 - Codex emits **complete** `agent_message` items (not token deltas); `stream()` yields one text event per finalized message. `chat()` treats the last `agent_message` as `content` and folds earlier ones (preamble / tool narration) into `thinking`.
 - Gemini emits delta chunks (`{"type":"message","role":"assistant","content":"...","delta":true}`) followed by a terminal `{"type":"result","stats":{...}}` event; both paths share one parser. Usage maps from `stats.input_tokens` / `output_tokens` / `cached` (→ `cache_read_input_tokens`).
 - Gemini has no `--system-prompt` flag — `GeminiCliProvider` merges the system text into the stdin payload as a blank-line-separated prefix.

@@ -483,6 +483,7 @@ impl CodexCliProvider {
 
         let stream = async_stream::stream! {
             let mut lines = reader.lines();
+            let mut saw_tool_call = false;
 
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = line.trim().to_string();
@@ -498,12 +499,18 @@ impl CodexCliProvider {
                         stream_json::NdjsonAction::SessionStarted(event) => {
                             yield Ok(event);
                         }
+                        stream_json::NdjsonAction::ToolCalls(events) => {
+                            saw_tool_call = true;
+                            for event in events {
+                                yield Ok(event);
+                            }
+                        }
                         stream_json::NdjsonAction::Done { usage, done } => {
                             let _ = done;
                             if let Some(usage_event) = usage {
                                 yield Ok(usage_event);
                             }
-                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
+                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
                             break;
                         }
                         stream_json::NdjsonAction::Error(msg) => {

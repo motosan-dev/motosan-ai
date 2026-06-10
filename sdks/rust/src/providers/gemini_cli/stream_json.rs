@@ -7,6 +7,10 @@
 //! - `{"type":"message","role":"assistant","content":"...","delta":true}`
 //!   — one streamed chunk of the model's answer. Multiple of these
 //!   arrive per turn and must be concatenated.
+//! - `{"type":"tool_use","tool_id":"...","tool_name":"...","parameters":{...}}`
+//!   — surfaced as a tool-call start/args/end triplet.
+//! - `{"type":"tool_result","tool_id":"...","status":"success|..."}` —
+//!   ignored; CLI streams expose tool calls, not a separate ToolResult API.
 //! - `{"type":"result","status":"success|...","stats":{...}}` — terminal
 //!   event carrying the aggregated token usage for the turn.
 //!
@@ -50,6 +54,17 @@ pub enum GeminiStreamEvent {
         stats: Option<GeminiStats>,
     },
 
+    /// A tool invocation emitted by Gemini CLI stream-json.
+    #[serde(rename = "tool_use")]
+    ToolUse {
+        #[serde(default)]
+        tool_id: Option<String>,
+        #[serde(default)]
+        tool_name: Option<String>,
+        #[serde(default)]
+        parameters: Option<serde_json::Value>,
+    },
+
     #[serde(other)]
     Other,
 }
@@ -77,6 +92,8 @@ pub enum NdjsonAction {
     Text(StreamEvent),
     /// The `init` event announced the session id used by `--resume <id>`.
     SessionStarted(StreamEvent),
+    /// A tool-call event, already expanded to start/args/end events.
+    ToolCalls(Vec<StreamEvent>),
     /// Terminal `result` event. `usage` is populated when `stats` was
     /// present, and `done` is always emitted.
     Result {
@@ -108,6 +125,23 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
         GeminiStreamEvent::Init { session_id } => session_id
             .filter(|s| !s.is_empty())
             .map(|id| NdjsonAction::SessionStarted(StreamEvent::session_started(id))),
+        GeminiStreamEvent::ToolUse {
+            tool_id,
+            tool_name,
+            parameters,
+        } => {
+            let call_id = tool_id.unwrap_or_default();
+            let call_name = tool_name.unwrap_or_else(|| "tool_use".to_string());
+            let args_json = match parameters {
+                Some(ref v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
+                None => "{}".to_string(),
+            };
+            Some(NdjsonAction::ToolCalls(vec![
+                StreamEvent::tool_call_start(call_id.clone(), call_name),
+                StreamEvent::tool_call_args_with_id(call_id.clone(), args_json),
+                StreamEvent::tool_call_end_with_id(call_id),
+            ]))
+        }
         GeminiStreamEvent::Result { status, stats } => {
             let status_ref = status.as_deref().unwrap_or("success");
             if status_ref != "success" {
@@ -234,6 +268,31 @@ mod tests {
             NdjsonAction::Error(msg) => assert!(msg.contains("failed")),
             _ => panic!("expected Error action"),
         }
+    }
+
+    #[test]
+    fn tool_use_event_yields_tool_call_events() {
+        use crate::types::StreamEventType;
+        // VERIFIED against real `gemini -o stream-json` (gemini 0.38.1, 2026-06-10):
+        // the event is `tool_use` with tool_id / tool_name / parameters, plus a
+        // `timestamp` field we ignore. Gemini also emits a separate `tool_result`
+        // event (dropped — we surface the call side only).
+        let line = r#"{"type":"tool_use","timestamp":"2026-06-10T08:48:17.447Z","tool_id":"read_file_1781081297447_0","tool_name":"read_file","parameters":{"file_path":"Cargo.toml"}}"#;
+        let events = match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::ToolCalls(events) => events,
+            _ => panic!("expected ToolCalls"),
+        };
+        assert_eq!(events.len(), 3);
+        assert_eq!(
+            events[0].tool_call_id.as_deref(),
+            Some("read_file_1781081297447_0")
+        );
+        assert_eq!(events[0].tool_call_name.as_deref(), Some("read_file"));
+        assert_eq!(
+            events[1].tool_call_args_delta.as_deref(),
+            Some(r#"{"file_path":"Cargo.toml"}"#)
+        );
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallEnd);
     }
 
     #[test]
