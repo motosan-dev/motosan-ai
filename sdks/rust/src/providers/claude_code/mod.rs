@@ -374,6 +374,9 @@ impl ClaudeCodeProvider {
     }
 
     /// Replace the full set of injected environment variables.
+    ///
+    /// This **replaces** the set (it does not append, unlike
+    /// `std::process::Command::envs`). Use [`env`](Self::env) to add one.
     pub fn envs<I, K, V>(mut self, vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
@@ -597,6 +600,22 @@ mod tests {
             "Debug leaked secret: {dbg}"
         );
         assert!(dbg.contains("<1 redacted>"), "got: {dbg}");
+    }
+
+    #[test]
+    fn envs_builder_replaces_the_whole_set() {
+        // `.envs(iter)` REPLACES (it does not append, unlike std Command::envs).
+        let p = ClaudeCodeProvider::new()
+            .env("FIRST", "1") // discarded by the replace below
+            .envs([("A", "x"), ("B", "y")]);
+        assert_eq!(
+            p.build_spawn_config(None, None).envs,
+            vec![
+                ("A".to_string(), "x".to_string()),
+                ("B".to_string(), "y".to_string()),
+            ],
+            "envs(iter) must replace the full set, not append"
+        );
     }
 
     #[test]

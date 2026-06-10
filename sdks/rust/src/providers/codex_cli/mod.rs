@@ -334,6 +334,9 @@ impl CodexCliProvider {
     }
 
     /// Replace the full set of injected environment variables.
+    ///
+    /// This **replaces** the set (it does not append, unlike
+    /// `std::process::Command::envs`). Use [`env`](Self::env) to add one.
     pub fn envs<I, K, V>(mut self, vars: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
