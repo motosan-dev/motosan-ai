@@ -103,6 +103,9 @@ pub struct SpawnConfig {
     pub oss: bool,
     /// `--local-provider <p>` — selects the OSS provider used with `--oss`.
     pub local_provider: Option<LocalProvider>,
+    /// Extra environment variables for the spawned subprocess, applied via
+    /// `Command::envs`. Carries per-run secrets; do not log values.
+    pub envs: Vec<(String, String)>,
     /// Thread id to resume, forwarded as the `resume <id>` subcommand of
     /// `codex exec` (`codex exec resume <id> --json ...`). Blank → fresh thread.
     pub resume: Option<String>,
@@ -240,6 +243,7 @@ pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
 /// reaped if the future is cancelled mid-flight.
 fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
+    cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
     push_exec_subcommand(&mut cmd, config);
     cmd.arg("--json").arg("--skip-git-repo-check");
     apply_common_args(&mut cmd, config);
@@ -375,6 +379,7 @@ mod tests {
             dangerously_bypass_approvals_and_sandbox: false,
             oss: false,
             local_provider: None,
+            envs: Vec::new(),
             resume: None,
         }
     }
@@ -388,6 +393,29 @@ mod tests {
     #[test]
     fn common_args_empty_config_produces_nothing() {
         assert!(common_args(&empty_config()).is_empty());
+    }
+
+    #[test]
+    fn build_command_injects_envs() {
+        let cfg = SpawnConfig {
+            envs: vec![("OPENAI_API_KEY".to_string(), "sk-secret".to_string())],
+            ..empty_config()
+        };
+        let std_cmd = build_command(&cfg);
+        let std_cmd = std_cmd.as_std();
+        let found = std_cmd.get_envs().any(|(k, v)| {
+            k.to_string_lossy() == "OPENAI_API_KEY"
+                && v.map(|v| v.to_string_lossy().into_owned()) == Some("sk-secret".to_string())
+        });
+        assert!(found, "env must be injected");
+        let argv: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !argv.iter().any(|a| a.contains("sk-secret")),
+            "secret must not leak into argv"
+        );
     }
 
     #[test]
@@ -655,6 +683,7 @@ mod tests {
             enabled_features: vec!["fast".to_string()],
             disabled_features: vec!["slow".to_string()],
             config_overrides: vec![("k".to_string(), "v".to_string())],
+            envs: Vec::new(),
             resume: None,
         };
         assert_eq!(

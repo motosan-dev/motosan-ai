@@ -80,6 +80,7 @@ use std::env;
 use std::path::PathBuf;
 
 use crate::error::MotosanError;
+use crate::providers::redacted_envs::RedactedEnvs;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
@@ -164,6 +165,11 @@ pub struct CodexCliProvider {
     /// [`oss`](Self::oss) is enabled. See [`LocalProvider`].
     pub local_provider: Option<LocalProvider>,
 
+    /// Extra environment variables injected into the spawned `codex` child,
+    /// in insertion order. Use for a per-run secret bundle (e.g. OPENAI_API_KEY)
+    /// without mutating the parent environment. Values are secrets (redacted in Debug).
+    pub envs: RedactedEnvs,
+
     /// Thread id to resume. When set, each turn runs `codex exec resume <id>`
     /// instead of starting a fresh thread. Capture from [`ChatResponse::session_id`]
     /// or a streamed [`StreamEvent::session_id`]. Blank → new thread.
@@ -202,6 +208,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: false,
             oss: false,
             local_provider: None,
+            envs: RedactedEnvs::default(),
             resume: None,
         }
     }
@@ -319,6 +326,24 @@ impl CodexCliProvider {
         self
     }
 
+    /// Inject one environment variable into the spawned subprocess (repeatable).
+    /// The value is a secret and is never logged.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.envs.push(key, value);
+        self
+    }
+
+    /// Replace the full set of injected environment variables.
+    pub fn envs<I, K, V>(mut self, vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.envs.replace_from(vars);
+        self
+    }
+
     /// Resume a previous Codex thread (`codex exec resume <id>`).
     pub fn resume(mut self, thread_id: impl Into<String>) -> Self {
         self.resume = Some(thread_id.into());
@@ -345,6 +370,7 @@ impl CodexCliProvider {
             dangerously_bypass_approvals_and_sandbox: self.dangerously_bypass_approvals_and_sandbox,
             oss: self.oss,
             local_provider: self.local_provider,
+            envs: self.envs.to_vec(),
             resume: self.resume.clone(),
         }
     }
@@ -422,6 +448,7 @@ impl CodexCliProvider {
         let config = self.build_spawn_config(request.model.clone());
 
         let mut cmd = Command::new(&config.binary_path);
+        cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
         spawn::push_exec_subcommand(&mut cmd, &config);
         cmd.arg("--json").arg("--skip-git-repo-check");
         spawn::apply_common_args(&mut cmd, &config);
@@ -530,6 +557,21 @@ mod tests {
     fn codex_cli_client_implements_provider_impl() {
         use crate::providers::ProviderImpl;
         let _client: Box<dyn ProviderImpl> = Box::new(CodexCliProvider::new());
+    }
+
+    #[test]
+    fn env_builder_threads_and_debug_redacts() {
+        let p = CodexCliProvider::new().env("OPENAI_API_KEY", "sk-super-secret");
+        assert_eq!(
+            p.build_spawn_config(None).envs,
+            vec![("OPENAI_API_KEY".to_string(), "sk-super-secret".to_string())]
+        );
+        let dbg = format!("{p:?}");
+        assert!(
+            !dbg.contains("sk-super-secret"),
+            "Debug leaked secret: {dbg}"
+        );
+        assert!(dbg.contains("<1 redacted>"), "got: {dbg}");
     }
 
     fn user_request(content: impl Into<String>) -> ChatRequest {

@@ -159,6 +159,9 @@ pub struct SpawnConfig {
     /// `--max-budget-usd <amount>` — dollar cap for API calls during
     /// this session. Only meaningful under `--print`.
     pub max_budget_usd: Option<f64>,
+    /// Extra environment variables for the spawned subprocess, applied via
+    /// `Command::envs`. Carries per-run secrets; do not log values.
+    pub envs: Vec<(String, String)>,
     /// Working directory for the spawned process; `None` inherits the parent's.
     pub cwd: Option<PathBuf>,
 }
@@ -366,6 +369,7 @@ fn build_command(config: &SpawnConfig) -> Command {
     if let Some(dir) = &config.cwd {
         cmd.current_dir(dir);
     }
+    cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
     cmd.arg("--print");
     if config.agent_mode {
         cmd.arg("--output-format").arg("json");
@@ -505,6 +509,7 @@ mod tests {
             agent: None,
             no_session_persistence: false,
             max_budget_usd: None,
+            envs: Vec::new(),
             cwd: None,
         }
     }
@@ -541,6 +546,29 @@ mod tests {
         assert_eq!(
             build_command(&empty_config()).as_std().get_current_dir(),
             None
+        );
+    }
+
+    #[test]
+    fn build_command_injects_envs() {
+        let cfg = SpawnConfig {
+            envs: vec![("ANTHROPIC_API_KEY".to_string(), "sk-secret".to_string())],
+            ..empty_config()
+        };
+        let std_cmd = build_command(&cfg);
+        let std_cmd = std_cmd.as_std();
+        let found = std_cmd.get_envs().any(|(k, v)| {
+            k.to_string_lossy() == "ANTHROPIC_API_KEY"
+                && v.map(|v| v.to_string_lossy().into_owned()) == Some("sk-secret".to_string())
+        });
+        assert!(found, "env must be injected");
+        let argv: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !argv.iter().any(|a| a.contains("sk-secret")),
+            "secret must not leak into argv"
         );
     }
 
@@ -916,6 +944,7 @@ mod tests {
             agent: Some("reviewer".to_string()),
             no_session_persistence: true,
             max_budget_usd: Some(3.0),
+            envs: Vec::new(),
             cwd: None,
         };
         assert_eq!(

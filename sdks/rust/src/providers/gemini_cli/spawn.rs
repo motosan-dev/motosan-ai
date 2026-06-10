@@ -89,6 +89,9 @@ pub struct SpawnConfig {
     /// `"latest"` or a numeric index matching `gemini --list-sessions`.
     /// Blank strings are skipped.
     pub resume: Option<String>,
+    /// Extra environment variables for the spawned subprocess, applied via
+    /// `Command::envs`. Carries per-run secrets; do not log values.
+    pub envs: Vec<(String, String)>,
     /// Working directory for the spawned process; `None` inherits the parent's.
     pub cwd: Option<PathBuf>,
 }
@@ -183,6 +186,7 @@ fn build_command(config: &SpawnConfig) -> Command {
     if let Some(dir) = &config.cwd {
         cmd.current_dir(dir);
     }
+    cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
     cmd.args(common_args(config));
 
     cmd.kill_on_drop(true);
@@ -302,6 +306,7 @@ mod tests {
             extensions: Vec::new(),
             allowed_mcp_servers: Vec::new(),
             resume: None,
+            envs: Vec::new(),
             cwd: None,
         }
     }
@@ -325,6 +330,29 @@ mod tests {
         assert_eq!(
             build_command(&empty_config()).as_std().get_current_dir(),
             None
+        );
+    }
+
+    #[test]
+    fn build_command_injects_envs() {
+        let cfg = SpawnConfig {
+            envs: vec![("GEMINI_API_KEY".to_string(), "sk-secret".to_string())],
+            ..empty_config()
+        };
+        let std_cmd = build_command(&cfg);
+        let std_cmd = std_cmd.as_std();
+        let found = std_cmd.get_envs().any(|(k, v)| {
+            k.to_string_lossy() == "GEMINI_API_KEY"
+                && v.map(|v| v.to_string_lossy().into_owned()) == Some("sk-secret".to_string())
+        });
+        assert!(found, "env must be injected");
+        let argv: Vec<String> = std_cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !argv.iter().any(|a| a.contains("sk-secret")),
+            "secret must not leak into argv"
         );
     }
 
@@ -531,6 +559,7 @@ mod tests {
             extensions: vec!["fast".to_string()],
             allowed_mcp_servers: vec!["fs".to_string()],
             resume: Some("latest".to_string()),
+            envs: Vec::new(),
             cwd: None,
         };
         assert_eq!(
