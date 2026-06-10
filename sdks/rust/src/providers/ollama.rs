@@ -488,7 +488,9 @@ impl Stream for OllamaStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                    // Inner NdjsonStream already yields a typed MotosanError; pass it
+                    // through unchanged (re-wrapping would double the "stream error:" prefix).
+                    return Poll::Ready(Some(Err(e)));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,

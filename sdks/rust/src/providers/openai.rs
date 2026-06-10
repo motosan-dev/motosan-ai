@@ -797,6 +797,9 @@ impl Stream for OpenAIStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    // The stream is terminal after an error — don't synthesize a
+                    // success `done` if the consumer keeps polling past the Err.
+                    self.done_emitted = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
                 Poll::Ready(None) => {
