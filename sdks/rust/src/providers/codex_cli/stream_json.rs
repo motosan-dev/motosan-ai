@@ -87,6 +87,10 @@ pub struct CodexItem {
     /// MCP tool name for `mcp_tool_call` items.
     #[serde(default)]
     pub tool: Option<String>,
+    /// MCP server name for `mcp_tool_call` items; used to qualify the surfaced
+    /// tool name as `server/tool`.
+    #[serde(default)]
+    pub server: Option<String>,
     /// Shell command for `command_execution` items.
     #[serde(default)]
     pub command: Option<String>,
@@ -157,7 +161,13 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
             }
             "command_execution" | "mcp_tool_call" => {
                 let id = item.id.clone().unwrap_or_default();
-                let name = item.tool.clone().unwrap_or_else(|| item.item_type.clone());
+                // MCP calls carry server + tool → surface as `server/tool`;
+                // command_execution has no `tool` and falls back to the item type.
+                let name = match (item.server.as_deref(), item.tool.as_deref()) {
+                    (Some(server), Some(tool)) => format!("{server}/{tool}"),
+                    (None, Some(tool)) => tool.to_string(),
+                    _ => item.item_type.clone(),
+                };
                 let args = match item.arguments {
                     Some(ref v) => serde_json::to_string(v).unwrap_or_else(|_| "{}".to_string()),
                     None => match item.command {
@@ -259,22 +269,24 @@ mod tests {
     }
 
     #[test]
-    fn mcp_tool_call_item_uses_tool_name() {
-        // INFERRED — NOT yet captured from a real transcript (the 2026-06-10 capture
-        // only triggered `command_execution`; no MCP server was configured). The
-        // `mcp_tool_call` type string is singular by convention (consistent with the
-        // verified `command_execution`/`agent_message`); confirm against a real MCP
-        // turn before relying on it. A wrong type string degrades to drop-not-crash.
-        let line = r#"{"type":"item.completed","item":{"id":"item_7","type":"mcp_tool_call","tool":"search","arguments":{"q":"rust"}}}"#;
+    fn mcp_tool_call_item_uses_server_qualified_tool_name() {
+        use crate::types::StreamEventType;
+        // VERIFIED against a real `codex exec --json` MCP turn (codex-cli 0.130.0,
+        // 2026-06-10): `mcp_tool_call` (singular) carries id / server / tool /
+        // arguments, plus a folded-in result/status we drop. Name is `server/tool`.
+        let line = r#"{"type":"item.completed","item":{"id":"item_2","type":"mcp_tool_call","server":"node_repl","tool":"js","arguments":{"code":"nodeRepl.write(String(2 + 2));","title":"Evaluate 2 + 2"},"result":{"content":[{"type":"text","text":"4"}]},"status":"completed"}}"#;
         let events = match parse_ndjson_line(line).expect("parse") {
             NdjsonAction::ToolCalls(events) => events,
             _ => panic!("expected ToolCalls"),
         };
-        assert_eq!(events[0].tool_call_name.as_deref(), Some("search"));
-        assert_eq!(
-            events[1].tool_call_args_delta.as_deref(),
-            Some(r#"{"q":"rust"}"#)
-        );
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("item_2"));
+        assert_eq!(events[0].tool_call_name.as_deref(), Some("node_repl/js"));
+        assert!(events[1]
+            .tool_call_args_delta
+            .as_deref()
+            .unwrap()
+            .contains("nodeRepl.write"));
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallEnd);
     }
 
     #[test]
