@@ -42,7 +42,7 @@ pub mod prompt;
 mod spawn;
 mod stream_json;
 
-pub use spawn::{EffortLevel, PermissionMode};
+pub use spawn::{EffortLevel, PermissionMode, DEFAULT_TIMEOUT};
 
 use std::env;
 use std::path::PathBuf;

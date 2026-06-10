@@ -93,7 +93,7 @@ use crate::providers::redacted_envs::RedactedEnvs;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
-pub use spawn::{LocalProvider, SandboxMode};
+pub use spawn::{LocalProvider, SandboxMode, DEFAULT_TIMEOUT};
 
 /// Client that shells out to the `codex` CLI binary (OpenAI Codex CLI).
 ///

@@ -31,7 +31,7 @@ pub mod prompt;
 mod spawn;
 mod stream_json;
 
-pub use spawn::ApprovalMode;
+pub use spawn::{ApprovalMode, DEFAULT_TIMEOUT};
 
 use std::env;
 use std::path::PathBuf;
