@@ -84,7 +84,9 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 
 **Fallible streams (Rust 0.20+)** — `BoxStream` items are `Result<StreamEvent, MotosanError>`; consumers should `let event = item?` inside `while let Some(item) = stream.next().await` loops. Mid-stream provider/timeout errors surface as `Err`, not sentinel events.
 
-**Stream read timeout** — applied in `dispatch_stream()` wrapping the provider's BoxStream. Not inside individual providers; timeout surfaces as `Err(MotosanError::StreamReadTimeout(_))`.
+**Stream read timeout** — two layers, both surfacing `Err(MotosanError::StreamReadTimeout(_))`: (1) the Client-level `ReadTimeoutStream` wrapper in `dispatch_stream()` (set via `Client::builder().stream_read_timeout_secs(_)`), wrapping any provider's BoxStream; (2) per-CLI-provider, a per-line read-stall deadline inside each CLI `drive_lines()` loop, set via the provider's `.timeout(dur)` / `.no_timeout()` (default Claude 300 s, Codex/Gemini 600 s).
+
+**CLI provider capabilities (Rust 0.20+)** — `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` share, beyond their per-CLI flags: `.cwd(dir)` (`Command::current_dir`; Codex uses `.cd()` → `--cd`); `.env(k,v)` / `.envs(iter)` per-run env injection (redacted from `Debug` via `RedactedEnvs` — never log env values); `.timeout(dur)` / `.no_timeout()`; `.resume(id)` session continuity (Codex `exec resume`, Gemini/Claude `--resume`) with the minted id surfaced on `StreamEvent::session_id` / `ChatResponse::session_id`. `stream()` surfaces CLI tool use as `ToolCallStart → ToolCallArgs → ToolCallEnd`; blocking `chat().tool_calls` stays empty.
 
 ## Releasing
 

@@ -4,6 +4,13 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## 0.20.0 — 2026-06-10
 
+### Added
+- **CLI provider `cwd` setter** — `ClaudeCodeProvider::cwd(dir)` / `GeminiCliProvider::cwd(dir)` run the spawned child with `Command::current_dir`; `CodexCliProvider` already had `.cd()` (`--cd`).
+- **CLI session continuity** — additive `StreamEvent::session_id` / `ChatResponse::session_id` surface the provider-minted session/thread id; `CodexCliProvider::resume(id)` runs `codex exec resume <id>`; Gemini `resume(id)` accepts a captured session id. (Additive, serde-skipped — no wire-format change.)
+- **Per-run env injection** on all three CLI providers — `.env(k, v)` / `.envs(iter)` pass a per-run secret bundle to the child without mutating the parent env; values are redacted from `Debug` via the `RedactedEnvs` newtype.
+- **CLI tool-call stream events** — `stream()` now surfaces CLI tool use as `ToolCallStart → ToolCallArgs → ToolCallEnd` (Claude `tool_use`; Codex `command_execution` / `mcp_tool_call`, the latter named `server/tool`; Gemini `tool_use`). Blocking `chat().tool_calls` stays empty.
+- **Configurable per-invocation timeout** on all three CLI providers — `.timeout(dur)` / `.no_timeout()` (default = the prior per-provider const: Claude 300 s, Codex/Gemini 600 s), applied to both `chat()` and the `stream()` read loop; a per-line read-stall deadline yields `Err(MotosanError::StreamReadTimeout)`.
+
 ### Changed (BREAKING)
 - `BoxStream` items are now `Result<StreamEvent, MotosanError>` instead of bare `StreamEvent`.
 - `collect_stream()` now returns `Result<ChatResponse, MotosanError>` and propagates mid-stream provider errors.
