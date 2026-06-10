@@ -25,11 +25,11 @@ Both depend entirely on what each provider's flags expose. The three providers' 
 | Permission mode | ✅ `--permission-mode` (6 modes) + `--dangerously-skip-permissions` | ⚠️ coarse only (`--full-auto` / `--sandbox` / bypass); **no interactive approval channel** | ✅ `--approval-mode` (default/auto_edit/yolo/plan) + `--yolo`/`--sandbox` |
 | Text stream events | ✅ | ✅ | ✅ |
 | Usage stream event (**tokens only — no $ cost field**) | ✅ (`result.usage`) | ✅ (`turn.completed`) | ✅ (`result.stats`) |
-| ToolCall / ToolResult events | ❌ dropped (`tool_use` → Other) | ❌ dropped (command/mcp/file-change → Other) | ❌ never parsed |
+| ToolCall / ToolResult events | ✅ stream path surfaces Claude `tool_use` as tool-call start/args/end; no separate ToolResult | ✅ stream path surfaces `command_execution` and singular `mcp_tool_call` as tool-call start/args/end; results stay out of `ChatResponse` | ✅ stream path surfaces Gemini `tool_use` (`tool_id`/`tool_name`/`parameters`) as tool-call start/args/end; `tool_result` ignored |
 | Thinking events | ❌ dropped | ❌ dropped | n/a (headless emits none) |
 | `started` synthetic event | ❌ (none in SDK) | ❌ | ❌ |
 | Stream error surfacing | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) |
-| Stop reason | plain `done()` (no reason) | none on stream | hardcoded `EndTurn` (chat) |
+| Stop reason | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` |
 
 **Cross-cutting facts (all three providers):**
 - Every agent-shaping knob (`cwd`, session, budget, permission, sandbox) is a **provider-builder field, not a `ChatRequest` field** — **except `model`**, which IS honored per-request via `ChatRequest::model` (all three providers call `build_spawn_config(request.model)`). Varying `cwd`/session **per run** means **rebuilding the provider each call** (providers are `Clone`, so cheap, but it is structural friction — and `model` shows the per-request override path already exists; see P2.4 + the §4 design note).
@@ -62,7 +62,7 @@ v1's security model is `SecretResolver → ctx.secrets` (per-run key, never pers
 
 ### P2 — agent-backend quality
 - **P2.1 — `env`/`envs()` injection** on all providers, so a per-run `SecretBundle` can reach the child (aligns with the org's `SecretResolver` model).
-- **P2.2 — ToolCall / ToolResult stream events** (currently all dropped) so a runtime can observe/gate tool use.
+- **P2.2 — ToolCall stream events landed.** CLI stream paths surface provider tool-use events as tool-call start/args/end triplets so a runtime can observe/gate tool use. Separate ToolResult events remain out of scope for the current shared stream API.
 - **P2.3 — real `stop_reason` refinements**, **configurable timeout** (now hardcoded, blocking-path only), and a **cancel handle** (now `kill_on_drop` only). Stream errors now surface as `Err` items in Rust 0.20.
 - **P2.4 — (structural) allow per-`ChatRequest` overrides** for `cwd`/session/budget, to avoid rebuilding the provider every run.
 
@@ -173,7 +173,7 @@ Both providers spawn at **two** sites (a blocking path and an inline streaming p
 For reference, the org-side adapter is a thin `AgentRuntime` over a `motosan_ai::Client` configured for `Provider::ClaudeCode`/`CodexCli`/`GeminiCli` (feature `cli-runtime`):
 - Resolve provider + flags from `AdapterRef.config`; set `cwd` via the new setter (`.cwd(ctx.cwd)` / `.cd(ctx.cwd)`).
 - Session: use provider-specific continuity. ClaudeCode may mint/derive a deterministic id (the `session_key` analog), set it with `--session-id` on run 1, then resume it thereafter. CodexCli must capture `ChatResponse::session_id` / streamed `StreamEvent::session_id` from `thread.started.thread_id` on run 1 and pass that captured id to `.resume(id)` on later runs. GeminiCli captures `init.session_id` and forwards `.resume(id)` verbatim, but arbitrary captured-id resume remains a live CLI assumption until verified. Record the usable provider session id in `HeartbeatRun.session_ref`.
-- Events: synthesize `Started`/`Finished` (the SDK has neither), map `Text` + `usage` → `RunEvent::Text` + one `CostDelta`. **Note:** the SDK's usage events carry **token counts only — there is no $ cost field** (`ClaudeStreamUsage`/`CodexUsage`/`GeminiStats` are all tokens), so the `CostDelta` must be **computed from tokens × model price**, not read off the stream. Tool events absent until P2.2.
+- Events: synthesize `Started`/`Finished` (the SDK has neither), map `Text` + `usage` → `RunEvent::Text` + one `CostDelta`, and map streamed tool-call start/args/end triplets to tool-use events. **Note:** the SDK's usage events carry **token counts only — there is no $ cost field** (`ClaudeStreamUsage`/`CodexUsage`/`GeminiStats` are all tokens), so the `CostDelta` must be **computed from tokens × model price**, not read off the stream.
 - Conclusion: parse the §8 JSON block from the CLI's final output (same mechanism as LoopRuntime); parse failure → `Progress`.
 - Budget: map `ctx.budget_remaining_minor` → `--max-budget-usd` where available (ClaudeCode only) as double-insurance; orchestrator stage-2b hard-stop is the real gate elsewhere.
 

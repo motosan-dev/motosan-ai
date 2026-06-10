@@ -273,6 +273,7 @@ fn parse_collected_stream(raw: &str) -> Result<(String, Usage, Option<String>), 
                 session_id = event.session_id;
             }
             Some(NdjsonAction::SessionStarted(_)) => {}
+            Some(NdjsonAction::ToolCalls(_)) => {}
             Some(NdjsonAction::Result {
                 usage: Some(event), ..
             }) => {
