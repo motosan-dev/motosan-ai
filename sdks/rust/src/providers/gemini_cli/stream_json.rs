@@ -273,7 +273,11 @@ mod tests {
     #[test]
     fn tool_use_event_yields_tool_call_events() {
         use crate::types::StreamEventType;
-        let line = r#"{"type":"tool_use","tool_id":"run_shell_command_1","tool_name":"run_shell_command","parameters":{"command":"pwd"}}"#;
+        // VERIFIED against real `gemini -o stream-json` (gemini 0.38.1, 2026-06-10):
+        // the event is `tool_use` with tool_id / tool_name / parameters, plus a
+        // `timestamp` field we ignore. Gemini also emits a separate `tool_result`
+        // event (dropped — we surface the call side only).
+        let line = r#"{"type":"tool_use","timestamp":"2026-06-10T08:48:17.447Z","tool_id":"read_file_1781081297447_0","tool_name":"read_file","parameters":{"file_path":"Cargo.toml"}}"#;
         let events = match parse_ndjson_line(line).expect("parse") {
             NdjsonAction::ToolCalls(events) => events,
             _ => panic!("expected ToolCalls"),
@@ -281,15 +285,12 @@ mod tests {
         assert_eq!(events.len(), 3);
         assert_eq!(
             events[0].tool_call_id.as_deref(),
-            Some("run_shell_command_1")
+            Some("read_file_1781081297447_0")
         );
-        assert_eq!(
-            events[0].tool_call_name.as_deref(),
-            Some("run_shell_command")
-        );
+        assert_eq!(events[0].tool_call_name.as_deref(), Some("read_file"));
         assert_eq!(
             events[1].tool_call_args_delta.as_deref(),
-            Some(r#"{"command":"pwd"}"#)
+            Some(r#"{"file_path":"Cargo.toml"}"#)
         );
         assert_eq!(events[2].event_type, StreamEventType::ToolCallEnd);
     }

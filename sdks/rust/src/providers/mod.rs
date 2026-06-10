@@ -255,6 +255,9 @@ mod cli_terminal_tests {
     #[tokio::test]
     #[cfg(feature = "gemini")]
     async fn tool_call_terminal_reason_collects_as_tool_use() {
+        // Direct truth table for both branches (the false→EndTurn arm was untested).
+        assert_eq!(super::cli_terminal_stop_reason(false), StopReason::EndTurn);
+        assert_eq!(super::cli_terminal_stop_reason(true), StopReason::ToolUse);
         let events = vec![
             StreamEvent::tool_call_start("call_1", "Read"),
             StreamEvent::tool_call_args_with_id("call_1", r#"{"path":"/tmp/x"}"#),

@@ -322,10 +322,14 @@ mod tests {
             NdjsonAction::ToolCalls(events) => events,
             _ => panic!("expected ToolCalls"),
         };
+        // Full shape: text first, then the complete start→args→end triplet.
+        assert_eq!(events.len(), 4);
         assert_eq!(events[0].event_type, StreamEventType::Text);
         assert_eq!(events[0].content, "let me read it");
         assert_eq!(events[1].event_type, StreamEventType::ToolCallStart);
         assert_eq!(events[1].tool_call_name.as_deref(), Some("Read"));
+        assert_eq!(events[2].event_type, StreamEventType::ToolCallArgs);
+        assert_eq!(events[3].event_type, StreamEventType::ToolCallEnd);
     }
 
     #[test]

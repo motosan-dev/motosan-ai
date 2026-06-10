@@ -236,12 +236,17 @@ mod tests {
     #[test]
     fn command_execution_item_yields_tool_call_events() {
         use crate::types::StreamEventType;
-        let line = r#"{"type":"item.completed","item":{"id":"item_5","type":"command_execution","command":"ls -la"}}"#;
+        // VERIFIED against real `codex exec --json` (codex-cli 0.130.0, 2026-06-10):
+        // the item is `command_execution` (singular) carrying id + command, plus the
+        // folded-in RESULT fields (aggregated_output / exit_code / status) which we
+        // drop — `#[serde(default)]` makes the extra fields ignored.
+        let line = r#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"ls -la","aggregated_output":"total 8\n","exit_code":0,"status":"completed"}}"#;
         let events = match parse_ndjson_line(line).expect("parse") {
             NdjsonAction::ToolCalls(events) => events,
             _ => panic!("expected ToolCalls"),
         };
         assert_eq!(events.len(), 3);
+        assert_eq!(events[0].tool_call_id.as_deref(), Some("item_0"));
         assert_eq!(
             events[0].tool_call_name.as_deref(),
             Some("command_execution")
@@ -255,6 +260,11 @@ mod tests {
 
     #[test]
     fn mcp_tool_call_item_uses_tool_name() {
+        // INFERRED — NOT yet captured from a real transcript (the 2026-06-10 capture
+        // only triggered `command_execution`; no MCP server was configured). The
+        // `mcp_tool_call` type string is singular by convention (consistent with the
+        // verified `command_execution`/`agent_message`); confirm against a real MCP
+        // turn before relying on it. A wrong type string degrades to drop-not-crash.
         let line = r#"{"type":"item.completed","item":{"id":"item_7","type":"mcp_tool_call","tool":"search","arguments":{"q":"rust"}}}"#;
         let events = match parse_ndjson_line(line).expect("parse") {
             NdjsonAction::ToolCalls(events) => events,
