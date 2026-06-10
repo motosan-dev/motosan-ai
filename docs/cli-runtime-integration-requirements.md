@@ -25,7 +25,7 @@ Both depend entirely on what each provider's flags expose. The three providers' 
 | Permission mode | ✅ `--permission-mode` (6 modes) + `--dangerously-skip-permissions` | ⚠️ coarse only (`--full-auto` / `--sandbox` / bypass); **no interactive approval channel** | ✅ `--approval-mode` (default/auto_edit/yolo/plan) + `--yolo`/`--sandbox` |
 | Text stream events | ✅ | ✅ | ✅ |
 | Usage stream event (**tokens only — no $ cost field**) | ✅ (`result.usage`) | ✅ (`turn.completed`) | ✅ (`result.stats`) |
-| ToolCall / ToolResult events | ✅ stream path surfaces Claude `tool_use` as tool-call start/args/end (verified live); no separate ToolResult | ✅ `command_execution` verified live (codex-cli 0.130.0); `mcp_tool_call` **inferred** (singular by convention; MCP turn not yet captured); results stay out of `ChatResponse` | ✅ Gemini `tool_use` (`tool_id`/`tool_name`/`parameters`) verified live (gemini 0.38.1); `tool_result` ignored |
+| ToolCall / ToolResult events | ✅ stream path surfaces Claude `tool_use` as tool-call start/args/end (verified live); no separate ToolResult | ✅ `command_execution` + `mcp_tool_call` both verified live (codex-cli 0.130.0; MCP name surfaced as `server/tool`, e.g. `node_repl/js`); results stay out of `ChatResponse` | ✅ Gemini `tool_use` (`tool_id`/`tool_name`/`parameters`) verified live (gemini 0.38.1); `tool_result` ignored |
 | Thinking events | ❌ dropped | ❌ dropped | n/a (headless emits none) |
 | `started` synthetic event | ❌ (none in SDK) | ❌ | ❌ |
 | Stream error surfacing | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) |
