@@ -212,8 +212,16 @@ async fn openai_stream_retries_initial_call() {
         .build();
 
     let mut stream = provider.stream(request).await.expect("stream response");
-    let first = stream.next().await.expect("first event");
-    let second = stream.next().await.expect("done event");
+    let first = stream
+        .next()
+        .await
+        .expect("first event")
+        .expect("stream item should not fail");
+    let second = stream
+        .next()
+        .await
+        .expect("done event")
+        .expect("stream item should not fail");
 
     assert_eq!(first.content, "ok");
     assert!(second.done);

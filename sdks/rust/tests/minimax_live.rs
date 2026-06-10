@@ -172,7 +172,8 @@ async fn live_minimax_stream_propagates_max_tokens_stop_reason() {
     let mut stream = client.stream_with(request).await.expect("stream failed");
 
     let mut events: Vec<motosan_ai::StreamEvent> = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -205,7 +206,7 @@ async fn live_minimax_collect_stream_records_max_tokens_on_chat_response() {
         .build();
 
     let stream = client.stream_with(request).await.expect("stream failed");
-    let response = motosan_ai::collect_stream(stream).await;
+    let response = motosan_ai::collect_stream(stream).await.unwrap();
 
     assert_eq!(
         response.stop_reason,

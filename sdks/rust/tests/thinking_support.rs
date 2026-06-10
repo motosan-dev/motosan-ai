@@ -118,7 +118,11 @@ async fn oauth_opus_4_8_adaptive_thinking_skips_interleaved_beta() {
         .build();
 
     let mut stream = provider.stream(request).await.expect("stream response");
-    let done = stream.next().await.expect("done event");
+    let done = stream
+        .next()
+        .await
+        .expect("done event")
+        .expect("stream item should not fail");
     assert!(done.done);
     mock.assert_async().await;
 }

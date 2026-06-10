@@ -77,7 +77,8 @@ async fn ollama_with_num_ctx_streams_from_api_chat_endpoint() {
         .await
         .expect("stream against mock should open");
     let mut seen_text = false;
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if !event.content.is_empty() {
             seen_text = true;
         }

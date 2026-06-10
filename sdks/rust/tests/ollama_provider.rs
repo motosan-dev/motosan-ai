@@ -76,7 +76,8 @@ async fn ollama_stream_emits_deltas_and_done() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 

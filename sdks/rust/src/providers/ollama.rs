@@ -420,14 +420,14 @@ struct OllamaStreamAdapter {
 }
 
 impl Stream for OllamaStreamAdapter {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if let Some(event) = self.pending.pop_front() {
-            return Poll::Ready(Some(event));
+            return Poll::Ready(Some(Ok(event)));
         }
 
         loop {
@@ -443,7 +443,7 @@ impl Stream for OllamaStreamAdapter {
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     if done {
-                        return Poll::Ready(Some(StreamEvent::done()));
+                        return Poll::Ready(Some(Ok(StreamEvent::done())));
                     }
 
                     let message = payload.get("message");
@@ -483,11 +483,15 @@ impl Stream for OllamaStreamAdapter {
                     }
 
                     if let Some(evt) = self.pending.pop_front() {
-                        return Poll::Ready(Some(evt));
+                        return Poll::Ready(Some(Ok(evt)));
                     }
                     continue;
                 }
-                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(Some(Err(e))) => {
+                    // Inner NdjsonStream already yields a typed MotosanError; pass it
+                    // through unchanged (re-wrapping would double the "stream error:" prefix).
+                    return Poll::Ready(Some(Err(e)));
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
@@ -559,6 +563,20 @@ mod tests {
         ChatRequest::builder()
             .message(crate::types::Message::user("hi"))
             .build()
+    }
+
+    #[tokio::test]
+    async fn adapter_surfaces_inner_stream_error() {
+        use tokio_stream::StreamExt;
+
+        let inner = tokio_stream::iter(vec![Err(MotosanError::Stream("boom".to_string()))]);
+        let mut adapter = OllamaStreamAdapter {
+            inner: Box::pin(inner),
+            pending: std::collections::VecDeque::new(),
+        };
+
+        let item = adapter.next().await.expect("one item");
+        assert!(matches!(item, Err(MotosanError::Stream(msg)) if msg.contains("boom")));
     }
 
     #[test]

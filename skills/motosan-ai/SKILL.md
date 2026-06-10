@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.12.1 / Rust 0.19.0 / TypeScript 0.10.0
+Multi-provider LLM SDK — Python 0.12.1 / Rust 0.20.0 / TypeScript 0.10.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI
 
@@ -20,7 +20,7 @@ pip install "motosan-ai[anthropic,openai,gemini]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.19.0", features = ["anthropic"] }
+motosan-ai = { version = "0.20.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
@@ -125,7 +125,7 @@ if token.is_expired() { /* refresh */ }
 ## Key Design Decisions
 
 - **Python Client API parity (v0.10.0)**: `chat_with(request)` and `stream_with(request)` are the canonical full-`ChatRequest` paths. Use them with `ChatRequest.builder()` for `thinking`, `tool_choice`, `mcp_servers`, `system_blocks`, and `stop_sequences`. `stream_collect(messages, **kwargs)` and `stream_collect_with(request)` drive a stream to completion and return a `ChatResponse`. `chat_sync()` is deprecated; recommend `asyncio.run(client.chat(...))`.
-- **`BoxStream` (Rust)**: `Pin<Box<dyn Stream<Item = StreamEvent> + Send>>` — items are `StreamEvent` directly, NOT `Result<StreamEvent>`
+- **`BoxStream` (Rust 0.20+)**: `Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>` — unwrap each item with `let event = item?`; mid-stream provider/timeout errors surface as `Err(...)`
 - **Stream `done` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with `done == true`, even when the upstream provider closes without `[DONE]` and without any `finish_reason` chunk. Callers can rely on `if event.done { break; }` to terminate cleanly. The terminal event carries `stop_reason: Option<StopReason>` when the provider reports one (Anthropic/MiniMax `message_delta.stop_reason`, OpenAI `choices[0].finish_reason`); `None` otherwise. `collect_stream` honors the explicit reason and only falls back to a tool-calls heuristic when none was reported.
 - **`ChatRequest`**: Use builder pattern in Rust (`ChatRequest::builder().messages(...).build()`), dataclass in Python
 - **ThinkStripper**: Applied automatically in all `stream()` / `stream_with()` calls — no manual setup needed

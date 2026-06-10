@@ -132,7 +132,8 @@ async fn openai_stream_emits_deltas_and_done() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -171,7 +172,8 @@ async fn openai_stream_ignores_malformed_chunks() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -268,7 +270,8 @@ async fn openai_stream_falls_back_to_reasoning_content_and_skips_empty_chunks() 
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -406,7 +409,8 @@ async fn openai_stream_emits_tool_call_events() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -469,7 +473,8 @@ async fn openai_stream_propagates_finish_reason_max_tokens() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -510,7 +515,8 @@ async fn openai_stream_propagates_finish_reason_tool_calls() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -547,7 +553,8 @@ async fn openai_stream_propagates_finish_reason_stop() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -587,7 +594,8 @@ async fn openai_stream_eof_flush_when_done_sentinel_missing() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -627,7 +635,8 @@ async fn openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel(
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -670,7 +679,8 @@ async fn openai_stream_done_count_is_exactly_one_when_done_sentinel_present() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 

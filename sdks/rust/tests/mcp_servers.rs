@@ -447,7 +447,8 @@ async fn oauth_plus_mcp_stream_sends_single_merged_beta_header() {
 
     let mut stream = provider.stream(request).await.expect("stream");
     let mut text = String::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         text.push_str(&event.content);
     }
     assert_eq!(text, "streamed");

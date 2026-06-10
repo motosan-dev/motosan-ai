@@ -148,7 +148,8 @@ async fn stream_emits_usage_events_from_message_start_and_delta() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut usage_events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if event.event_type == StreamEventType::Usage {
             usage_events.push(event);
         }

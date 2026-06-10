@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.12.1 · Rust 0.19.0
+- Python 0.12.1 · Rust 0.20.0
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -19,7 +19,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.19.0", features = ["anthropic"] }
+motosan-ai = { version = "0.20.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -237,7 +237,8 @@ let resp = client.chat_with(request).await?;
 use futures_util::StreamExt;
 
 let mut stream = client.stream(vec![Message::user("Tell me a story")]).await?;
-while let Some(event) = stream.next().await {
+while let Some(item) = stream.next().await {
+    let event = item?;
     if !event.content.is_empty() {
         print!("{}", event.content);
     }
@@ -263,7 +264,8 @@ let request = ChatRequest::builder()
     .build();
 
 let mut stream = client.stream_with(request).await?;
-while let Some(event) = stream.next().await {
+while let Some(item) = stream.next().await {
+    let event = item?;
     match event.event_type {
         StreamEventType::Text => print!("{}", event.content),
         StreamEventType::ToolCallStart => { /* event.tool_call_id, event.tool_call_name */ },
@@ -296,10 +298,10 @@ Message::user_with_pdf_base64("prompt", "base64data")  // document (Anthropic on
 ```rust
 // stream() and stream_with() return:
 Result<BoxStream, MotosanError>
-// where BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>
+// where BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>
 ```
 
-Note: `StreamEvent` is yielded directly (not wrapped in `Result`). Consume with `futures_util::StreamExt::next()`.
+Note: stream items are fallible (Rust 0.20+). Use `let event = item?;` in `StreamExt::next()` loops; mid-stream provider/timeout errors surface as `Err(...)`.
 
 ### RetryPolicy
 

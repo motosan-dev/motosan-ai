@@ -136,7 +136,7 @@ impl Client {
         messages: Vec<Message>,
     ) -> Result<ChatResponse, MotosanError> {
         let stream = self.stream(messages).await?;
-        let mut response = crate::stream::collect_stream(stream).await;
+        let mut response = crate::stream::collect_stream(stream).await?;
         if let Some(model) = &self.model {
             response.model = model.clone();
         }
@@ -165,7 +165,7 @@ impl Client {
             .or_else(|| self.model.clone())
             .unwrap_or_default();
         let stream = self.stream_with(request).await?;
-        let mut response = crate::stream::collect_stream(stream).await;
+        let mut response = crate::stream::collect_stream(stream).await?;
         if response.model.is_empty() {
             response.model = model_hint;
         }
@@ -1043,6 +1043,7 @@ struct ReadTimeoutStream {
     inner: BoxStream,
     timeout: Duration,
     deadline: std::pin::Pin<Box<tokio::time::Sleep>>,
+    done: bool,
 }
 
 #[cfg(any(
@@ -1058,6 +1059,7 @@ impl ReadTimeoutStream {
             inner,
             timeout,
             deadline: Box::pin(tokio::time::sleep(timeout)),
+            done: false,
         }
     }
 }
@@ -1070,7 +1072,7 @@ impl ReadTimeoutStream {
     feature = "gemini",
 ))]
 impl futures_core::Stream for ReadTimeoutStream {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -1079,17 +1081,26 @@ impl futures_core::Stream for ReadTimeoutStream {
         use std::future::Future;
         use std::task::Poll;
 
+        if self.done {
+            return Poll::Ready(None);
+        }
+
         match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(event)) => {
+            Poll::Ready(Some(item)) => {
                 let timeout = self.timeout;
                 self.deadline
                     .as_mut()
                     .reset(tokio::time::Instant::now() + timeout);
-                Poll::Ready(Some(event))
+                Poll::Ready(Some(item))
             }
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => match self.deadline.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(None),
+                Poll::Ready(()) => {
+                    self.done = true;
+                    Poll::Ready(Some(Err(MotosanError::StreamReadTimeout(
+                        self.timeout.as_secs(),
+                    ))))
+                }
                 Poll::Pending => Poll::Pending,
             },
         }
@@ -1106,11 +1117,11 @@ struct ThinkStripperStream {
     // consumers that break on `event.done` (e.g. `collect_stream`) would
     // never observe the flushed tail — losing up to 6 trailing chars on
     // providers like claude-code that emit one Text event per turn.
-    pending: Option<StreamEvent>,
+    pending: Option<Result<StreamEvent, MotosanError>>,
 }
 
 impl futures_core::Stream for ThinkStripperStream {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,
@@ -1118,31 +1129,32 @@ impl futures_core::Stream for ThinkStripperStream {
     ) -> std::task::Poll<Option<Self::Item>> {
         use std::task::Poll;
         loop {
-            if let Some(ev) = self.pending.take() {
-                return Poll::Ready(Some(ev));
+            if let Some(item) = self.pending.take() {
+                return Poll::Ready(Some(item));
             }
             match self.inner.as_mut().poll_next(cx) {
-                Poll::Ready(Some(event)) => {
+                Poll::Ready(Some(Err(e))) => return Poll::Ready(Some(Err(e))),
+                Poll::Ready(Some(Ok(event))) => {
                     if event.event_type == StreamEventType::Text && !event.content.is_empty() {
                         let clean = self.stripper.feed(&event.content);
                         if clean.is_empty() {
                             continue; // buffering, skip this event
                         }
-                        return Poll::Ready(Some(StreamEvent::text(clean)));
+                        return Poll::Ready(Some(Ok(StreamEvent::text(clean))));
                     }
                     if event.done {
                         let remaining = self.stripper.flush();
                         if !remaining.is_empty() {
-                            self.pending = Some(event);
-                            return Poll::Ready(Some(StreamEvent::text(remaining)));
+                            self.pending = Some(Ok(event));
+                            return Poll::Ready(Some(Ok(StreamEvent::text(remaining))));
                         }
                     }
-                    return Poll::Ready(Some(event));
+                    return Poll::Ready(Some(Ok(event)));
                 }
                 Poll::Ready(None) => {
                     let remaining = self.stripper.flush();
                     if !remaining.is_empty() {
-                        return Poll::Ready(Some(StreamEvent::text(remaining)));
+                        return Poll::Ready(Some(Ok(StreamEvent::text(remaining))));
                     }
                     return Poll::Ready(None);
                 }
@@ -1159,13 +1171,14 @@ mod think_stripper_stream_tests {
     use tokio_stream::StreamExt;
 
     fn mock(events: Vec<StreamEvent>) -> BoxStream {
-        Box::pin(tokio_stream::iter(events))
+        Box::pin(tokio_stream::iter(events.into_iter().map(Ok)))
     }
 
     async fn collect_until_done(mut stream: BoxStream) -> String {
         let mut content = String::new();
         let mut saw_done = false;
-        while let Some(ev) = stream.next().await {
+        while let Some(item) = stream.next().await {
+            let ev = item.expect("mock stream should not fail");
             if ev.done {
                 saw_done = true;
                 break;
@@ -1212,8 +1225,8 @@ mod think_stripper_stream_tests {
         let raw = mock(vec![StreamEvent::text("ok"), StreamEvent::done()]);
         let mut wrapped = Client::wrap_with_think_stripper(raw);
         let mut events = Vec::new();
-        while let Some(ev) = wrapped.next().await {
-            events.push(ev);
+        while let Some(item) = wrapped.next().await {
+            events.push(item.expect("mock stream should not fail"));
         }
         // Must see both the buffered text and the terminal done event.
         assert!(events.iter().any(|e| e.content == "ok" && !e.done));
@@ -1241,7 +1254,8 @@ mod think_stripper_stream_tests {
         let mut content = String::new();
         let mut saw_usage = false;
         let mut saw_done = false;
-        while let Some(ev) = wrapped.next().await {
+        while let Some(item) = wrapped.next().await {
+            let ev = item.expect("mock stream should not fail");
             if ev.done {
                 saw_done = true;
                 break;
@@ -1272,14 +1286,41 @@ mod think_stripper_stream_tests {
         ]);
         let mut wrapped = Client::wrap_with_think_stripper(raw);
         let mut events = Vec::new();
-        while let Some(ev) = wrapped.next().await {
-            events.push(ev);
+        while let Some(item) = wrapped.next().await {
+            events.push(item.expect("mock stream should not fail"));
         }
         let done = events
             .iter()
             .find(|e| e.done)
             .expect("terminal done event must be observed");
         assert_eq!(done.stop_reason.as_ref(), Some(&StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn think_stripper_passes_stream_errors_through() {
+        let raw: BoxStream = Box::pin(tokio_stream::iter(vec![Err(MotosanError::Stream(
+            "boom".to_string(),
+        ))]));
+        let mut wrapped = Client::wrap_with_think_stripper(raw);
+        let item = wrapped.next().await.expect("error item should be yielded");
+        assert!(matches!(item, Err(MotosanError::Stream(msg)) if msg == "boom"));
+        assert!(wrapped.next().await.is_none());
+    }
+
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "openai",
+        feature = "minimax",
+        feature = "ollama_native",
+        feature = "gemini",
+    ))]
+    #[tokio::test]
+    async fn read_timeout_yields_error_once_then_ends() {
+        let raw: BoxStream = Box::pin(tokio_stream::pending());
+        let mut wrapped = ReadTimeoutStream::new(raw, Duration::from_millis(1));
+        let item = wrapped.next().await.expect("timeout error item");
+        assert!(matches!(item, Err(MotosanError::StreamReadTimeout(0))));
+        assert!(wrapped.next().await.is_none());
     }
 }
 

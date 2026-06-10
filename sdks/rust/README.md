@@ -32,7 +32,8 @@ let client = Client::builder()
     .build()?;
 
 let mut stream = client.stream(vec![Message::user("stream hello")]).await?;
-while let Some(event) = stream.next().await {
+while let Some(item) = stream.next().await {
+    let event = item?; // stream items are Result<StreamEvent, MotosanError> since 0.20
     if event.done {
         // Terminal event carries the provider-reported stop reason when available.
         if let Some(reason) = event.stop_reason {
