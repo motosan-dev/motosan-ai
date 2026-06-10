@@ -78,7 +78,8 @@ async fn live_stream_basic() {
         .expect("stream failed");
 
     let mut chunks = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if !event.content.is_empty() {
             chunks.push(event.content.clone());
         }
@@ -87,7 +88,8 @@ async fn live_stream_basic() {
         }
     }
     // Drain remaining after done (ThinkStripper may have buffered tail)
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if !event.content.is_empty() {
             chunks.push(event.content.clone());
         }
@@ -285,7 +287,8 @@ async fn live_stream_tool_use() {
     let mut stream = client.stream_with(request).await.expect("stream failed");
 
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event.clone());
         if event.done {
             break;
@@ -351,7 +354,8 @@ async fn live_stream_propagates_max_tokens_stop_reason() {
     let mut stream = client.stream_with(request).await.expect("stream failed");
 
     let mut events: Vec<motosan_ai::StreamEvent> = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -384,7 +388,7 @@ async fn live_collect_stream_records_max_tokens_on_chat_response() {
         .build();
 
     let stream = client.stream_with(request).await.expect("stream failed");
-    let response = motosan_ai::collect_stream(stream).await;
+    let response = motosan_ai::collect_stream(stream).await.unwrap();
 
     assert_eq!(
         response.stop_reason,
@@ -427,7 +431,8 @@ async fn live_opus_4_8_adaptive_thinking() {
     let mut answer = String::new();
     let mut done_seen = false;
 
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -474,7 +479,8 @@ async fn live_stream_thinking() {
     let mut answer = String::new();
     let mut done_seen = false;
 
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;

@@ -262,22 +262,21 @@ impl GeminiCliProvider {
 
                 match stream_json::parse_ndjson_line(&line) {
                     Some(stream_json::NdjsonAction::Text(event)) => {
-                        yield event;
+                        yield Ok(event);
                     }
                     Some(stream_json::NdjsonAction::SessionStarted(event)) => {
-                        yield event;
+                        yield Ok(event);
                     }
                     Some(stream_json::NdjsonAction::Result { usage, done }) => {
+                        let _ = done;
                         if let Some(usage_event) = usage {
-                            yield usage_event;
+                            yield Ok(usage_event);
                         }
-                        yield done;
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                         break;
                     }
-                    Some(stream_json::NdjsonAction::Error(_msg)) => {
-                        // StreamEvent has no error variant; other CLI
-                        // providers simply drop the stream here. Callers
-                        // that need the error surface should use `chat()`.
+                    Some(stream_json::NdjsonAction::Error(msg)) => {
+                        yield Err(MotosanError::ProviderError(msg));
                         break;
                     }
                     None => {}

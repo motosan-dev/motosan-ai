@@ -48,7 +48,8 @@ async fn ollama_native_integration_stream() {
     let mut content = String::new();
     let mut got_done = false;
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if event.done {
             got_done = true;
         } else {

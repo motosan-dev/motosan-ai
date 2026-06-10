@@ -482,16 +482,21 @@ impl ClaudeCodeProvider {
                 if let Some(action) = stream_json::parse_ndjson_line(&line) {
                     match action {
                         stream_json::NdjsonAction::Text(event) => {
-                            yield event;
+                            yield Ok(event);
                         }
                         stream_json::NdjsonAction::Result { usage, done, session_id } => {
+                            let _ = done;
                             if let Some(id) = session_id {
-                                yield crate::types::StreamEvent::session_started(id);
+                                yield Ok(crate::types::StreamEvent::session_started(id));
                             }
                             if let Some(usage_event) = usage {
-                                yield usage_event;
+                                yield Ok(usage_event);
                             }
-                            yield done;
+                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
+                            break;
+                        }
+                        stream_json::NdjsonAction::Error(msg) => {
+                            yield Err(MotosanError::ProviderError(msg));
                             break;
                         }
                     }

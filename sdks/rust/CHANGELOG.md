@@ -2,6 +2,13 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## 0.20.0 — 2026-06-10
+
+### Changed (BREAKING)
+- `BoxStream` items are now `Result<StreamEvent, MotosanError>` instead of bare `StreamEvent`.
+- `collect_stream()` now returns `Result<ChatResponse, MotosanError>` and propagates mid-stream provider errors.
+- HTTP and CLI provider stream errors now surface as `Err(...)` items instead of being swallowed or converted to silent terminal events. Migration: `while let Some(ev) = stream.next().await { ... }` → `while let Some(item) = stream.next().await { let ev = item?; ... }`.
+
 ## 0.19.0 — 2026-06-02
 
 ### Changed

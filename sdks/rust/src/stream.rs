@@ -1,8 +1,9 @@
+use crate::error::MotosanError;
 pub use crate::types::StreamEvent;
 use futures_core::Stream;
 use std::pin::Pin;
 
-pub type BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
+pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>;
 
 /// Collect a streaming response into a single [`ChatResponse`].
 ///
@@ -16,7 +17,7 @@ pub type BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
 ///
 /// ```ignore
 /// let stream = client.stream(messages).await?;
-/// let response = motosan_ai::collect_stream(stream).await;
+/// let response = motosan_ai::collect_stream(stream).await?;
 /// println!("{}", response.content);
 /// ```
 #[cfg(any(
@@ -26,7 +27,9 @@ pub type BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
     feature = "ollama_native",
     feature = "gemini",
 ))]
-pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse {
+pub async fn collect_stream(
+    mut stream: BoxStream,
+) -> Result<crate::types::ChatResponse, MotosanError> {
     use crate::types::{ChatResponse, StopReason, StreamEventType, ToolCall, Usage};
     use tokio_stream::StreamExt;
 
@@ -48,7 +51,8 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
     let mut thinking_delta_buf = String::new();
     let mut thinking_done_buf: Option<String> = None;
 
-    while let Some(event) = stream.next().await {
+    while let Some(item) = stream.next().await {
+        let event = item?;
         if event.session_id.is_some() {
             session_id = event.session_id.clone();
         }
@@ -125,7 +129,7 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         None => None,
     };
 
-    ChatResponse {
+    Ok(ChatResponse {
         content,
         thinking,
         model: String::new(),
@@ -138,7 +142,7 @@ pub async fn collect_stream(mut stream: BoxStream) -> crate::types::ChatResponse
         stop_reason,
         session_id,
         tool_calls,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -164,8 +168,8 @@ mod thinking_collect_tests {
             StreamEvent::text("42"),
             StreamEvent::done(),
         ];
-        let stream: BoxStream = Box::pin(iter(events));
-        let resp = collect_stream(stream).await;
+        let stream: BoxStream = Box::pin(iter(events.into_iter().map(Ok)));
+        let resp = collect_stream(stream).await.unwrap();
         assert_eq!(resp.content, "Answer: 42");
         assert_eq!(
             resp.thinking.as_deref(),
@@ -177,8 +181,8 @@ mod thinking_collect_tests {
     #[tokio::test]
     async fn collect_stream_no_thinking_keeps_thinking_none() {
         let events = vec![StreamEvent::text("hello"), StreamEvent::done()];
-        let stream: BoxStream = Box::pin(iter(events));
-        let resp = collect_stream(stream).await;
+        let stream: BoxStream = Box::pin(iter(events.into_iter().map(Ok)));
+        let resp = collect_stream(stream).await.unwrap();
         assert_eq!(resp.content, "hello");
         assert!(resp.thinking.is_none());
     }
@@ -194,9 +198,20 @@ mod thinking_collect_tests {
             StreamEvent::text("ok"),
             StreamEvent::done(),
         ];
-        let stream: BoxStream = Box::pin(iter(events));
-        let resp = collect_stream(stream).await;
+        let stream: BoxStream = Box::pin(iter(events.into_iter().map(Ok)));
+        let resp = collect_stream(stream).await.unwrap();
         assert_eq!(resp.thinking.as_deref(), Some("A B"));
         assert_eq!(resp.content, "ok");
+    }
+
+    #[tokio::test]
+    async fn collect_stream_returns_err_on_failing_item() {
+        let stream: BoxStream = Box::pin(iter(vec![Err(crate::error::MotosanError::Stream(
+            "boom".to_string(),
+        ))]));
+        let err = collect_stream(stream)
+            .await
+            .expect_err("stream errors must surface");
+        assert!(matches!(err, crate::error::MotosanError::Stream(msg) if msg == "boom"));
     }
 }

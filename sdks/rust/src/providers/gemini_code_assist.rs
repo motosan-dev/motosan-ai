@@ -111,7 +111,7 @@ impl ProviderImpl for GeminiCodeAssistProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let stream = self.stream(req).await?;
-        let mut response = collect_stream(stream).await;
+        let mut response = collect_stream(stream).await?;
         if response.model.is_empty() {
             response.model = model;
         }
@@ -187,14 +187,14 @@ struct CodeAssistStreamAdapter {
 }
 
 impl Stream for CodeAssistStreamAdapter {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if let Some(ev) = self.pending.pop_front() {
-            return Poll::Ready(Some(ev));
+            return Poll::Ready(Some(Ok(ev)));
         }
 
         loop {
@@ -308,11 +308,13 @@ impl Stream for CodeAssistStreamAdapter {
                     }
 
                     if let Some(first) = self.pending.pop_front() {
-                        return Poll::Ready(Some(first));
+                        return Poll::Ready(Some(Ok(first)));
                     }
                     continue;
                 }
-                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
@@ -418,6 +420,22 @@ mod tests {
         }
 
         #[tokio::test]
+        async fn adapter_surfaces_inner_stream_error() {
+            use eventsource_stream::EventStreamError;
+
+            let utf8 = String::from_utf8(vec![0xff]).unwrap_err();
+            let inner = tokio_stream::iter(vec![Err(EventStreamError::Utf8(utf8))]);
+            let mut adapter = CodeAssistStreamAdapter {
+                inner: Box::pin(inner),
+                pending: VecDeque::new(),
+                seen_tool_ids: std::collections::HashSet::new(),
+            };
+
+            let item = adapter.next().await.expect("one item");
+            assert!(matches!(item, Err(MotosanError::Stream(_))));
+        }
+
+        #[tokio::test]
         async fn adapter_emits_text_from_response_wrapper() {
             let json = r#"{"response":{"candidates":[{"content":{"parts":[{"text":"hi!"}],"role":"model"},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}}}"#;
             let mut adapter = CodeAssistStreamAdapter {
@@ -425,7 +443,7 @@ mod tests {
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
             };
-            let events: Vec<_> = (&mut adapter).collect().await;
+            let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let text: String = events
                 .iter()
                 .filter(|e| e.event_type == crate::types::StreamEventType::Text)
@@ -444,7 +462,7 @@ mod tests {
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
             };
-            let events: Vec<_> = (&mut adapter).collect().await;
+            let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let start = events
                 .iter()
                 .find(|e| e.event_type == crate::types::StreamEventType::ToolCallStart)
@@ -460,7 +478,7 @@ mod tests {
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
             };
-            let events: Vec<_> = (&mut adapter).collect().await;
+            let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let start = events
                 .iter()
                 .find(|e| e.event_type == crate::types::StreamEventType::ToolCallStart)

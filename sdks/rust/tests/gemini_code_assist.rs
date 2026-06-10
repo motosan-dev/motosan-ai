@@ -308,7 +308,7 @@ async fn stream_multi_chunk_text() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
 
     assert_eq!(resp.content, "Hello, world!");
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
@@ -340,7 +340,8 @@ async fn stream_tool_call_with_api_id() {
         .unwrap();
 
     let mut events = vec![];
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         events.push(ev);
     }
 
@@ -382,7 +383,8 @@ async fn stream_tool_call_without_id_generates_one() {
         .unwrap();
 
     let mut events = vec![];
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         events.push(ev);
     }
 
@@ -421,7 +423,7 @@ async fn stream_max_tokens() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
 
     assert_eq!(resp.stop_reason, StopReason::MaxTokens);
 }

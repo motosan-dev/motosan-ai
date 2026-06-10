@@ -20,14 +20,17 @@ pub enum ClaudeStreamEvent {
     Result {
         // The `result` field on a terminal `result` event duplicates what
         // we already yielded as Text from the preceding `assistant` event.
-        // Kept parsed so the variant matches the wire shape, deliberately
-        // ignored to avoid double-emission.
-        #[allow(dead_code)]
+        // Kept parsed so the variant matches the wire shape, and used as the
+        // provider error message when `is_error` is true.
         result: String,
         #[serde(default)]
         usage: Option<ClaudeStreamUsage>,
         #[serde(default)]
         session_id: Option<String>,
+        #[serde(default)]
+        is_error: bool,
+        #[serde(default)]
+        subtype: Option<String>,
     },
 
     #[serde(other)]
@@ -66,6 +69,7 @@ pub enum NdjsonAction {
         done: StreamEvent,
         session_id: Option<String>,
     },
+    Error(String),
 }
 
 /// Parse a single NDJSON line into an action.
@@ -92,8 +96,20 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
             }
         }
         ClaudeStreamEvent::Result {
-            usage, session_id, ..
+            result,
+            usage,
+            session_id,
+            is_error,
+            subtype,
         } => {
+            if is_error {
+                let msg = if result.is_empty() {
+                    subtype.unwrap_or_else(|| "claude CLI provider error".to_string())
+                } else {
+                    result
+                };
+                return Some(NdjsonAction::Error(msg));
+            }
             let usage_event = usage.map(|u| {
                 StreamEvent::usage(Usage {
                     input_tokens: u.input_tokens.unwrap_or(0) as u32,
@@ -154,6 +170,15 @@ mod tests {
                 assert_eq!(session_id.as_deref(), Some("sess_99"));
             }
             _ => panic!("expected Result action"),
+        }
+    }
+
+    #[test]
+    fn result_event_with_is_error_surfaces_error_action() {
+        let line = r#"{"type":"result","subtype":"success","is_error":true,"result":"bad model"}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::Error(msg) => assert!(msg.contains("bad model")),
+            _ => panic!("expected Error action"),
         }
     }
 

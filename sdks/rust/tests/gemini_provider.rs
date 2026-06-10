@@ -459,7 +459,7 @@ async fn stream_collects_multi_chunk_text() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     assert_eq!(resp.content, "Hello, world!");
     assert_eq!(resp.stop_reason, StopReason::EndTurn);
     assert_eq!(resp.usage.input_tokens, 4);
@@ -493,7 +493,8 @@ async fn stream_emits_correct_event_types() {
         .unwrap();
 
     let mut event_types = vec![];
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         event_types.push(ev.event_type.clone());
     }
 
@@ -524,7 +525,8 @@ async fn stream_with_tool_call_events() {
         .unwrap();
 
     let mut events = vec![];
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         events.push(ev);
     }
 
@@ -566,7 +568,7 @@ async fn stream_tool_call_collect_produces_tool_use_stop_reason() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     assert_eq!(resp.stop_reason, StopReason::ToolUse);
     assert_eq!(resp.tool_calls.len(), 1);
     assert_eq!(resp.tool_calls[0].name, "foo");
@@ -593,7 +595,7 @@ async fn stream_max_tokens_stop_reason() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     assert_eq!(resp.stop_reason, StopReason::MaxTokens);
 }
 
@@ -660,6 +662,6 @@ async fn stream_retries_500_then_succeeds() {
         )
         .await
         .unwrap();
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     assert_eq!(resp.content, "Hi!");
 }

@@ -2,11 +2,11 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.19.0 · Python v0.12.1 (PyPI)
+Rust v0.20.0 · Python v0.12.1 (PyPI)
 
 ## Current Rust Tool Schema Note
 
-Rust 0.19.0 keeps the 0.18 ToolSchema API and bumps the public `motosan-agent-primitives` dependency to 0.4.0 so downstream bridge crates share the Reviewer-era primitive types. Rust 0.18.0 removes the optional `agent-tool` feature. `types::Tool` now
+Rust 0.20.0 keeps the 0.18 ToolSchema API and the public `motosan-agent-primitives` dependency at 0.4.0 so downstream bridge crates share the Reviewer-era primitive types. Rust 0.18.0 removes the optional `agent-tool` feature. `types::Tool` now
 composes `motosan_agent_primitives::ToolSchema` (also re-exported as
 `motosan_ai::ToolSchema`) with `#[serde(flatten)]` and
 `Deref<Target = ToolSchema>`; `ChatRequestBuilder::tool_defs` is replaced by
@@ -82,7 +82,9 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 
 **ThinkStripper** — stateful, applied at `Client.stream()` level. Handles cross-chunk `<think>` tags. Do not strip at the provider level.
 
-**Stream read timeout** — applied in `dispatch_stream()` wrapping the provider's BoxStream. Not inside individual providers.
+**Fallible streams (Rust 0.20+)** — `BoxStream` items are `Result<StreamEvent, MotosanError>`; consumers should `let event = item?` inside `while let Some(item) = stream.next().await` loops. Mid-stream provider/timeout errors surface as `Err`, not sentinel events.
+
+**Stream read timeout** — applied in `dispatch_stream()` wrapping the provider's BoxStream. Not inside individual providers; timeout surfaces as `Err(MotosanError::StreamReadTimeout(_))`.
 
 ## Releasing
 

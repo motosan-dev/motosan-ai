@@ -463,22 +463,21 @@ impl CodexCliProvider {
                 if let Some(action) = stream_json::parse_ndjson_line(&line) {
                     match action {
                         stream_json::NdjsonAction::Text(event) => {
-                            yield event;
+                            yield Ok(event);
                         }
                         stream_json::NdjsonAction::SessionStarted(event) => {
-                            yield event;
+                            yield Ok(event);
                         }
                         stream_json::NdjsonAction::Done { usage, done } => {
+                            let _ = done;
                             if let Some(usage_event) = usage {
-                                yield usage_event;
+                                yield Ok(usage_event);
                             }
-                            yield done;
+                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                             break;
                         }
-                        stream_json::NdjsonAction::Error(_msg) => {
-                            // Terminate the stream; callers can inspect
-                            // exit status via their own monitoring if needed.
-                            yield crate::types::StreamEvent::done();
+                        stream_json::NdjsonAction::Error(msg) => {
+                            yield Err(MotosanError::ProviderError(msg));
                             break;
                         }
                     }
@@ -633,7 +632,8 @@ mod tests {
         let mut content = String::new();
         let mut got_usage = false;
         let mut got_done = false;
-        while let Some(event) = stream.next().await {
+        while let Some(item) = stream.next().await {
+            let event = item.expect("stream item should not fail");
             if event.done {
                 got_done = true;
                 break;

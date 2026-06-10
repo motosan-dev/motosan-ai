@@ -36,7 +36,8 @@ async fn anthropic_stream_emits_content_and_done_event() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -83,7 +84,8 @@ async fn anthropic_stream_ignores_unknown_and_malformed_events() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -125,8 +127,16 @@ async fn anthropic_stream_setup_token_uses_bearer_and_oauth_beta_header() {
         .build();
 
     let mut stream = provider.stream(request).await.expect("stream response");
-    let first = stream.next().await.expect("first event");
-    let done = stream.next().await.expect("done event");
+    let first = stream
+        .next()
+        .await
+        .expect("first event")
+        .expect("stream item should not fail");
+    let done = stream
+        .next()
+        .await
+        .expect("done event")
+        .expect("stream item should not fail");
 
     assert_eq!(first.content, "ok");
     assert!(done.done);
@@ -166,7 +176,8 @@ async fn anthropic_stream_with_system_and_max_tokens() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -211,7 +222,8 @@ async fn stream_with_passes_system_and_max_tokens_to_provider() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -251,7 +263,11 @@ async fn client_stream_with_dispatches_to_provider() {
         .stream(request)
         .await
         .expect("stream_with response");
-    let first = stream.next().await.expect("first event");
+    let first = stream
+        .next()
+        .await
+        .expect("first event")
+        .expect("stream item should not fail");
     assert_eq!(first.content, "hi");
 }
 
@@ -301,7 +317,8 @@ async fn anthropic_stream_emits_tool_use_events() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut received = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         received.push(event);
     }
 
@@ -386,7 +403,8 @@ async fn anthropic_stream_with_message_delta_stop_reason(
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
     mock.assert_async().await;
@@ -453,7 +471,8 @@ async fn thinking_block_start_then_immediate_stop_emits_nothing_yet() {
 
     let mut text_seen = String::new();
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -502,7 +521,8 @@ async fn thinking_delta_events_emitted_in_order() {
 
     let mut thinking_chunks: Vec<String> = Vec::new();
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -562,7 +582,8 @@ async fn thinking_done_emitted_with_full_text_after_deltas() {
 
     let mut labels: Vec<String> = Vec::new();
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -622,7 +643,8 @@ async fn thinking_done_not_emitted_for_non_thinking_block_stop() {
 
     let mut saw_thinking_done = false;
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -674,7 +696,8 @@ async fn redacted_thinking_block_is_silently_consumed() {
     let mut events: Vec<StreamEventType> = Vec::new();
     let mut content = String::new();
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;
@@ -727,7 +750,8 @@ async fn orphan_thinking_delta_without_start_does_not_crash() {
     let mut saw_thinking_delta = false;
     let mut saw_thinking_done = false;
     let mut done_seen = false;
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         if ev.done {
             done_seen = true;
             break;

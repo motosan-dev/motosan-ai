@@ -108,7 +108,7 @@ async fn live_stream_collect() {
         .await
         .expect("stream 失败");
 
-    let resp = motosan_ai::stream::collect_stream(stream).await;
+    let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     println!("content: {:?}", resp.content);
     println!("stop_reason: {:?}", resp.stop_reason);
     println!("usage: {:?}", resp.usage);
@@ -141,7 +141,8 @@ async fn live_stream_event_types() {
     let mut saw_usage = false;
     let mut full_text = String::new();
 
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         match ev.event_type {
             StreamEventType::Text => {
                 text_chunks += 1;

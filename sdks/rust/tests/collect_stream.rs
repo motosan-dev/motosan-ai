@@ -11,7 +11,18 @@ use serde_json::json;
 // ---------------------------------------------------------------------------
 
 fn boxed_stream(events: Vec<StreamEvent>) -> motosan_ai::BoxStream {
-    Box::pin(tokio_stream::iter(events))
+    Box::pin(tokio_stream::iter(events.into_iter().map(Ok)))
+}
+
+#[tokio::test]
+async fn collect_stream_returns_err_on_failing_stream() {
+    let stream: motosan_ai::BoxStream = Box::pin(tokio_stream::iter(vec![Err(
+        motosan_ai::MotosanError::Stream("boom".to_string()),
+    )]));
+    let err = collect_stream(stream)
+        .await
+        .expect_err("collect_stream must surface stream errors");
+    assert!(matches!(err, motosan_ai::MotosanError::Stream(msg) if msg == "boom"));
 }
 
 #[tokio::test]
@@ -21,7 +32,7 @@ async fn collect_stream_text_only() {
         StreamEvent::text(", world!"),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.content, "Hello, world!");
     assert!(response.tool_calls.is_empty());
@@ -36,7 +47,7 @@ async fn collect_stream_preserves_session_id_without_text() {
         StreamEvent::text("hello"),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.content, "hello");
     assert_eq!(response.session_id.as_deref(), Some("sid-collect"));
@@ -52,7 +63,7 @@ async fn collect_stream_with_tool_calls() {
         StreamEvent::tool_call_end_with_id("toolu_1"),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.content, "Let me check");
     assert_eq!(response.tool_calls.len(), 1);
@@ -73,7 +84,7 @@ async fn collect_stream_multiple_tool_calls() {
         StreamEvent::tool_call_end(),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.tool_calls.len(), 2);
     assert_eq!(response.tool_calls[0].name, "tool_a");
@@ -99,7 +110,7 @@ async fn collect_stream_with_usage_events() {
         }),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.usage.input_tokens, 100);
     assert_eq!(response.usage.output_tokens, 42);
@@ -109,7 +120,7 @@ async fn collect_stream_with_usage_events() {
 #[tokio::test]
 async fn collect_stream_empty_stream() {
     let events = vec![StreamEvent::done()];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.content, "");
     assert!(response.tool_calls.is_empty());
@@ -119,7 +130,7 @@ async fn collect_stream_empty_stream() {
 #[tokio::test]
 async fn collect_stream_model_is_empty_by_default() {
     let events = vec![StreamEvent::text("x"), StreamEvent::done()];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
     assert_eq!(response.model, "");
 }
 
@@ -199,7 +210,7 @@ async fn stream_then_collect_returns_chat_response() {
         .build();
 
     let stream = provider.stream(request).await.expect("stream response");
-    let response = collect_stream(stream).await;
+    let response = collect_stream(stream).await.unwrap();
 
     assert_eq!(response.content, "collected");
     assert_eq!(response.usage.input_tokens, 15);
@@ -250,7 +261,7 @@ async fn stream_collect_with_tool_calls() {
         .build();
 
     let stream = provider.stream(request).await.expect("stream response");
-    let response = collect_stream(stream).await;
+    let response = collect_stream(stream).await.unwrap();
 
     assert_eq!(response.content, "checking");
     assert_eq!(response.tool_calls.len(), 1);
@@ -319,7 +330,7 @@ async fn chat_vs_stream_collect_consistency() {
 
     let stream_req = ChatRequest::builder().message(Message::user("hi")).build();
     let stream = provider.stream(stream_req).await.expect("stream response");
-    let mut stream_response = collect_stream(stream).await;
+    let mut stream_response = collect_stream(stream).await.unwrap();
     // collect_stream sets model to empty; match it for comparison
     stream_response.model = chat_response.model.clone();
 
@@ -350,7 +361,7 @@ async fn collect_stream_propagates_explicit_stop_reason() {
         StreamEvent::text("partial"),
         StreamEvent::done_with_stop_reason(StopReason::MaxTokens),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.content, "partial");
     assert_eq!(response.stop_reason, StopReason::MaxTokens);
@@ -365,7 +376,7 @@ async fn collect_stream_falls_back_to_heuristic_when_no_explicit_reason() {
         StreamEvent::tool_call_end(),
         StreamEvent::done(),
     ];
-    let response = collect_stream(boxed_stream(events)).await;
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
 
     assert_eq!(response.stop_reason, StopReason::ToolUse);
 }
@@ -398,8 +409,8 @@ async fn anthropic_stream_emits_max_tokens_stop_reason() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events: Vec<StreamEvent> = Vec::new();
-    while let Some(event) = tokio_stream::StreamExt::next(&mut stream).await {
-        events.push(event);
+    while let Some(item) = tokio_stream::StreamExt::next(&mut stream).await {
+        events.push(item.expect("stream item should not fail"));
     }
 
     // Last event is the terminal done, and it must carry MaxTokens.
@@ -409,7 +420,7 @@ async fn anthropic_stream_emits_max_tokens_stop_reason() {
 
     // Replay the captured events through collect_stream — same MaxTokens
     // should land on ChatResponse.stop_reason via the explicit-reason path.
-    let synthesized = collect_stream(boxed_stream(events)).await;
+    let synthesized = collect_stream(boxed_stream(events)).await.unwrap();
     assert_eq!(synthesized.stop_reason, StopReason::MaxTokens);
     assert_eq!(synthesized.content, "truncated");
 

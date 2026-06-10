@@ -77,7 +77,8 @@ async fn ollama_native_stream_emits_deltas_and_done() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -303,7 +304,8 @@ async fn ollama_native_stream_with_thinking() {
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
 
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -364,7 +366,8 @@ async fn ollama_native_stream_single_tool_call_emits_3_events() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 
@@ -428,7 +431,8 @@ async fn ollama_native_stream_two_tool_calls_emits_6_events() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         events.push(event);
     }
 

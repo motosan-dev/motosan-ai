@@ -302,7 +302,8 @@ async fn integration_client_dispatches_to_claude_code_stream() {
         .expect("claude stream should succeed via Client dispatch");
 
     let mut saw_non_empty_text = false;
-    while let Some(event) = stream.next().await {
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
         if matches!(event.event_type, StreamEventType::Text) && !event.content.trim().is_empty() {
             saw_non_empty_text = true;
         }

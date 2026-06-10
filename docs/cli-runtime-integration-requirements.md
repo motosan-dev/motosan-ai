@@ -1,7 +1,7 @@
 # CliRuntime (§6.2) — motosan-ai Integration Requirements
 
 > **Status:** planning record for the **deferred** v1.x `CliRuntime`. Not implemented in v1.
-> **Basis:** verified source audit of **motosan-ai 0.19.0** (`../motosan-ai/sdks/rust`), 2026-06-09.
+> **Basis:** verified source audit of **motosan-ai 0.20.0** (`../motosan-ai/sdks/rust`), 2026-06-10.
 > **Purpose:** capture exactly what `motosan-ai`'s CLI providers must add before `CliRuntime` is viable, so the work can be scheduled / handed to the motosan-ai maintainers. CliRuntime's feasibility is **gated on these provider capabilities** — that is the concrete reason v1 shipped `LoopRuntime` first and pushed CliRuntime to v1.x.
 
 ## 1. What CliRuntime is, and why it depends on motosan-ai
@@ -15,7 +15,7 @@ The §6 `AgentRuntime` contract has two load-bearing requirements that LoopRunti
 
 Both depend entirely on what each provider's flags expose. The three providers' capabilities are **inconsistent**, and (per the audit) **no single provider currently satisfies both `cwd` and `session` through the SDK**.
 
-## 2. Verified capability matrix (motosan-ai 0.19.0)
+## 2. Verified capability matrix (motosan-ai 0.20.0)
 
 | Capability | **ClaudeCode** (`claude-code`) | **CodexCli** (`codex-cli`) | **GeminiCli** (`gemini-cli`) |
 |---|---|---|---|
@@ -28,7 +28,7 @@ Both depend entirely on what each provider's flags expose. The three providers' 
 | ToolCall / ToolResult events | ❌ dropped (`tool_use` → Other) | ❌ dropped (command/mcp/file-change → Other) | ❌ never parsed |
 | Thinking events | ❌ dropped | ❌ dropped | n/a (headless emits none) |
 | `started` synthetic event | ❌ (none in SDK) | ❌ | ❌ |
-| Stream error surfacing | (use blocking path) | ❌ swallowed → silent `done` | ❌ silent stream break (no error variant) |
+| Stream error surfacing | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) |
 | Stop reason | plain `done()` (no reason) | none on stream | hardcoded `EndTurn` (chat) |
 
 **Cross-cutting facts (all three providers):**
@@ -63,7 +63,7 @@ v1's security model is `SecretResolver → ctx.secrets` (per-run key, never pers
 ### P2 — agent-backend quality
 - **P2.1 — `env`/`envs()` injection** on all providers, so a per-run `SecretBundle` can reach the child (aligns with the org's `SecretResolver` model).
 - **P2.2 — ToolCall / ToolResult stream events** (currently all dropped) so a runtime can observe/gate tool use.
-- **P2.3 — surface stream errors + a real `stop_reason`** (Codex/Gemini currently end silently on error); **configurable timeout** (now hardcoded, blocking-path only); a **cancel handle** (now `kill_on_drop` only).
+- **P2.3 — real `stop_reason` refinements**, **configurable timeout** (now hardcoded, blocking-path only), and a **cancel handle** (now `kill_on_drop` only). Stream errors now surface as `Err` items in Rust 0.20.
 - **P2.4 — (structural) allow per-`ChatRequest` overrides** for `cwd`/session/budget, to avoid rebuilding the provider every run.
 
 > **Design note — where `cwd`/session should live (fork for the motosan-ai maintainers).**

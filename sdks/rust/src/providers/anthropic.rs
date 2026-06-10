@@ -458,7 +458,7 @@ impl ProviderImpl for AnthropicProvider {
         // Redirect to stream path and collect the full response.
         if is_oauth {
             let stream = self.stream(req).await?;
-            let mut response = crate::stream::collect_stream(stream).await;
+            let mut response = crate::stream::collect_stream(stream).await?;
             response.model = self.model.clone();
             return Ok(response);
         }
@@ -890,7 +890,7 @@ struct AnthropicStreamAdapter {
 }
 
 impl Stream for AnthropicStreamAdapter {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -898,7 +898,7 @@ impl Stream for AnthropicStreamAdapter {
     ) -> Poll<Option<Self::Item>> {
         // Drain any pending events first
         if let Some(event) = self.pending.pop_front() {
-            return Poll::Ready(Some(event));
+            return Poll::Ready(Some(Ok(event)));
         }
 
         loop {
@@ -935,14 +935,14 @@ impl Stream for AnthropicStreamAdapter {
                                     .get("cache_read_input_tokens")
                                     .and_then(Value::as_u64)
                                     .map(|v| v as u32);
-                                return Poll::Ready(Some(StreamEvent::usage(
+                                return Poll::Ready(Some(Ok(StreamEvent::usage(
                                     crate::types::Usage {
                                         input_tokens,
                                         output_tokens,
                                         cache_creation_input_tokens: cache_creation,
                                         cache_read_input_tokens: cache_read,
                                     },
-                                )));
+                                ))));
                             }
                             continue;
                         }
@@ -976,14 +976,14 @@ impl Stream for AnthropicStreamAdapter {
                                     .and_then(Value::as_u64)
                                     .unwrap_or(0)
                                     as u32;
-                                return Poll::Ready(Some(StreamEvent::usage(
+                                return Poll::Ready(Some(Ok(StreamEvent::usage(
                                     crate::types::Usage {
                                         input_tokens,
                                         output_tokens,
                                         cache_creation_input_tokens: None,
                                         cache_read_input_tokens: None,
                                     },
-                                )));
+                                ))));
                             }
                             continue;
                         }
@@ -1003,8 +1003,8 @@ impl Stream for AnthropicStreamAdapter {
                                             .and_then(Value::as_str)
                                             .unwrap_or_default();
                                         self.current_tool_id = Some(id.to_string());
-                                        return Poll::Ready(Some(StreamEvent::tool_call_start(
-                                            id, name,
+                                        return Poll::Ready(Some(Ok(
+                                            StreamEvent::tool_call_start(id, name),
                                         )));
                                     }
                                     "thinking" => {
@@ -1041,9 +1041,9 @@ impl Stream for AnthropicStreamAdapter {
                                     if !partial.is_empty() {
                                         let id =
                                             self.current_tool_id.as_deref().unwrap_or_default();
-                                        return Poll::Ready(Some(
+                                        return Poll::Ready(Some(Ok(
                                             StreamEvent::tool_call_args_with_id(id, partial),
-                                        ));
+                                        )));
                                     }
                                     continue;
                                 }
@@ -1063,7 +1063,9 @@ impl Stream for AnthropicStreamAdapter {
                                     if let Some(buf) = self.current_thinking_buf.as_mut() {
                                         buf.push_str(text);
                                     }
-                                    return Poll::Ready(Some(StreamEvent::thinking_delta(text)));
+                                    return Poll::Ready(Some(Ok(StreamEvent::thinking_delta(
+                                        text,
+                                    ))));
                                 }
                                 Some("signature_delta") => {
                                     // Cryptographic signature for re-feeding thinking
@@ -1079,7 +1081,7 @@ impl Stream for AnthropicStreamAdapter {
                                         .and_then(Value::as_str)
                                         .unwrap_or_default();
                                     if !text.is_empty() {
-                                        return Poll::Ready(Some(StreamEvent::text(text)));
+                                        return Poll::Ready(Some(Ok(StreamEvent::text(text))));
                                     }
                                     continue;
                                 }
@@ -1087,7 +1089,9 @@ impl Stream for AnthropicStreamAdapter {
                         }
                         "content_block_stop" => {
                             if let Some(id) = self.current_tool_id.take() {
-                                return Poll::Ready(Some(StreamEvent::tool_call_end_with_id(id)));
+                                return Poll::Ready(Some(Ok(StreamEvent::tool_call_end_with_id(
+                                    id,
+                                ))));
                             }
                             if let Some(buf) = self.current_thinking_buf.take() {
                                 // Closing a thinking block: emit ThinkingDone with
@@ -1097,7 +1101,7 @@ impl Stream for AnthropicStreamAdapter {
                                 // thinking block" by the presence/absence of the
                                 // event. This matches the contract documented on
                                 // StreamEventType::ThinkingDone.
-                                return Poll::Ready(Some(StreamEvent::thinking_done(buf)));
+                                return Poll::Ready(Some(Ok(StreamEvent::thinking_done(buf))));
                             }
                             continue;
                         }
@@ -1106,12 +1110,14 @@ impl Stream for AnthropicStreamAdapter {
                                 Some(reason) => StreamEvent::done_with_stop_reason(reason),
                                 None => StreamEvent::done(),
                             };
-                            return Poll::Ready(Some(done));
+                            return Poll::Ready(Some(Ok(done)));
                         }
                         _ => continue,
                     }
                 }
-                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
@@ -1122,6 +1128,25 @@ impl Stream for AnthropicStreamAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn adapter_surfaces_inner_stream_error() {
+        use eventsource_stream::EventStreamError;
+        use tokio_stream::StreamExt;
+
+        let utf8 = String::from_utf8(vec![0xff]).unwrap_err();
+        let inner = tokio_stream::iter(vec![Err(EventStreamError::Utf8(utf8))]);
+        let mut adapter = AnthropicStreamAdapter {
+            inner: Box::pin(inner),
+            pending: std::collections::VecDeque::new(),
+            current_tool_id: None,
+            current_stop_reason: None,
+            current_thinking_buf: None,
+        };
+
+        let item = adapter.next().await.expect("one item");
+        assert!(matches!(item, Err(MotosanError::Stream(_))));
+    }
 
     #[test]
     fn cached_user_message_serializes_cache_control_both_auth_modes() {

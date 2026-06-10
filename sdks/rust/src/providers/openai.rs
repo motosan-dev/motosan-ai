@@ -777,14 +777,14 @@ pub(crate) fn map_finish_reason(reason: &str) -> StopReason {
 }
 
 impl Stream for OpenAIStreamAdapter {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if let Some(event) = self.pending.pop_front() {
-            return Poll::Ready(Some(event));
+            return Poll::Ready(Some(Ok(event)));
         }
 
         loop {
@@ -792,11 +792,13 @@ impl Stream for OpenAIStreamAdapter {
                 Poll::Ready(Some(Ok(event))) => {
                     self.parse_event(&event.data);
                     if let Some(evt) = self.pending.pop_front() {
-                        return Poll::Ready(Some(evt));
+                        return Poll::Ready(Some(Ok(evt)));
                     }
                     continue;
                 }
-                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                }
                 Poll::Ready(None) => {
                     // End of upstream stream. Guarantee the consumer always
                     // sees exactly one terminal `done` event, even when the
@@ -809,7 +811,7 @@ impl Stream for OpenAIStreamAdapter {
                             Some(reason) => StreamEvent::done_with_stop_reason(reason),
                             None => StreamEvent::done(),
                         };
-                        return Poll::Ready(Some(done));
+                        return Poll::Ready(Some(Ok(done)));
                     }
                     return Poll::Ready(None);
                 }
@@ -829,5 +831,24 @@ mod tests {
         let caps = p.capabilities();
         assert!(caps.supports_image);
         assert!(!caps.supports_document);
+    }
+
+    #[tokio::test]
+    async fn adapter_surfaces_inner_stream_error() {
+        use eventsource_stream::EventStreamError;
+        use tokio_stream::StreamExt;
+
+        let utf8 = String::from_utf8(vec![0xff]).unwrap_err();
+        let inner = tokio_stream::iter(vec![Err(EventStreamError::Utf8(utf8))]);
+        let mut adapter = OpenAIStreamAdapter {
+            inner: Box::pin(inner),
+            pending: std::collections::VecDeque::new(),
+            seen_tool_ids: Vec::new(),
+            pending_stop_reason: None,
+            done_emitted: false,
+        };
+
+        let item = adapter.next().await.expect("one item");
+        assert!(matches!(item, Err(MotosanError::Stream(_))));
     }
 }

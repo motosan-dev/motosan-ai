@@ -109,7 +109,8 @@ async fn live_stream_basic() {
     let mut saw_usage = false;
     let mut full_text = String::new();
 
-    while let Some(ev) = stream.next().await {
+    while let Some(ev_item) = stream.next().await {
+        let ev = ev_item.expect("stream item should not fail");
         match ev.event_type {
             StreamEventType::Text => {
                 text_chunks += 1;

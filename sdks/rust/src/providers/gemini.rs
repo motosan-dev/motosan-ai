@@ -431,14 +431,14 @@ struct GeminiStreamAdapter {
 }
 
 impl Stream for GeminiStreamAdapter {
-    type Item = StreamEvent;
+    type Item = Result<StreamEvent, MotosanError>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Option<Self::Item>> {
         if let Some(ev) = self.pending.pop_front() {
-            return Poll::Ready(Some(ev));
+            return Poll::Ready(Some(Ok(ev)));
         }
 
         loop {
@@ -523,11 +523,13 @@ impl Stream for GeminiStreamAdapter {
                     }
 
                     if let Some(first) = self.pending.pop_front() {
-                        return Poll::Ready(Some(first));
+                        return Poll::Ready(Some(Ok(first)));
                     }
                     continue;
                 }
-                Poll::Ready(Some(Err(_))) => continue,
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
@@ -559,6 +561,22 @@ mod tests {
         let caps = p.capabilities();
         assert!(caps.supports_image);
         assert!(!caps.supports_document);
+    }
+
+    #[tokio::test]
+    async fn adapter_surfaces_inner_stream_error() {
+        use eventsource_stream::EventStreamError;
+        use tokio_stream::StreamExt;
+
+        let utf8 = String::from_utf8(vec![0xff]).unwrap_err();
+        let inner = tokio_stream::iter(vec![Err(EventStreamError::Utf8(utf8))]);
+        let mut adapter = GeminiStreamAdapter {
+            inner: Box::pin(inner),
+            pending: VecDeque::new(),
+        };
+
+        let item = adapter.next().await.expect("one item");
+        assert!(matches!(item, Err(MotosanError::Stream(_))));
     }
 
     #[test]
@@ -1147,7 +1165,7 @@ mod tests {
                 .messages(vec![Message::user("Hello")])
                 .build();
             let stream = provider.stream(req).await.unwrap();
-            let resp = crate::stream::collect_stream(stream).await;
+            let resp = crate::stream::collect_stream(stream).await.unwrap();
             assert_eq!(resp.content, "Hi there");
             assert_eq!(resp.stop_reason, StopReason::EndTurn);
             mock.assert_async().await;
