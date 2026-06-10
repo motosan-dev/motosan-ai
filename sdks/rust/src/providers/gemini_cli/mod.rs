@@ -18,15 +18,24 @@
 //! Gemini CLI has no `--system-prompt` flag, so the system prompt is
 //! merged into the stdin payload as a plain prefix (separated by a
 //! blank line). This matches how the CLI treats `GEMINI.md` context.
+//!
+//! # Cancellation
+//!
+//! There is no explicit cancel handle. Spawned CLI children use
+//! `kill_on_drop(true)`: dropping the `chat()` future or returned [`BoxStream`]
+//! kills and reaps the child process. Stream drivers own and reap the child at the tail;
+//! use [`GeminiCliProvider::timeout`] to bound runtime. A stalled stream read
+//! yields `Err(MotosanError::StreamReadTimeout(_))` and terminates the stream.
 
 pub mod prompt;
 mod spawn;
 mod stream_json;
 
-pub use spawn::ApprovalMode;
+pub use spawn::{ApprovalMode, DEFAULT_TIMEOUT};
 
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::error::MotosanError;
 use crate::providers::redacted_envs::RedactedEnvs;
@@ -66,6 +75,9 @@ pub struct GeminiCliProvider {
     /// Working directory for the spawned `gemini` process. When set, the child
     /// runs with this cwd (`Command::current_dir`) instead of inheriting the parent's.
     pub cwd: Option<PathBuf>,
+    /// Per-invocation timeout for `chat()` and the stream read loop.
+    /// `None` disables the timeout.
+    pub timeout: Option<Duration>,
 }
 
 impl GeminiCliProvider {
@@ -88,6 +100,7 @@ impl GeminiCliProvider {
             resume: None,
             envs: RedactedEnvs::default(),
             cwd: None,
+            timeout: Some(spawn::DEFAULT_TIMEOUT),
         }
     }
 
@@ -176,6 +189,19 @@ impl GeminiCliProvider {
         self
     }
 
+    /// Override the per-invocation timeout (applies to `chat()` and the
+    /// `stream()` read loop).
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = Some(dur);
+        self
+    }
+
+    /// Disable the invocation timeout (run until the child exits).
+    pub fn no_timeout(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Inject one environment variable into the spawned subprocess (repeatable).
     /// The value is a secret and is never logged.
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -210,6 +236,7 @@ impl GeminiCliProvider {
             resume: self.resume.clone(),
             envs: self.envs.to_vec(),
             cwd: self.cwd.clone(),
+            timeout: self.timeout,
         }
     }
 
@@ -238,7 +265,7 @@ impl GeminiCliProvider {
     /// Returns a [`BoxStream`] that yields [`StreamEvent`](crate::types::StreamEvent)
     /// items parsed from the NDJSON events Gemini CLI emits on stdout.
     pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::{AsyncWriteExt, BufReader};
         use tokio::process::Command;
 
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
@@ -280,49 +307,99 @@ impl GeminiCliProvider {
 
         let reader = BufReader::new(stdout);
 
-        let stream = async_stream::stream! {
-            let mut lines = reader.lines();
-            let mut saw_tool_call = false;
+        Ok(drive_lines(Some(child), reader, config.timeout))
+    }
+}
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
+pub(crate) fn drive_lines<R>(
+    mut child: Option<tokio::process::Child>,
+    reader: R,
+    read_timeout: Option<Duration>,
+) -> BoxStream
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncBufReadExt;
 
-                match stream_json::parse_ndjson_line(&line) {
-                    Some(stream_json::NdjsonAction::Text(event)) => {
-                        yield Ok(event);
-                    }
-                    Some(stream_json::NdjsonAction::SessionStarted(event)) => {
-                        yield Ok(event);
-                    }
-                    Some(stream_json::NdjsonAction::ToolCalls(events)) => {
-                        saw_tool_call = true;
-                        for event in events {
-                            yield Ok(event);
-                        }
-                    }
-                    Some(stream_json::NdjsonAction::Result { usage, done }) => {
-                        let _ = done;
-                        if let Some(usage_event) = usage {
-                            yield Ok(usage_event);
-                        }
-                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+    Box::pin(async_stream::stream! {
+        let mut lines = reader.lines();
+        let mut saw_tool_call = false;
+
+        loop {
+            let next = match read_timeout {
+                Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        reap_child(&mut child, true).await;
+                        yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
                         break;
                     }
-                    Some(stream_json::NdjsonAction::Error(msg)) => {
-                        yield Err(MotosanError::ProviderError(msg));
-                        break;
-                    }
-                    None => {}
-                }
+                },
+                None => lines.next_line().await,
+            };
+
+            let line = match next {
+                Ok(Some(line)) => line.trim().to_string(),
+                Ok(None) => break,
+                Err(_) => break,
+            };
+            if line.is_empty() {
+                continue;
             }
 
-            let _ = child.wait().await;
-        };
+            match stream_json::parse_ndjson_line(&line) {
+                Some(stream_json::NdjsonAction::Text(event)) => {
+                    yield Ok(event);
+                }
+                Some(stream_json::NdjsonAction::SessionStarted(event)) => {
+                    yield Ok(event);
+                }
+                Some(stream_json::NdjsonAction::ToolCalls(events)) => {
+                    saw_tool_call = true;
+                    for event in events {
+                        yield Ok(event);
+                    }
+                }
+                Some(stream_json::NdjsonAction::Result { usage, done }) => {
+                    let _ = done;
+                    // Reaped at the loop tail AFTER the terminal yields below.
+                    if let Some(usage_event) = usage {
+                        yield Ok(usage_event);
+                    }
+                    yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                    break;
+                }
+                Some(stream_json::NdjsonAction::Error(msg)) => {
+                    reap_child(&mut child, true).await;
+                    yield Err(MotosanError::ProviderError(msg));
+                    break;
+                }
+                None => {}
+            }
+        }
 
-        Ok(Box::pin(stream) as BoxStream)
+        reap_child(&mut child, false).await;
+    })
+}
+
+async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
+    if let Some(mut c) = child.take() {
+        if kill {
+            // SIGKILL unblocks the child immediately, so wait() returns promptly.
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+        } else {
+            // Cooperative reap (success/EOF path) — but never hang the stream: if
+            // the child does not exit promptly (e.g. blocked on an undrained stderr
+            // pipe), SIGKILL it so the stream can always terminate.
+            if tokio::time::timeout(Duration::from_secs(5), c.wait())
+                .await
+                .is_err()
+            {
+                let _ = c.start_kill();
+                let _ = c.wait().await;
+            }
+        }
     }
 }
 
@@ -376,6 +453,67 @@ mod tests {
             .cwd("/work/dir")
             .build_spawn_config(None);
         assert_eq!(cfg.cwd.as_deref(), Some(std::path::Path::new("/work/dir")));
+    }
+
+    #[test]
+    fn default_timeout_is_set_and_overridable() {
+        use std::time::Duration;
+
+        let p = GeminiCliProvider::new();
+        assert_eq!(p.timeout, Some(spawn::DEFAULT_TIMEOUT));
+        let cfg = p.timeout(Duration::from_secs(5)).build_spawn_config(None);
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(5)));
+        assert_eq!(
+            GeminiCliProvider::new()
+                .no_timeout()
+                .build_spawn_config(None)
+                .timeout,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_stall_yields_timeout_error() {
+        use std::time::Duration;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let (_w, r) = tokio::io::duplex(64);
+        let reader = BufReader::new(r);
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            reader,
+            Some(Duration::from_millis(50)),
+        );
+        match s.next().await {
+            Some(Err(crate::error::MotosanError::StreamReadTimeout(_))) => {}
+            other => panic!("expected StreamReadTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_surfaces_provider_error_as_err_item() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let raw = b"{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"partial\",\"delta\":true}\n{\"type\":\"result\",\"status\":\"failed\"}\n";
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            BufReader::new(Cursor::new(&raw[..])),
+            None,
+        );
+        let mut last = None;
+        while let Some(item) = s.next().await {
+            last = Some(item);
+        }
+        assert!(
+            matches!(
+                last,
+                Some(Err(crate::error::MotosanError::ProviderError(_)))
+            ),
+            "a provider-error line must surface as a terminal Err item, got {last:?}"
+        );
     }
 
     #[test]

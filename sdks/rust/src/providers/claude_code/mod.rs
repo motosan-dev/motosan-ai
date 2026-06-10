@@ -28,16 +28,25 @@
 //! incremental output, and `chat()` only when they need the whole reply
 //! as a single string.
 //!
+//! # Cancellation
+//!
+//! There is no explicit cancel handle. Spawned CLI children use
+//! `kill_on_drop(true)`: dropping the `chat()` future or returned [`BoxStream`]
+//! kills and reaps the child process. Stream drivers own and reap the child at the tail;
+//! use [`ClaudeCodeProvider::timeout`] to bound runtime. A stalled stream read
+//! yields `Err(MotosanError::StreamReadTimeout(_))` and terminates the stream.
+//!
 //! [`StreamEvent`]: crate::StreamEvent
 
 pub mod prompt;
 mod spawn;
 mod stream_json;
 
-pub use spawn::{EffortLevel, PermissionMode};
+pub use spawn::{EffortLevel, PermissionMode, DEFAULT_TIMEOUT};
 
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::error::MotosanError;
 use crate::providers::redacted_envs::RedactedEnvs;
@@ -135,6 +144,9 @@ pub struct ClaudeCodeProvider {
     /// runs with this cwd (`Command::current_dir`) instead of inheriting the
     /// parent's. The §6.2 `CliRuntime` cwd contract requires this.
     pub cwd: Option<PathBuf>,
+    /// Per-invocation timeout for `chat()` and the stream read loop.
+    /// `None` disables the timeout.
+    pub timeout: Option<Duration>,
 }
 
 impl ClaudeCodeProvider {
@@ -170,6 +182,7 @@ impl ClaudeCodeProvider {
             max_budget_usd: None,
             envs: RedactedEnvs::default(),
             cwd: None,
+            timeout: Some(spawn::DEFAULT_TIMEOUT),
         }
     }
 
@@ -366,6 +379,19 @@ impl ClaudeCodeProvider {
         self
     }
 
+    /// Override the per-invocation timeout (applies to `chat()` and the
+    /// `stream()` read loop).
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = Some(dur);
+        self
+    }
+
+    /// Disable the invocation timeout (run until the child exits).
+    pub fn no_timeout(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Inject one environment variable into the spawned subprocess (repeatable).
     /// The value is a secret and is never logged.
     pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
@@ -419,6 +445,7 @@ impl ClaudeCodeProvider {
             max_budget_usd: self.max_budget_usd,
             envs: self.envs.to_vec(),
             cwd: self.cwd.clone(),
+            timeout: self.timeout,
         }
     }
 
@@ -448,7 +475,7 @@ impl ClaudeCodeProvider {
     /// Returns a `BoxStream` that yields `StreamEvent` items parsed from
     /// newline-delimited JSON events emitted by the CLI.
     pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::{AsyncWriteExt, BufReader};
         use tokio::process::Command;
 
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
@@ -499,51 +526,101 @@ impl ClaudeCodeProvider {
 
         let reader = BufReader::new(stdout);
 
-        let stream = async_stream::stream! {
-            let mut lines = reader.lines();
-            let mut saw_tool_call = false;
+        Ok(drive_lines(Some(child), reader, config.timeout))
+    }
+}
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
+pub(crate) fn drive_lines<R>(
+    mut child: Option<tokio::process::Child>,
+    reader: R,
+    read_timeout: Option<Duration>,
+) -> BoxStream
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncBufReadExt;
 
-                if let Some(action) = stream_json::parse_ndjson_line(&line) {
-                    match action {
-                        stream_json::NdjsonAction::Text(event) => {
+    Box::pin(async_stream::stream! {
+        let mut lines = reader.lines();
+        let mut saw_tool_call = false;
+
+        loop {
+            let next = match read_timeout {
+                Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        reap_child(&mut child, true).await;
+                        yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
+                        break;
+                    }
+                },
+                None => lines.next_line().await,
+            };
+
+            let line = match next {
+                Ok(Some(line)) => line.trim().to_string(),
+                Ok(None) => break,
+                Err(_) => break,
+            };
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Some(action) = stream_json::parse_ndjson_line(&line) {
+                match action {
+                    stream_json::NdjsonAction::Text(event) => {
+                        yield Ok(event);
+                    }
+                    stream_json::NdjsonAction::ToolCalls(events) => {
+                        saw_tool_call = true;
+                        for event in events {
                             yield Ok(event);
                         }
-                        stream_json::NdjsonAction::ToolCalls(events) => {
-                            saw_tool_call = true;
-                            for event in events {
-                                yield Ok(event);
-                            }
+                    }
+                    stream_json::NdjsonAction::Result { usage, done, session_id } => {
+                        let _ = done;
+                        // Reaped at the loop tail AFTER the terminal yields below, so a
+                        // slow child exit can never delay/deadlock delivery of `done`.
+                        if let Some(id) = session_id {
+                            yield Ok(crate::types::StreamEvent::session_started(id));
                         }
-                        stream_json::NdjsonAction::Result { usage, done, session_id } => {
-                            let _ = done;
-                            if let Some(id) = session_id {
-                                yield Ok(crate::types::StreamEvent::session_started(id));
-                            }
-                            if let Some(usage_event) = usage {
-                                yield Ok(usage_event);
-                            }
-                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
-                            break;
+                        if let Some(usage_event) = usage {
+                            yield Ok(usage_event);
                         }
-                        stream_json::NdjsonAction::Error(msg) => {
-                            yield Err(MotosanError::ProviderError(msg));
-                            break;
-                        }
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                        break;
+                    }
+                    stream_json::NdjsonAction::Error(msg) => {
+                        reap_child(&mut child, true).await;
+                        yield Err(MotosanError::ProviderError(msg));
+                        break;
                     }
                 }
             }
+        }
 
-            // Wait for child to exit
-            let _ = child.wait().await;
-        };
+        reap_child(&mut child, false).await;
+    })
+}
 
-        Ok(Box::pin(stream) as BoxStream)
+async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
+    if let Some(mut c) = child.take() {
+        if kill {
+            // SIGKILL unblocks the child immediately, so wait() returns promptly.
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+        } else {
+            // Cooperative reap (success/EOF path) — but never hang the stream: if
+            // the child does not exit promptly (e.g. blocked on an undrained stderr
+            // pipe), SIGKILL it so the stream can always terminate.
+            if tokio::time::timeout(Duration::from_secs(5), c.wait())
+                .await
+                .is_err()
+            {
+                let _ = c.start_kill();
+                let _ = c.wait().await;
+            }
+        }
     }
 }
 
@@ -589,6 +666,118 @@ mod tests {
         let provider = ClaudeCodeProvider::new().cwd("/work/dir");
         let cfg = provider.build_spawn_config(None, None);
         assert_eq!(cfg.cwd.as_deref(), Some(std::path::Path::new("/work/dir")));
+    }
+
+    #[test]
+    fn default_timeout_is_set_and_overridable() {
+        use std::time::Duration;
+
+        let p = ClaudeCodeProvider::new();
+        assert_eq!(p.timeout, Some(spawn::DEFAULT_TIMEOUT));
+        let cfg = p
+            .timeout(Duration::from_secs(5))
+            .build_spawn_config(None, None);
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(5)));
+        assert_eq!(
+            ClaudeCodeProvider::new()
+                .no_timeout()
+                .build_spawn_config(None, None)
+                .timeout,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_stall_yields_timeout_error() {
+        use std::time::Duration;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let (_w, r) = tokio::io::duplex(64);
+        let reader = BufReader::new(r);
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            reader,
+            Some(Duration::from_millis(50)),
+        );
+        match s.next().await {
+            Some(Err(crate::error::MotosanError::StreamReadTimeout(_))) => {}
+            other => panic!("expected StreamReadTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_surfaces_provider_error_as_err_item() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let raw = b"{\"type\":\"text\",\"text\":\"partial\"}\n{\"type\":\"result\",\"is_error\":true,\"result\":\"boom\"}\n";
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            BufReader::new(Cursor::new(&raw[..])),
+            None,
+        );
+        let mut last = None;
+        while let Some(item) = s.next().await {
+            last = Some(item);
+        }
+        assert!(
+            matches!(
+                last,
+                Some(Err(crate::error::MotosanError::ProviderError(_)))
+            ),
+            "a provider-error line must surface as a terminal Err item, got {last:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_error_reaps_child_before_yield() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio::process::Command;
+        use tokio_stream::StreamExt;
+
+        fn pid_exists(pid: u32) -> bool {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        }
+
+        // Long-lived child: only the Error arm's `reap_child(kill=true)` (SIGKILL)
+        // can make it exit. `kill_on_drop(true)` is kept only as a cleanup backstop
+        // if the assertion fails — the assert runs BEFORE `drop(s)`, so it genuinely
+        // proves the inline reap ran (not the on-drop path).
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 30")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id().expect("child pid");
+
+        let raw = b"{\"type\":\"result\",\"is_error\":true,\"result\":\"boom\"}\n";
+        let mut s = super::drive_lines(
+            Some(child),
+            BufReader::new(Cursor::new(&raw[..])),
+            Some(std::time::Duration::from_millis(50)),
+        );
+        assert!(matches!(
+            s.next().await,
+            Some(Err(crate::error::MotosanError::ProviderError(_)))
+        ));
+        // BEFORE drop: the reap must already have killed the otherwise-alive child.
+        assert!(
+            !pid_exists(pid),
+            "child pid {pid} was not reaped by the Error arm"
+        );
+        drop(s);
     }
 
     #[test]

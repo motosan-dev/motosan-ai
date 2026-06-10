@@ -33,6 +33,14 @@
 //! incremental output, and `chat()` only when they need the whole reply
 //! as a single string.
 //!
+//! # Cancellation
+//!
+//! There is no explicit cancel handle. Spawned CLI children use
+//! `kill_on_drop(true)`: dropping the `chat()` future or returned [`BoxStream`]
+//! kills and reaps the child process. Stream drivers own and reap the child at the tail;
+//! use [`CodexCliProvider::timeout`] to bound runtime. A stalled stream read
+//! yields `Err(MotosanError::StreamReadTimeout(_))` and terminates the stream.
+//!
 //! [`StreamEvent`]: crate::StreamEvent
 //!
 //! # Why it lives outside `providers/`
@@ -78,13 +86,14 @@ mod stream_json;
 
 use std::env;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::error::MotosanError;
 use crate::providers::redacted_envs::RedactedEnvs;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
-pub use spawn::{LocalProvider, SandboxMode};
+pub use spawn::{LocalProvider, SandboxMode, DEFAULT_TIMEOUT};
 
 /// Client that shells out to the `codex` CLI binary (OpenAI Codex CLI).
 ///
@@ -174,6 +183,10 @@ pub struct CodexCliProvider {
     /// instead of starting a fresh thread. Capture from [`ChatResponse::session_id`]
     /// or a streamed [`StreamEvent::session_id`]. Blank → new thread.
     pub resume: Option<String>,
+
+    /// Per-invocation timeout for `chat()` and the stream read loop.
+    /// `None` disables the timeout.
+    pub timeout: Option<Duration>,
 }
 
 impl CodexCliProvider {
@@ -210,6 +223,7 @@ impl CodexCliProvider {
             local_provider: None,
             envs: RedactedEnvs::default(),
             resume: None,
+            timeout: Some(spawn::DEFAULT_TIMEOUT),
         }
     }
 
@@ -353,6 +367,19 @@ impl CodexCliProvider {
         self
     }
 
+    /// Override the per-invocation timeout (applies to `chat()` and the
+    /// `stream()` read loop).
+    pub fn timeout(mut self, dur: Duration) -> Self {
+        self.timeout = Some(dur);
+        self
+    }
+
+    /// Disable the invocation timeout (run until the child exits).
+    pub fn no_timeout(mut self) -> Self {
+        self.timeout = None;
+        self
+    }
+
     /// Build the internal [`spawn::SpawnConfig`] from this client's state.
     ///
     /// A per-request `request_model` (from [`ChatRequest::model`]) takes
@@ -375,6 +402,7 @@ impl CodexCliProvider {
             local_provider: self.local_provider,
             envs: self.envs.to_vec(),
             resume: self.resume.clone(),
+            timeout: self.timeout,
         }
     }
 
@@ -394,8 +422,8 @@ impl CodexCliProvider {
     /// # Errors
     ///
     /// - [`MotosanError::ProviderError`] if the subprocess fails to spawn,
-    ///   times out (600 s hard limit), exits non-zero, emits an `error` /
-    ///   `turn.failed` event, or writes malformed JSONL.
+    ///   times out according to [`Self::timeout`], exits non-zero, emits an
+    ///   `error` / `turn.failed` event, or writes malformed JSONL.
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
         let system_prompt = request.system.clone().or(msg_system);
@@ -436,13 +464,12 @@ impl CodexCliProvider {
     ///
     /// # Errors
     ///
-    /// Returns [`MotosanError::ProviderError`] only if the subprocess fails
-    /// to spawn or stdin cannot be opened. Runtime errors from Codex
-    /// (`error` / `turn.failed` events) terminate the stream with a `done`
-    /// event rather than returning `Err`, because the error has already
-    /// been partially consumed by the caller at that point.
+    /// Returns [`MotosanError::ProviderError`] before streaming if the subprocess
+    /// fails to spawn or stdin/stdout cannot be opened. Runtime errors from Codex
+    /// (`error` / `turn.failed` events) and per-line read stalls surface as `Err`
+    /// items in the returned stream.
     pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        use tokio::io::{AsyncWriteExt, BufReader};
         use tokio::process::Command;
 
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
@@ -481,50 +508,100 @@ impl CodexCliProvider {
 
         let reader = BufReader::new(stdout);
 
-        let stream = async_stream::stream! {
-            let mut lines = reader.lines();
-            let mut saw_tool_call = false;
+        Ok(drive_lines(Some(child), reader, config.timeout))
+    }
+}
 
-            while let Ok(Some(line)) = lines.next_line().await {
-                let line = line.trim().to_string();
-                if line.is_empty() {
-                    continue;
-                }
+pub(crate) fn drive_lines<R>(
+    mut child: Option<tokio::process::Child>,
+    reader: R,
+    read_timeout: Option<Duration>,
+) -> BoxStream
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
+    use tokio::io::AsyncBufReadExt;
 
-                if let Some(action) = stream_json::parse_ndjson_line(&line) {
-                    match action {
-                        stream_json::NdjsonAction::Text(event) => {
+    Box::pin(async_stream::stream! {
+        let mut lines = reader.lines();
+        let mut saw_tool_call = false;
+
+        loop {
+            let next = match read_timeout {
+                Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
+                    Ok(res) => res,
+                    Err(_) => {
+                        reap_child(&mut child, true).await;
+                        yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
+                        break;
+                    }
+                },
+                None => lines.next_line().await,
+            };
+
+            let line = match next {
+                Ok(Some(line)) => line.trim().to_string(),
+                Ok(None) => break,
+                Err(_) => break,
+            };
+            if line.is_empty() {
+                continue;
+            }
+
+            if let Some(action) = stream_json::parse_ndjson_line(&line) {
+                match action {
+                    stream_json::NdjsonAction::Text(event) => {
+                        yield Ok(event);
+                    }
+                    stream_json::NdjsonAction::SessionStarted(event) => {
+                        yield Ok(event);
+                    }
+                    stream_json::NdjsonAction::ToolCalls(events) => {
+                        saw_tool_call = true;
+                        for event in events {
                             yield Ok(event);
                         }
-                        stream_json::NdjsonAction::SessionStarted(event) => {
-                            yield Ok(event);
+                    }
+                    stream_json::NdjsonAction::Done { usage, done } => {
+                        let _ = done;
+                        // Reaped at the loop tail AFTER the terminal yields below.
+                        if let Some(usage_event) = usage {
+                            yield Ok(usage_event);
                         }
-                        stream_json::NdjsonAction::ToolCalls(events) => {
-                            saw_tool_call = true;
-                            for event in events {
-                                yield Ok(event);
-                            }
-                        }
-                        stream_json::NdjsonAction::Done { usage, done } => {
-                            let _ = done;
-                            if let Some(usage_event) = usage {
-                                yield Ok(usage_event);
-                            }
-                            yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
-                            break;
-                        }
-                        stream_json::NdjsonAction::Error(msg) => {
-                            yield Err(MotosanError::ProviderError(msg));
-                            break;
-                        }
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                        break;
+                    }
+                    stream_json::NdjsonAction::Error(msg) => {
+                        reap_child(&mut child, true).await;
+                        yield Err(MotosanError::ProviderError(msg));
+                        break;
                     }
                 }
             }
+        }
 
-            let _ = child.wait().await;
-        };
+        reap_child(&mut child, false).await;
+    })
+}
 
-        Ok(Box::pin(stream) as BoxStream)
+async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
+    if let Some(mut c) = child.take() {
+        if kill {
+            // SIGKILL unblocks the child immediately, so wait() returns promptly.
+            let _ = c.start_kill();
+            let _ = c.wait().await;
+        } else {
+            // Cooperative reap (success/EOF path) — but never hang the stream: if
+            // the child does not exit promptly (e.g. blocked on an undrained stderr
+            // pipe), SIGKILL it so the stream can always terminate.
+            if tokio::time::timeout(Duration::from_secs(5), c.wait())
+                .await
+                .is_err()
+            {
+                let _ = c.start_kill();
+                let _ = c.wait().await;
+            }
+        }
     }
 }
 
@@ -582,6 +659,67 @@ mod tests {
             "Debug leaked secret: {dbg}"
         );
         assert!(dbg.contains("<1 redacted>"), "got: {dbg}");
+    }
+
+    #[test]
+    fn default_timeout_is_set_and_overridable() {
+        use std::time::Duration;
+
+        let p = CodexCliProvider::new();
+        assert_eq!(p.timeout, Some(spawn::DEFAULT_TIMEOUT));
+        let cfg = p.timeout(Duration::from_secs(5)).build_spawn_config(None);
+        assert_eq!(cfg.timeout, Some(Duration::from_secs(5)));
+        assert_eq!(
+            CodexCliProvider::new()
+                .no_timeout()
+                .build_spawn_config(None)
+                .timeout,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_stall_yields_timeout_error() {
+        use std::time::Duration;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let (_w, r) = tokio::io::duplex(64);
+        let reader = BufReader::new(r);
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            reader,
+            Some(Duration::from_millis(50)),
+        );
+        match s.next().await {
+            Some(Err(crate::error::MotosanError::StreamReadTimeout(_))) => {}
+            other => panic!("expected StreamReadTimeout, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn stream_surfaces_provider_error_as_err_item() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let raw = b"{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"partial\"}}\n{\"type\":\"error\",\"message\":\"boom\"}\n";
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            BufReader::new(Cursor::new(&raw[..])),
+            None,
+        );
+        let mut last = None;
+        while let Some(item) = s.next().await {
+            last = Some(item);
+        }
+        assert!(
+            matches!(
+                last,
+                Some(Err(crate::error::MotosanError::ProviderError(_)))
+            ),
+            "a provider-error line must surface as a terminal Err item, got {last:?}"
+        );
     }
 
     fn user_request(content: impl Into<String>) -> ChatRequest {
