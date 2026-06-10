@@ -29,13 +29,15 @@ Both depend entirely on what each provider's flags expose. The three providers' 
 | Thinking events | ❌ dropped | ❌ dropped | n/a (headless emits none) |
 | `started` synthetic event | ❌ (none in SDK) | ❌ | ❌ |
 | Stream error surfacing | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) | ✅ errors surface as `Err` in the stream (0.20) |
-| Stop reason | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` |
+| Stop reason | ✅ stream success terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream success terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` | ✅ stream success terminal is `ToolUse` after any tool-call event, else `EndTurn`; blocking chat remains `EndTurn` |
+| Timeouts | ✅ configurable `.timeout(Duration)` / `.no_timeout()`; default 300s; `chat()` timeout + stream per-line deadline yield `Err(StreamReadTimeout)` on stalls | ✅ configurable `.timeout(Duration)` / `.no_timeout()`; default 600s; `chat()` timeout + stream per-line deadline yield `Err(StreamReadTimeout)` on stalls | ✅ configurable `.timeout(Duration)` / `.no_timeout()`; default 600s; `chat()` timeout + stream per-line deadline yield `Err(StreamReadTimeout)` on stalls |
+| Cancellation | ⚠️ no explicit cancel handle; `kill_on_drop(true)` plus stream driver owns/reaps child | ⚠️ no explicit cancel handle; `kill_on_drop(true)` plus stream driver owns/reaps child | ⚠️ no explicit cancel handle; `kill_on_drop(true)` plus stream driver owns/reaps child |
 
 **Cross-cutting facts (all three providers):**
 - Every agent-shaping knob (`cwd`, session, budget, permission, sandbox) is a **provider-builder field, not a `ChatRequest` field** — **except `model`**, which IS honored per-request via `ChatRequest::model` (all three providers call `build_spawn_config(request.model)`). Varying `cwd`/session **per run** means **rebuilding the provider each call** (providers are `Clone`, so cheap, but it is structural friction — and `model` shows the per-request override path already exists; see P2.4 + the §4 design note).
-- **No `env`/`envs()` injection anywhere** — the child inherits the parent process env (including auth). There is no SDK path to inject a per-run secret into the subprocess.
-- Cancellation is **`kill_on_drop` only** — no clean cancel handle.
-- Timeouts are **hardcoded** (Claude 300s, Codex/Gemini 600s) and apply mostly to the **blocking path only**; several stream paths have **no timeout**.
+- **`env`/`envs()` injection landed** — callers can inject per-run secret bundles into spawned children without mutating the parent environment.
+- Cancellation is **`kill_on_drop` only** — no clean cancel handle; stream drivers own and reap the child at the tail.
+- Timeouts are **configurable provider-builder fields** (`timeout(Duration)` / `no_timeout()`), defaulting to Claude 300s and Codex/Gemini 600s. Blocking `chat()` wraps child completion; streams apply the same deadline to each line read and yield `Err(StreamReadTimeout)` on stalls.
 
 ## 3. Three findings that change the design (vs spec §6.2)
 
@@ -63,7 +65,7 @@ v1's security model is `SecretResolver → ctx.secrets` (per-run key, never pers
 ### P2 — agent-backend quality
 - **P2.1 — `env`/`envs()` injection** on all providers, so a per-run `SecretBundle` can reach the child (aligns with the org's `SecretResolver` model).
 - **P2.2 — ToolCall stream events landed.** CLI stream paths surface provider tool-use events as tool-call start/args/end triplets so a runtime can observe/gate tool use. Separate ToolResult events remain out of scope for the current shared stream API.
-- **P2.3 — real `stop_reason` refinements**, **configurable timeout** (now hardcoded, blocking-path only), and a **cancel handle** (now `kill_on_drop` only). Stream errors now surface as `Err` items in Rust 0.20.
+- **P2.3 — stream robustness landed.** Success terminals carry real `stop_reason`, timeouts are configurable and cover both blocking completion and per-line stream reads, and the cancel contract is documented (`kill_on_drop`, no explicit handle). Stream errors surface as `Err` items in Rust 0.20.
 - **P2.4 — (structural) allow per-`ChatRequest` overrides** for `cwd`/session/budget, to avoid rebuilding the provider every run.
 
 > **Design note — where `cwd`/session should live (fork for the motosan-ai maintainers).**
@@ -166,7 +168,7 @@ Both providers spawn at **two** sites (a blocking path and an inline streaming p
 - **CodexCli** — cwd ✅ (`.cd(ctx.cwd)` → `--cd`, not OS `current_dir`), session ✅ (`thread.started.thread_id` + `.resume(id)`), budget/permission weak. The ignored `codex_resume_roundtrip` live test verifies the real CLI subcommand when run.
 - **GeminiCli** — cwd ✅ (`.cwd(ctx.cwd)` landed), session readback ✅ (`init.session_id`), and `.resume(id)` forwarding ✅; arbitrary-id resume remains a live CLI assumption until verified.
 
-→ With P0/P1 landed, CLI session/cwd feasibility is no longer blocked in the SDK. The remaining hard gaps are P2 quality/security surfaces (env injection, tool events, stream errors/stop reasons/timeouts/cancel).
+→ With P0/P1 and P2.1–P2.3 landed, CLI session/cwd feasibility and the main quality/security surfaces are no longer blocked in the SDK. Remaining work is structural: optional per-`ChatRequest` overrides (P2.4) plus live provider checks such as Gemini arbitrary-id resume.
 
 ## 7. What CliRuntime (org side) does once P0/P1 land
 

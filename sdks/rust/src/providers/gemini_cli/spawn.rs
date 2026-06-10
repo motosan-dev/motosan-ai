@@ -94,14 +94,16 @@ pub struct SpawnConfig {
     pub envs: Vec<(String, String)>,
     /// Working directory for the spawned process; `None` inherits the parent's.
     pub cwd: Option<PathBuf>,
+    /// Timeout for this invocation; `None` disables the timeout wrapper.
+    pub timeout: Option<Duration>,
 }
 
-/// Hard timeout for a single `gemini -p` invocation.
+/// Default timeout for a single `gemini -p` invocation.
 ///
 /// Matches the Codex CLI provider's 10-minute ceiling. Long turns with
 /// tool calls can legitimately take minutes; this is a runaway-process
 /// guard, not a latency budget.
-const TIMEOUT_SECS: u64 = 600;
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Normalize a user-supplied model string for `-m <value>`.
 ///
@@ -207,7 +209,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 /// # Errors
 ///
 /// Returns [`MotosanError::ProviderError`] if the subprocess fails to
-/// spawn, times out after [`TIMEOUT_SECS`], exits non-zero, or emits a
+/// spawn, times out after [`DEFAULT_TIMEOUT`], exits non-zero, or emits a
 /// `result` event with a non-`success` status.
 pub async fn invoke_cli(
     config: &SpawnConfig,
@@ -225,14 +227,21 @@ pub async fn invoke_cli(
         })?;
     }
 
-    let result = tokio::time::timeout(Duration::from_secs(TIMEOUT_SECS), child.wait_with_output())
-        .await
-        .map_err(|_| {
-            MotosanError::ProviderError(format!(
-                "gemini CLI timed out after {TIMEOUT_SECS} seconds"
-            ))
-        })?
-        .map_err(|e| MotosanError::ProviderError(format!("gemini CLI process error: {e}")))?;
+    let result = match config.timeout {
+        Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                MotosanError::ProviderError(format!(
+                    "gemini CLI timed out after {} seconds",
+                    dur.as_secs()
+                ))
+            })?
+            .map_err(|e| MotosanError::ProviderError(format!("gemini CLI process error: {e}")))?,
+        None => child
+            .wait_with_output()
+            .await
+            .map_err(|e| MotosanError::ProviderError(format!("gemini CLI process error: {e}")))?,
+    };
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -309,6 +318,7 @@ mod tests {
             resume: None,
             envs: Vec::new(),
             cwd: None,
+            timeout: Some(DEFAULT_TIMEOUT),
         }
     }
 
@@ -562,6 +572,7 @@ mod tests {
             resume: Some("latest".to_string()),
             envs: Vec::new(),
             cwd: None,
+            timeout: Some(DEFAULT_TIMEOUT),
         };
         assert_eq!(
             args_as_strings(&common_args(&cfg)),

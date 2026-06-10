@@ -109,13 +109,15 @@ pub struct SpawnConfig {
     /// Thread id to resume, forwarded as the `resume <id>` subcommand of
     /// `codex exec` (`codex exec resume <id> --json ...`). Blank → fresh thread.
     pub resume: Option<String>,
+    /// Timeout for this invocation; `None` disables the timeout wrapper.
+    pub timeout: Option<Duration>,
 }
 
-/// Hard timeout for a single `codex exec` invocation.
+/// Default timeout for a single `codex exec` invocation.
 ///
 /// Codex turns involving many tool calls can take minutes; 10 minutes is a
 /// conservative upper bound that still prevents runaway processes.
-const TIMEOUT_SECS: u64 = 600;
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Build the argv fragment shared between the blocking
 /// [`invoke_cli`] path and [`CodexCliProvider::stream`](super::CodexCliProvider::stream).
@@ -267,7 +269,7 @@ fn build_command(config: &SpawnConfig) -> Command {
 /// # Errors
 ///
 /// Returns [`MotosanError::ProviderError`] if the subprocess fails to
-/// spawn, times out after [`TIMEOUT_SECS`], exits non-zero, emits an
+/// spawn, times out after [`DEFAULT_TIMEOUT`], exits non-zero, emits an
 /// `error` / `turn.failed` event, or the output cannot be parsed.
 pub async fn invoke_cli(
     config: &SpawnConfig,
@@ -285,12 +287,21 @@ pub async fn invoke_cli(
         })?;
     }
 
-    let result = tokio::time::timeout(Duration::from_secs(TIMEOUT_SECS), child.wait_with_output())
-        .await
-        .map_err(|_| {
-            MotosanError::ProviderError(format!("codex CLI timed out after {TIMEOUT_SECS} seconds"))
-        })?
-        .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?;
+    let result = match config.timeout {
+        Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
+            .await
+            .map_err(|_| {
+                MotosanError::ProviderError(format!(
+                    "codex CLI timed out after {} seconds",
+                    dur.as_secs()
+                ))
+            })?
+            .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?,
+        None => child
+            .wait_with_output()
+            .await
+            .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?,
+    };
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
@@ -382,6 +393,7 @@ mod tests {
             local_provider: None,
             envs: Vec::new(),
             resume: None,
+            timeout: Some(DEFAULT_TIMEOUT),
         }
     }
 
@@ -686,6 +698,7 @@ mod tests {
             config_overrides: vec![("k".to_string(), "v".to_string())],
             envs: Vec::new(),
             resume: None,
+            timeout: Some(DEFAULT_TIMEOUT),
         };
         assert_eq!(
             args_as_strings(&common_args(&cfg)),
