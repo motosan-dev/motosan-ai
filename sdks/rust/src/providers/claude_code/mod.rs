@@ -579,7 +579,8 @@ where
                     }
                     stream_json::NdjsonAction::Result { usage, done, session_id } => {
                         let _ = done;
-                        reap_child(&mut child, false).await;
+                        // Reaped at the loop tail AFTER the terminal yields below, so a
+                        // slow child exit can never delay/deadlock delivery of `done`.
                         if let Some(id) = session_id {
                             yield Ok(crate::types::StreamEvent::session_started(id));
                         }
@@ -605,9 +606,21 @@ where
 async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
     if let Some(mut c) = child.take() {
         if kill {
+            // SIGKILL unblocks the child immediately, so wait() returns promptly.
             let _ = c.start_kill();
+            let _ = c.wait().await;
+        } else {
+            // Cooperative reap (success/EOF path) — but never hang the stream: if
+            // the child does not exit promptly (e.g. blocked on an undrained stderr
+            // pipe), SIGKILL it so the stream can always terminate.
+            if tokio::time::timeout(Duration::from_secs(5), c.wait())
+                .await
+                .is_err()
+            {
+                let _ = c.start_kill();
+                let _ = c.wait().await;
+            }
         }
-        let _ = c.wait().await;
     }
 }
 
@@ -737,9 +750,13 @@ mod tests {
                 .unwrap_or(false)
         }
 
+        // Long-lived child: only the Error arm's `reap_child(kill=true)` (SIGKILL)
+        // can make it exit. `kill_on_drop(true)` is kept only as a cleanup backstop
+        // if the assertion fails — the assert runs BEFORE `drop(s)`, so it genuinely
+        // proves the inline reap ran (not the on-drop path).
         let child = Command::new("sh")
             .arg("-c")
-            .arg("exit 0")
+            .arg("sleep 30")
             .kill_on_drop(true)
             .spawn()
             .expect("spawn child");
@@ -755,9 +772,12 @@ mod tests {
             s.next().await,
             Some(Err(crate::error::MotosanError::ProviderError(_)))
         ));
+        // BEFORE drop: the reap must already have killed the otherwise-alive child.
+        assert!(
+            !pid_exists(pid),
+            "child pid {pid} was not reaped by the Error arm"
+        );
         drop(s);
-
-        assert!(!pid_exists(pid), "child pid {pid} was not reaped");
     }
 
     #[test]

@@ -362,7 +362,7 @@ where
                 }
                 Some(stream_json::NdjsonAction::Result { usage, done }) => {
                     let _ = done;
-                    reap_child(&mut child, false).await;
+                    // Reaped at the loop tail AFTER the terminal yields below.
                     if let Some(usage_event) = usage {
                         yield Ok(usage_event);
                     }
@@ -385,9 +385,21 @@ where
 async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
     if let Some(mut c) = child.take() {
         if kill {
+            // SIGKILL unblocks the child immediately, so wait() returns promptly.
             let _ = c.start_kill();
+            let _ = c.wait().await;
+        } else {
+            // Cooperative reap (success/EOF path) — but never hang the stream: if
+            // the child does not exit promptly (e.g. blocked on an undrained stderr
+            // pipe), SIGKILL it so the stream can always terminate.
+            if tokio::time::timeout(Duration::from_secs(5), c.wait())
+                .await
+                .is_err()
+            {
+                let _ = c.start_kill();
+                let _ = c.wait().await;
+            }
         }
-        let _ = c.wait().await;
     }
 }
 
