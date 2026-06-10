@@ -302,6 +302,9 @@ pub mod openai;
 #[cfg(feature = "ollama")]
 pub mod ollama;
 
+#[cfg(any(feature = "claude-code", feature = "codex-cli", feature = "gemini-cli"))]
+pub mod redacted_envs;
+
 #[cfg(feature = "claude-code")]
 pub mod claude_code;
 

@@ -40,6 +40,7 @@ use std::env;
 use std::path::PathBuf;
 
 use crate::error::MotosanError;
+use crate::providers::redacted_envs::RedactedEnvs;
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason};
 
@@ -126,6 +127,10 @@ pub struct ClaudeCodeProvider {
     pub no_session_persistence: bool,
     /// `--max-budget-usd <amount>`.
     pub max_budget_usd: Option<f64>,
+    /// Extra environment variables injected into the spawned `claude` child,
+    /// in insertion order. Use for a per-run secret bundle (e.g. ANTHROPIC_API_KEY)
+    /// without mutating the parent environment. Values are secrets (redacted in Debug).
+    pub envs: RedactedEnvs,
     /// Working directory for the spawned `claude` process. When set, the child
     /// runs with this cwd (`Command::current_dir`) instead of inheriting the
     /// parent's. The §6.2 `CliRuntime` cwd contract requires this.
@@ -163,6 +168,7 @@ impl ClaudeCodeProvider {
             agent: None,
             no_session_persistence: false,
             max_budget_usd: None,
+            envs: RedactedEnvs::default(),
             cwd: None,
         }
     }
@@ -360,6 +366,27 @@ impl ClaudeCodeProvider {
         self
     }
 
+    /// Inject one environment variable into the spawned subprocess (repeatable).
+    /// The value is a secret and is never logged.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.envs.push(key, value);
+        self
+    }
+
+    /// Replace the full set of injected environment variables.
+    ///
+    /// This **replaces** the set (it does not append, unlike
+    /// `std::process::Command::envs`). Use [`env`](Self::env) to add one.
+    pub fn envs<I, K, V>(mut self, vars: I) -> Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        self.envs.replace_from(vars);
+        self
+    }
+
     fn build_spawn_config(
         &self,
         request_model: Option<String>,
@@ -390,6 +417,7 @@ impl ClaudeCodeProvider {
             agent: self.agent.clone(),
             no_session_persistence: self.no_session_persistence,
             max_budget_usd: self.max_budget_usd,
+            envs: self.envs.to_vec(),
             cwd: self.cwd.clone(),
         }
     }
@@ -432,6 +460,7 @@ impl ClaudeCodeProvider {
         if let Some(dir) = &config.cwd {
             cmd.current_dir(dir);
         }
+        cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
         // `--verbose` is required by `claude` ≥ 2.1.x when combining `--print`
         // with `--output-format=stream-json`. Without it the CLI exits with
         // "Error: When using --print, --output-format=stream-json requires
@@ -553,6 +582,40 @@ mod tests {
         let provider = ClaudeCodeProvider::new().cwd("/work/dir");
         let cfg = provider.build_spawn_config(None, None);
         assert_eq!(cfg.cwd.as_deref(), Some(std::path::Path::new("/work/dir")));
+    }
+
+    #[test]
+    fn env_builder_threads_and_debug_redacts() {
+        let p = ClaudeCodeProvider::new().env("ANTHROPIC_API_KEY", "sk-super-secret");
+        assert_eq!(
+            p.build_spawn_config(None, None).envs,
+            vec![(
+                "ANTHROPIC_API_KEY".to_string(),
+                "sk-super-secret".to_string()
+            )]
+        );
+        let dbg = format!("{p:?}");
+        assert!(
+            !dbg.contains("sk-super-secret"),
+            "Debug leaked secret: {dbg}"
+        );
+        assert!(dbg.contains("<1 redacted>"), "got: {dbg}");
+    }
+
+    #[test]
+    fn envs_builder_replaces_the_whole_set() {
+        // `.envs(iter)` REPLACES (it does not append, unlike std Command::envs).
+        let p = ClaudeCodeProvider::new()
+            .env("FIRST", "1") // discarded by the replace below
+            .envs([("A", "x"), ("B", "y")]);
+        assert_eq!(
+            p.build_spawn_config(None, None).envs,
+            vec![
+                ("A".to_string(), "x".to_string()),
+                ("B".to_string(), "y".to_string()),
+            ],
+            "envs(iter) must replace the full set, not append"
+        );
     }
 
     #[test]
