@@ -330,9 +330,7 @@ where
                 Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
                     Ok(res) => res,
                     Err(_) => {
-                        if let Some(c) = child.as_mut() {
-                            let _ = c.start_kill();
-                        }
+                        reap_child(&mut child, true).await;
                         yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
                         break;
                     }
@@ -364,6 +362,7 @@ where
                 }
                 Some(stream_json::NdjsonAction::Result { usage, done }) => {
                     let _ = done;
+                    reap_child(&mut child, false).await;
                     if let Some(usage_event) = usage {
                         yield Ok(usage_event);
                     }
@@ -371,6 +370,7 @@ where
                     break;
                 }
                 Some(stream_json::NdjsonAction::Error(msg)) => {
+                    reap_child(&mut child, true).await;
                     yield Err(MotosanError::ProviderError(msg));
                     break;
                 }
@@ -378,10 +378,17 @@ where
             }
         }
 
-        if let Some(mut c) = child.take() {
-            let _ = c.wait().await;
-        }
+        reap_child(&mut child, false).await;
     })
+}
+
+async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
+    if let Some(mut c) = child.take() {
+        if kill {
+            let _ = c.start_kill();
+        }
+        let _ = c.wait().await;
+    }
 }
 
 /// Merge the system prompt onto the user prompt for stdin delivery.

@@ -549,9 +549,7 @@ where
                 Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
                     Ok(res) => res,
                     Err(_) => {
-                        if let Some(c) = child.as_mut() {
-                            let _ = c.start_kill();
-                        }
+                        reap_child(&mut child, true).await;
                         yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
                         break;
                     }
@@ -581,6 +579,7 @@ where
                     }
                     stream_json::NdjsonAction::Result { usage, done, session_id } => {
                         let _ = done;
+                        reap_child(&mut child, false).await;
                         if let Some(id) = session_id {
                             yield Ok(crate::types::StreamEvent::session_started(id));
                         }
@@ -591,6 +590,7 @@ where
                         break;
                     }
                     stream_json::NdjsonAction::Error(msg) => {
+                        reap_child(&mut child, true).await;
                         yield Err(MotosanError::ProviderError(msg));
                         break;
                     }
@@ -598,10 +598,17 @@ where
             }
         }
 
-        if let Some(mut c) = child.take() {
-            let _ = c.wait().await;
-        }
+        reap_child(&mut child, false).await;
     })
+}
+
+async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
+    if let Some(mut c) = child.take() {
+        if kill {
+            let _ = c.start_kill();
+        }
+        let _ = c.wait().await;
+    }
 }
 
 impl Default for ClaudeCodeProvider {
@@ -709,6 +716,48 @@ mod tests {
             ),
             "a provider-error line must surface as a terminal Err item, got {last:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn terminal_error_reaps_child_before_yield() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio::process::Command;
+        use tokio_stream::StreamExt;
+
+        fn pid_exists(pid: u32) -> bool {
+            std::process::Command::new("kill")
+                .arg("-0")
+                .arg(pid.to_string())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
+        }
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("exit 0")
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn child");
+        let pid = child.id().expect("child pid");
+
+        let raw = b"{\"type\":\"result\",\"is_error\":true,\"result\":\"boom\"}\n";
+        let mut s = super::drive_lines(
+            Some(child),
+            BufReader::new(Cursor::new(&raw[..])),
+            Some(std::time::Duration::from_millis(50)),
+        );
+        assert!(matches!(
+            s.next().await,
+            Some(Err(crate::error::MotosanError::ProviderError(_)))
+        ));
+        drop(s);
+
+        assert!(!pid_exists(pid), "child pid {pid} was not reaped");
     }
 
     #[test]
