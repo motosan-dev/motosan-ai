@@ -1,7 +1,12 @@
+use crate::error::MotosanError;
 use crate::retry::RetryPolicy;
-use crate::types::{ChatRequest, Role};
+use crate::types::{ChatRequest, Role, StopReason, StreamEvent, Usage};
+use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::{HashSet, VecDeque};
+use std::pin::Pin;
+use std::task::Poll;
 
 /// Default endpoint for the ChatGPT-backend Responses API.
 const CHATGPT_CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
@@ -206,6 +211,242 @@ impl ChatGptCodexProvider {
     }
 }
 
+/// Translate the ChatGPT-backend typed `response.*` SSE stream into motosan
+/// [`StreamEvent`]s.
+///
+/// Structurally a copy of `gemini_code_assist`'s `CodeAssistStreamAdapter`
+/// shell (the `Stream`/`poll_next` driver, the `pending` queue, and the
+/// `seen_tool_ids` set). The Gemini per-event parse block is replaced by
+/// [`ChatGptCodexStreamAdapter::handle_event`], a pure mapping from one
+/// Responses event JSON to zero-or-more queued [`StreamEvent`]s — kept
+/// separate so the mapping is unit-testable from fixture frames without
+/// mocking a byte stream.
+#[allow(dead_code)]
+struct ChatGptCodexStreamAdapter {
+    inner: Pin<
+        Box<
+            dyn Stream<
+                    Item = Result<
+                        eventsource_stream::Event,
+                        eventsource_stream::EventStreamError<reqwest::Error>,
+                    >,
+                > + Send,
+        >,
+    >,
+    pending: VecDeque<StreamEvent>,
+    /// `call_id`s seen via `response.output_item.added` (function_call) so the
+    /// matching `response.output_item.done` can close the same id.
+    seen_tool_ids: HashSet<String>,
+    /// Set once any `function_call` item is observed, so `response.completed`
+    /// resolves to `ToolUse` (mirrors the gated `cli_terminal_stop_reason`
+    /// helper, which `chatgpt-codex` is not in scope to reach from here).
+    saw_tool_call: bool,
+    /// A fatal stream error to surface on the next `poll_next` (top-level
+    /// `error` / `response.failed`).
+    error: Option<String>,
+}
+
+// NOTE: `#[allow(dead_code)]` is for Task 3 ONLY — `handle_event` (and the
+// adapter itself) is not constructed by library code until Task 4 wires the
+// `stream` impl. Removed in Task 4 once `stream` consumes it. Tests exercise it
+// directly, so the mapping is fully covered now.
+#[allow(dead_code)]
+impl ChatGptCodexStreamAdapter {
+    /// Map a single decoded Responses SSE `data` JSON value to zero or more
+    /// [`StreamEvent`]s, queued onto `pending`. Pure (no I/O); the only side
+    /// effects are mutations of `pending` / `seen_tool_ids` / `saw_tool_call`
+    /// / `error`. See the module-level mapping table.
+    fn handle_event(&mut self, data: &Value) {
+        let event_type = data.get("type").and_then(Value::as_str).unwrap_or("");
+
+        match event_type {
+            // Final-answer text deltas.
+            "response.output_text.delta" => {
+                if let Some(delta) = data.get("delta").and_then(Value::as_str) {
+                    if !delta.is_empty() {
+                        self.pending.push_back(StreamEvent::text(delta));
+                    }
+                }
+            }
+
+            // Reasoning deltas (both the raw and the summary stream) -> thinking.
+            "response.reasoning_text.delta" | "response.reasoning_summary_text.delta" => {
+                if let Some(delta) = data.get("delta").and_then(Value::as_str) {
+                    if !delta.is_empty() {
+                        self.pending.push_back(StreamEvent::thinking_delta(delta));
+                    }
+                }
+            }
+
+            // A new output item began. Only `function_call` items open a tool call;
+            // `reasoning` / `message` items are handled by their own events.
+            "response.output_item.added" => {
+                if let Some(item) = data.get("item") {
+                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let name = item
+                            .get("name")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if !call_id.is_empty() {
+                            self.saw_tool_call = true;
+                            self.seen_tool_ids.insert(call_id.clone());
+                            self.pending
+                                .push_back(StreamEvent::tool_call_start(&call_id, &name));
+                        }
+                    }
+                }
+            }
+
+            // Streamed tool-call argument fragments. The wire key is `item_id`.
+            "response.function_call_arguments.delta" => {
+                let id = data
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if let Some(delta) = data.get("delta").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        self.pending
+                            .push_back(StreamEvent::tool_call_args_with_id(&id, delta));
+                    }
+                }
+            }
+
+            // An output item finished. Close `function_call` items; ignore
+            // `reasoning` (encrypted_content — no thinking replay in v1) and
+            // `message` (text was already streamed).
+            "response.output_item.done" => {
+                // Only `function_call` items are closed here. `reasoning` items
+                // carry `encrypted_content` and `message` items already had
+                // their text streamed, so both are ignored.
+                // TODO(phase2): round-trip a `reasoning` item's
+                // `encrypted_content` as a thinking signature for replay.
+                if let Some(item) = data.get("item") {
+                    if item.get("type").and_then(Value::as_str) == Some("function_call") {
+                        let call_id = item
+                            .get("call_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        if !call_id.is_empty() {
+                            self.pending
+                                .push_back(StreamEvent::tool_call_end_with_id(call_id));
+                        }
+                    }
+                }
+            }
+
+            // Terminal event: emit usage (if present) then the stop reason.
+            "response.completed" => {
+                let response = data.get("response");
+                if let Some(usage) = response.and_then(|r| r.get("usage")) {
+                    let input_tokens = usage
+                        .get("input_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32;
+                    let output_tokens = usage
+                        .get("output_tokens")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32;
+                    self.pending.push_back(StreamEvent::usage(Usage {
+                        input_tokens,
+                        output_tokens,
+                        cache_creation_input_tokens: None,
+                        cache_read_input_tokens: None,
+                    }));
+                }
+                let status = response
+                    .and_then(|r| r.get("status"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("completed");
+                let stop_reason = match status {
+                    _ if self.saw_tool_call => StopReason::ToolUse,
+                    "incomplete" => StopReason::MaxTokens,
+                    _ => StopReason::EndTurn,
+                };
+                self.pending
+                    .push_back(StreamEvent::done_with_stop_reason(stop_reason));
+            }
+
+            // Fatal stream errors -> surfaced as Err on the next poll.
+            "error" | "response.failed" => {
+                let msg = data
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .or_else(|| {
+                        data.get("response")
+                            .and_then(|r| r.get("error"))
+                            .and_then(|e| e.get("message"))
+                            .and_then(Value::as_str)
+                    })
+                    .or_else(|| {
+                        data.get("error")
+                            .and_then(|e| e.get("message"))
+                            .and_then(Value::as_str)
+                    })
+                    .unwrap_or("ChatGPT-backend stream error")
+                    .to_string();
+                self.error = Some(msg);
+            }
+
+            // Everything else (response.created/in_progress, content_part.*,
+            // output_text.done, reasoning item add, etc.) is ignored.
+            _ => {}
+        }
+    }
+}
+
+impl Stream for ChatGptCodexStreamAdapter {
+    type Item = Result<StreamEvent, MotosanError>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        if let Some(ev) = self.pending.pop_front() {
+            return Poll::Ready(Some(Ok(ev)));
+        }
+        if let Some(msg) = self.error.take() {
+            return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
+        }
+
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(event))) => {
+                    let data = event.data.trim();
+                    if data.is_empty() || data == "[DONE]" {
+                        continue;
+                    }
+                    let value: Value = match serde_json::from_str(data) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    self.handle_event(&value);
+
+                    if let Some(first) = self.pending.pop_front() {
+                        return Poll::Ready(Some(Ok(first)));
+                    }
+                    if let Some(msg) = self.error.take() {
+                        return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
+                    }
+                    continue;
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
+                }
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +592,181 @@ mod tests {
         assert_eq!(body["temperature"], json!(0.3_f32));
         assert_eq!(body["reasoning"]["effort"], json!("high"));
         assert_eq!(body["reasoning"]["summary"], json!("auto"));
+    }
+
+    mod adapter_tests {
+        use super::super::ChatGptCodexStreamAdapter;
+        use crate::types::{StopReason, StreamEvent, StreamEventType};
+        use serde_json::Value;
+        use std::collections::{HashSet, VecDeque};
+
+        /// A fresh adapter wired to an empty inner stream — `handle_event` is
+        /// driven directly, so the `inner` stream is never polled in these
+        /// mapping tests.
+        fn fresh_adapter() -> ChatGptCodexStreamAdapter {
+            ChatGptCodexStreamAdapter {
+                inner: Box::pin(tokio_stream::iter(Vec::new())),
+                pending: VecDeque::new(),
+                seen_tool_ids: HashSet::new(),
+                saw_tool_call: false,
+                error: None,
+            }
+        }
+
+        /// Feed each `data:` JSON line through `handle_event`, draining the
+        /// queued [`StreamEvent`]s after every frame.
+        fn drive(adapter: &mut ChatGptCodexStreamAdapter, frames: &[&str]) -> Vec<StreamEvent> {
+            let mut out = Vec::new();
+            for frame in frames {
+                let value: Value = serde_json::from_str(frame).expect("valid frame json");
+                adapter.handle_event(&value);
+                while let Some(ev) = adapter.pending.pop_front() {
+                    out.push(ev);
+                }
+            }
+            out
+        }
+
+        /// Real text-delta frames captured from the live backend
+        /// (`/tmp/codex-sse-fixture.txt`), plus a complete `response.completed`
+        /// frame (the captured one is truncated before `usage`, so the
+        /// `usage`/`status` fields here follow the OpenAI Responses shape the
+        /// plan's mapping table documents: `response.usage.input_tokens` /
+        /// `output_tokens`, `response.status`).
+        const TEXT_FRAMES: &[&str] = &[
+            r#"{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}"#,
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":"Hi","item_id":"msg_1","output_index":1}"#,
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":" there","item_id":"msg_1","output_index":1}"#,
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":",","item_id":"msg_1","output_index":1}"#,
+            r#"{"type":"response.output_text.delta","content_index":0,"delta":" friend","item_id":"msg_1","output_index":1}"#,
+            r#"{"type":"response.output_text.done","content_index":0,"item_id":"msg_1","text":"Hi there, friend"}"#,
+            r#"{"type":"response.completed","response":{"id":"resp_1","status":"completed","usage":{"input_tokens":12,"output_tokens":5}}}"#,
+        ];
+
+        #[test]
+        fn adapter_emits_text_and_done() {
+            let mut adapter = fresh_adapter();
+            let events = drive(&mut adapter, TEXT_FRAMES);
+
+            let text: String = events
+                .iter()
+                .filter(|e| e.event_type == StreamEventType::Text)
+                .map(|e| e.content.as_str())
+                .collect();
+            assert_eq!(text, "Hi there, friend");
+
+            let done = events.iter().find(|e| e.done).expect("a done event");
+            assert_eq!(done.stop_reason, Some(StopReason::EndTurn));
+        }
+
+        #[test]
+        fn adapter_emits_usage_from_response_completed() {
+            let mut adapter = fresh_adapter();
+            let events = drive(&mut adapter, TEXT_FRAMES);
+
+            let usage = events
+                .iter()
+                .find(|e| e.event_type == StreamEventType::Usage)
+                .and_then(|e| e.usage.clone())
+                .expect("a usage event");
+            assert_eq!(usage.input_tokens, 12);
+            assert_eq!(usage.output_tokens, 5);
+        }
+
+        #[test]
+        fn adapter_maps_reasoning_delta_to_thinking() {
+            let mut adapter = fresh_adapter();
+            let events = drive(
+                &mut adapter,
+                &[
+                    r#"{"type":"response.reasoning_text.delta","delta":"think "}"#,
+                    r#"{"type":"response.reasoning_summary_text.delta","delta":"more"}"#,
+                ],
+            );
+            let thinking: String = events
+                .iter()
+                .filter(|e| e.event_type == StreamEventType::ThinkingDelta)
+                .map(|e| e.content.as_str())
+                .collect();
+            assert_eq!(thinking, "think more");
+        }
+
+        #[test]
+        fn adapter_handles_function_call_lifecycle() {
+            // Synthetic added/args.delta/done triple for a function_call item.
+            let mut adapter = fresh_adapter();
+            let events = drive(
+                &mut adapter,
+                &[
+                    r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}"#,
+                    r#"{"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"{\"city\":"}"#,
+                    r#"{"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"\"Paris\"}"}"#,
+                    r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}"#,
+                    r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":7}}}"#,
+                ],
+            );
+
+            let start = events
+                .iter()
+                .find(|e| e.event_type == StreamEventType::ToolCallStart)
+                .expect("tool_call_start");
+            assert_eq!(start.tool_call_id.as_deref(), Some("call_42"));
+            assert_eq!(start.tool_call_name.as_deref(), Some("get_weather"));
+
+            let args: String = events
+                .iter()
+                .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
+                .filter_map(|e| e.tool_call_args_delta.clone())
+                .collect();
+            assert_eq!(args, r#"{"city":"Paris"}"#);
+
+            let end = events
+                .iter()
+                .find(|e| e.event_type == StreamEventType::ToolCallEnd)
+                .expect("tool_call_end");
+            assert_eq!(end.tool_call_id.as_deref(), Some("call_42"));
+
+            // Any tool call seen => terminal stop reason is ToolUse, not EndTurn.
+            let done = events.iter().find(|e| e.done).expect("a done event");
+            assert_eq!(done.stop_reason, Some(StopReason::ToolUse));
+        }
+
+        #[test]
+        fn adapter_maps_incomplete_to_max_tokens() {
+            let mut adapter = fresh_adapter();
+            let events = drive(
+                &mut adapter,
+                &[r#"{"type":"response.completed","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":1}}}"#],
+            );
+            let done = events.iter().find(|e| e.done).expect("a done event");
+            assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
+        }
+
+        #[tokio::test]
+        async fn adapter_surfaces_top_level_error() {
+            use tokio_stream::StreamExt as _;
+
+            let frame =
+                r#"{"type":"error","message":"rate limited","code":"rate_limit_exceeded"}"#;
+            let items = vec![Ok(eventsource_stream::Event {
+                event: String::new(),
+                data: frame.to_string(),
+                id: String::new(),
+                retry: None,
+            })];
+            let mut adapter = ChatGptCodexStreamAdapter {
+                inner: Box::pin(tokio_stream::iter(items)),
+                pending: VecDeque::new(),
+                seen_tool_ids: HashSet::new(),
+                saw_tool_call: false,
+                error: None,
+            };
+
+            let item = adapter.next().await.expect("one item");
+            match item {
+                Err(crate::error::MotosanError::Stream(msg)) => assert!(msg.contains("rate limited")),
+                other => panic!("expected Stream error, got {other:?}"),
+            }
+        }
     }
 }
