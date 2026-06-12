@@ -341,6 +341,16 @@ impl Client {
                     Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
             }
+            // Task 1 placeholder: the ChatGptCodexProvider has no ProviderImpl
+            // impl or builder yet (those land in Task 4). Keep the match
+            // exhaustive without claiming support. Replaced by real dispatch
+            // in Task 4.
+            Provider::OpenAiChatGpt => {
+                let _ = request;
+                Err(MotosanError::Config(
+                    "chatgpt-codex provider is not yet wired".to_string(),
+                ))
+            }
         }
     }
 
@@ -508,6 +518,13 @@ impl Client {
                     let _ = request;
                     Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
+            }
+            // Task 1 placeholder — see dispatch_chat. Real dispatch in Task 4.
+            Provider::OpenAiChatGpt => {
+                let _ = request;
+                Err(MotosanError::Config(
+                    "chatgpt-codex provider is not yet wired".to_string(),
+                ))
             }
         }
     }

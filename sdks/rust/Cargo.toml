@@ -50,6 +50,15 @@ gemini-code-assist = [
   "dep:tokio-stream",
   "dep:tokio",
 ]
+# Self-contained ChatGPT-backend Responses transport. Shares nothing with
+# Gemini, so it mirrors gemini-code-assist's `dep:` set WITHOUT the `gemini`
+# feature itself.
+chatgpt-codex = [
+  "dep:reqwest",
+  "dep:eventsource-stream",
+  "dep:tokio-stream",
+  "dep:tokio",
+]
 full = [
   "anthropic",
   "openai",
@@ -58,6 +67,7 @@ full = [
   "ollama_native",
   "gemini",
   "gemini-code-assist",
+  "chatgpt-codex",
 ]
 
 [dependencies]

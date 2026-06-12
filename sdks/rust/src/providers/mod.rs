@@ -65,6 +65,10 @@ pub enum Provider {
     /// Shells out to Google Cloud Code Assist API (cloudcode-pa.googleapis.com).
     /// Requires OAuth token with cloud-platform scope. Requires the `gemini-code-assist` feature.
     GeminiCodeAssist,
+    /// HTTP client for the ChatGPT backend Responses API
+    /// (chatgpt.com/backend-api/codex/responses). OAuth access_token +
+    /// chatgpt-account-id. Requires the `chatgpt-codex` feature.
+    OpenAiChatGpt,
 }
 
 #[async_trait]
@@ -356,6 +360,9 @@ pub mod gemini;
 
 #[cfg(feature = "gemini-code-assist")]
 pub mod gemini_code_assist;
+
+#[cfg(feature = "chatgpt-codex")]
+pub mod chatgpt_codex;
 
 #[cfg(test)]
 mod validate_tests {
