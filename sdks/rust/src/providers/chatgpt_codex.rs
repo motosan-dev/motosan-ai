@@ -1,6 +1,15 @@
 use crate::error::MotosanError;
+use crate::providers::{
+    extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
+    parse_retry_after, sleep_before_retry, ProviderImpl,
+};
 use crate::retry::RetryPolicy;
-use crate::types::{ChatRequest, Role, StopReason, StreamEvent, Usage};
+use crate::stream::{collect_stream, BoxStream};
+use crate::types::{
+    ChatRequest, ChatResponse, ProviderCapabilities, Role, StopReason, StreamEvent, Usage,
+};
+use async_trait::async_trait;
+use eventsource_stream::Eventsource;
 use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
@@ -13,10 +22,6 @@ const CHATGPT_CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses
 /// `originator` header value codex's CLI sends; settled GREEN by the spike.
 const ORIGINATOR: &str = "codex_cli_rs";
 
-// NOTE: `#[allow(dead_code)]` is for Task 1 ONLY (no `ProviderImpl` impl yet, so
-// the fields/methods are not all read). It is removed in Task 4 when `stream`/`chat`
-// land and consume them.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ChatGptCodexProvider {
     http: Client,
@@ -27,7 +32,6 @@ pub struct ChatGptCodexProvider {
     retry_policy: RetryPolicy,
 }
 
-#[allow(dead_code)]
 impl ChatGptCodexProvider {
     pub fn new(
         access_token: impl Into<String>,
@@ -211,6 +215,77 @@ impl ChatGptCodexProvider {
     }
 }
 
+#[async_trait]
+impl ProviderImpl for ChatGptCodexProvider {
+    fn capabilities(&self) -> ProviderCapabilities {
+        // v1 is text-only; multimodal `input_image` passthrough is a phase-2 hook.
+        ProviderCapabilities::text_only()
+    }
+
+    async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
+        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
+        let stream = self.stream(req).await?;
+        let mut response = collect_stream(stream).await?;
+        if response.model.is_empty() {
+            response.model = model;
+        }
+        Ok(response)
+    }
+
+    async fn stream(&self, req: ChatRequest) -> Result<BoxStream, MotosanError> {
+        let url = self.url();
+        let body = self.build_responses_body(&req);
+
+        let mut attempt = 0u32;
+        loop {
+            let result = self
+                .apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
+                .json(&body)
+                .send()
+                .await;
+
+            match result {
+                Err(e)
+                    if is_retryable_network_error(&e)
+                        && attempt < self.retry_policy.max_retries =>
+                {
+                    attempt += 1;
+                    sleep_before_retry(&self.retry_policy, attempt, None).await;
+                    continue;
+                }
+                Err(e) => return Err(MotosanError::Network(e.to_string())),
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    if status != 200 {
+                        let retry_after = parse_retry_after(resp.headers());
+                        let payload: Value = resp.json().await.unwrap_or(json!({}));
+                        let msg = extract_error_message(&payload, "ChatGPT-backend error");
+                        if is_retryable_status(status) && attempt < self.retry_policy.max_retries {
+                            attempt += 1;
+                            sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
+                            continue;
+                        }
+                        return Err(map_http_error(status, msg));
+                    }
+                    let sse = resp.bytes_stream().eventsource();
+                    let adapter = ChatGptCodexStreamAdapter {
+                        inner: Box::pin(sse),
+                        pending: VecDeque::new(),
+                        seen_tool_ids: HashSet::new(),
+                        saw_tool_call: false,
+                        error: None,
+                    };
+                    return Ok(Box::pin(adapter));
+                }
+            }
+        }
+    }
+}
+
 /// Translate the ChatGPT-backend typed `response.*` SSE stream into motosan
 /// [`StreamEvent`]s.
 ///
@@ -221,7 +296,6 @@ impl ChatGptCodexProvider {
 /// Responses event JSON to zero-or-more queued [`StreamEvent`]s — kept
 /// separate so the mapping is unit-testable from fixture frames without
 /// mocking a byte stream.
-#[allow(dead_code)]
 struct ChatGptCodexStreamAdapter {
     inner: Pin<
         Box<
@@ -246,11 +320,6 @@ struct ChatGptCodexStreamAdapter {
     error: Option<String>,
 }
 
-// NOTE: `#[allow(dead_code)]` is for Task 3 ONLY — `handle_event` (and the
-// adapter itself) is not constructed by library code until Task 4 wires the
-// `stream` impl. Removed in Task 4 once `stream` consumes it. Tests exercise it
-// directly, so the mapping is fully covered now.
-#[allow(dead_code)]
 impl ChatGptCodexStreamAdapter {
     /// Map a single decoded Responses SSE `data` JSON value to zero or more
     /// [`StreamEvent`]s, queued onto `pending`. Pure (no I/O); the only side

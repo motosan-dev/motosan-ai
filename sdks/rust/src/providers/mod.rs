@@ -6,6 +6,7 @@ use crate::error::MotosanError;
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -27,6 +28,7 @@ use async_trait::async_trait;
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 use reqwest::header::HeaderMap;
 #[cfg(any(
@@ -36,6 +38,7 @@ use reqwest::header::HeaderMap;
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 use serde_json::Value;
 #[cfg(any(
@@ -45,6 +48,7 @@ use serde_json::Value;
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 use std::time::Duration;
 
@@ -210,6 +214,7 @@ impl ChatResponseBuilder {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     payload
@@ -227,6 +232,7 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
     match status_code {
@@ -281,6 +287,7 @@ mod cli_terminal_tests {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     status_code == 429 || status_code >= 500
@@ -293,6 +300,7 @@ pub(crate) fn is_retryable_status(status_code: u16) -> bool {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
@@ -305,6 +313,7 @@ pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
@@ -319,6 +328,7 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     feature = "ollama_native",
     feature = "gemini",
     feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 pub(crate) async fn sleep_before_retry(
     policy: &RetryPolicy,
