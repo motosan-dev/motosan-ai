@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
+## [Unreleased]
+
+### Added
+- **`chatgpt-codex` provider** — `ChatGptCodexProvider`, a native ChatGPT-backend inference provider gated behind the `chatgpt-codex` feature. POSTs the OpenAI **Responses API** to `chatgpt.com/backend-api/codex/responses` with OAuth-token + `chatgpt-account-id` auth and the codex CLI headers, streaming typed `response.*` SSE (text, reasoning→thinking deltas, `function_call` tool lifecycle, `response.completed` usage). Construct directly via `ChatGptCodexProvider::new(access_token, account_id, model, base_url)` or `ClientBuilder::chatgpt_codex(access_token, account_id, model)`; new `Provider::OpenAiChatGpt` enum variant.
+
 ## 0.20.0 — 2026-06-10
 
 ### Added

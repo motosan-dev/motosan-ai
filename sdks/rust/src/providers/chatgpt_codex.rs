@@ -423,11 +423,26 @@ impl ChatGptCodexStreamAdapter {
                         .get("output_tokens")
                         .and_then(Value::as_u64)
                         .unwrap_or(0) as u32;
+                    // Responses reports cache-read tokens nested under
+                    // `input_tokens_details.cached_tokens`. Unlike Gemini's
+                    // inclusive `promptTokenCount`, the Responses `input_tokens`
+                    // already counts the full prompt, so the cached count is
+                    // surfaced as-is without subtracting (matches gemini's
+                    // `cache_read_input_tokens` field mapping).
+                    let cached_tokens = usage
+                        .get("input_tokens_details")
+                        .and_then(|d| d.get("cached_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0) as u32;
                     self.pending.push_back(StreamEvent::usage(Usage {
                         input_tokens,
                         output_tokens,
                         cache_creation_input_tokens: None,
-                        cache_read_input_tokens: None,
+                        cache_read_input_tokens: if cached_tokens > 0 {
+                            Some(cached_tokens)
+                        } else {
+                            None
+                        },
                     }));
                 }
                 let status = response
