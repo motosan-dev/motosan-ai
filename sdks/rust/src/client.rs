@@ -60,6 +60,11 @@ pub struct Client {
     /// Model id sent in the Responses body for the ChatGPT-backend provider.
     #[cfg(feature = "chatgpt-codex")]
     chatgpt_codex_model: Option<String>,
+    /// Default `reasoning.effort` for the ChatGPT-backend provider, applied
+    /// when a request omits `provider_options["reasoning_effort"]`. Configured
+    /// via [`ClientBuilder::chatgpt_codex_reasoning_effort`].
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_reasoning_effort: Option<String>,
 }
 
 impl Client {
@@ -753,6 +758,7 @@ impl Client {
             None,
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_reasoning_effort(self.chatgpt_codex_reasoning_effort.clone())
     }
 }
 
@@ -790,6 +796,8 @@ pub struct ClientBuilder {
     chatgpt_codex_account_id: Option<String>,
     #[cfg(feature = "chatgpt-codex")]
     chatgpt_codex_model: Option<String>,
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_reasoning_effort: Option<String>,
 }
 
 impl ClientBuilder {
@@ -1036,6 +1044,18 @@ impl ClientBuilder {
         self
     }
 
+    /// Set the default reasoning effort (`low`/`medium`/`high`/…) for the
+    /// ChatGPT-backend Responses provider. Emitted as `reasoning.effort` on
+    /// every request that does not carry a per-request
+    /// `provider_options["reasoning_effort"]` (which always wins). The value
+    /// is passed through verbatim; the backend validates it. Has no effect
+    /// unless `provider == Provider::OpenAiChatGpt`.
+    #[cfg(feature = "chatgpt-codex")]
+    pub fn chatgpt_codex_reasoning_effort(mut self, effort: impl Into<String>) -> Self {
+        self.chatgpt_codex_reasoning_effort = Some(effort.into());
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -1118,6 +1138,8 @@ impl ClientBuilder {
             chatgpt_codex_account_id: self.chatgpt_codex_account_id,
             #[cfg(feature = "chatgpt-codex")]
             chatgpt_codex_model: self.chatgpt_codex_model,
+            #[cfg(feature = "chatgpt-codex")]
+            chatgpt_codex_reasoning_effort: self.chatgpt_codex_reasoning_effort,
         })
     }
 }

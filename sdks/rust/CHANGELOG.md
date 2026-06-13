@@ -4,6 +4,13 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## 0.21.1 — 2026-06-13
+
+### Added
+- **`chatgpt-codex` default reasoning effort** — a provider-level fallback for `reasoning.effort`. `ChatGptCodexProvider::with_reasoning_effort(Some("high"))` / `ClientBuilder::chatgpt_codex_reasoning_effort("high")` (feature-gated `chatgpt-codex`) set a default emitted as `reasoning: {effort, summary:"auto"}` on every request that does not carry a per-request `provider_options["reasoning_effort"]` (the per-request value still wins). When neither is set the `reasoning` object stays off the body (unchanged behavior). The effort string is passed through verbatim — the backend validates it. The `chatgpt_codex(access_token, account_id, model)` signature is unchanged.
+
+## [0.21.0]
+
 ### Added
 - **`chatgpt-codex` provider** — `ChatGptCodexProvider`, a native ChatGPT-backend inference provider gated behind the `chatgpt-codex` feature. POSTs the OpenAI **Responses API** to `chatgpt.com/backend-api/codex/responses` with OAuth-token + `chatgpt-account-id` auth and the codex CLI headers, streaming typed `response.*` SSE (text, reasoning→thinking deltas, `function_call` tool lifecycle, `response.completed` usage). Construct directly via `ChatGptCodexProvider::new(access_token, account_id, model, base_url)` or `ClientBuilder::chatgpt_codex(access_token, account_id, model)`; new `Provider::OpenAiChatGpt` enum variant.
 

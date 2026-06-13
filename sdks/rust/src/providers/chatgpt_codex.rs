@@ -30,6 +30,11 @@ pub struct ChatGptCodexProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    /// Default reasoning effort emitted as `reasoning.effort` when a request
+    /// does not carry a per-request `provider_options["reasoning_effort"]`.
+    /// `None` leaves the `reasoning` object off the body entirely. The string
+    /// is passed through verbatim — the backend validates the value.
+    reasoning_effort: Option<String>,
 }
 
 impl ChatGptCodexProvider {
@@ -46,11 +51,21 @@ impl ChatGptCodexProvider {
             model: model.into(),
             base_url: base_url.unwrap_or_else(|| CHATGPT_CODEX_URL.to_string()),
             retry_policy: RetryPolicy::default(),
+            reasoning_effort: None,
         }
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
+        self
+    }
+
+    /// Set the default reasoning effort (`low`/`medium`/`high`/…) used when a
+    /// request omits `provider_options["reasoning_effort"]`. A per-request
+    /// value always takes precedence. Pass `None` to leave the body's
+    /// `reasoning` object off when no per-request effort is supplied.
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
         self
     }
 
@@ -195,14 +210,19 @@ impl ChatGptCodexProvider {
             }
         }
 
-        // Conditional: reasoning `{effort, summary:"auto"}` when an effort is
-        // supplied via provider_options (no first-class field on ChatRequest).
-        if let Some(effort) = req
+        // Conditional: reasoning `{effort, summary:"auto"}`. A per-request
+        // `provider_options["reasoning_effort"]` wins; otherwise the
+        // provider-level default (`with_reasoning_effort`) is used. When
+        // neither is set the `reasoning` object is omitted (unchanged
+        // behavior). The effort string is passed through verbatim — the
+        // backend validates `low`/`medium`/`high`/etc.
+        let effort = req
             .provider_options
             .as_ref()
             .and_then(|opts| opts.get("reasoning_effort"))
             .and_then(Value::as_str)
-        {
+            .or(self.reasoning_effort.as_deref());
+        if let Some(effort) = effort {
             body["reasoning"] = json!({"effort": effort, "summary": "auto"});
         }
 
@@ -676,6 +696,41 @@ mod tests {
         assert_eq!(body["temperature"], json!(0.3_f32));
         assert_eq!(body["reasoning"]["effort"], json!("high"));
         assert_eq!(body["reasoning"]["summary"], json!("auto"));
+    }
+
+    #[test]
+    fn provider_default_reasoning_effort_is_emitted() {
+        // Provider-level default applies when the request carries no
+        // per-request `provider_options["reasoning_effort"]`.
+        let p = test_provider().with_reasoning_effort(Some("high".to_string()));
+        let req = simple_user_request("hi");
+        let body = p.build_responses_body(&req);
+
+        assert_eq!(body["reasoning"]["effort"], json!("high"));
+        assert_eq!(body["reasoning"]["summary"], json!("auto"));
+    }
+
+    #[test]
+    fn per_request_reasoning_effort_wins_over_provider_default() {
+        // A per-request value overrides the provider-level default.
+        let p = test_provider().with_reasoning_effort(Some("low".to_string()));
+        let req = ChatRequest::builder()
+            .message(Message::user("hi"))
+            .provider_options(json!({"reasoning_effort": "high"}))
+            .build();
+        let body = p.build_responses_body(&req);
+
+        assert_eq!(body["reasoning"]["effort"], json!("high"));
+    }
+
+    #[test]
+    fn no_reasoning_emitted_when_neither_set() {
+        // Default `None` provider + no provider_options => no `reasoning`.
+        let p = test_provider();
+        let req = simple_user_request("hi");
+        let body = p.build_responses_body(&req);
+
+        assert!(body.get("reasoning").is_none());
     }
 
     mod adapter_tests {
