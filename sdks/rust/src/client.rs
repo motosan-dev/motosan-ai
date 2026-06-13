@@ -49,6 +49,17 @@ pub struct Client {
     /// not set (which will produce an API error on first use).
     #[cfg(feature = "gemini-code-assist")]
     gemini_code_assist_project_id: Option<String>,
+    /// OAuth access token used to construct a [`ChatGptCodexProvider`] on
+    /// demand when `provider == Provider::OpenAiChatGpt`. Configured via
+    /// [`ClientBuilder::chatgpt_codex`].
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_access_token: Option<String>,
+    /// `chatgpt-account-id` header value paired with the access token.
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_account_id: Option<String>,
+    /// Model id sent in the Responses body for the ChatGPT-backend provider.
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_model: Option<String>,
 }
 
 impl Client {
@@ -341,6 +352,20 @@ impl Client {
                     Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
             }
+            Provider::OpenAiChatGpt => {
+                #[cfg(feature = "chatgpt-codex")]
+                {
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_chatgpt_codex_provider();
+                    p.validate_request(&request)?;
+                    p.chat(request).await
+                }
+                #[cfg(not(feature = "chatgpt-codex"))]
+                {
+                    let _ = request;
+                    Err(Self::feature_not_enabled("chatgpt-codex"))
+                }
+            }
         }
     }
 
@@ -509,6 +534,20 @@ impl Client {
                     Err(Self::feature_not_enabled("gemini-code-assist"))
                 }
             }
+            Provider::OpenAiChatGpt => {
+                #[cfg(feature = "chatgpt-codex")]
+                {
+                    use crate::providers::ProviderImpl;
+                    let p = self.build_chatgpt_codex_provider();
+                    p.validate_request(&request)?;
+                    p.stream(request).await
+                }
+                #[cfg(not(feature = "chatgpt-codex"))]
+                {
+                    let _ = request;
+                    Err(Self::feature_not_enabled("chatgpt-codex"))
+                }
+            }
         }
     }
 
@@ -523,6 +562,7 @@ impl Client {
         not(feature = "gemini-cli"),
         not(feature = "gemini"),
         not(feature = "gemini-code-assist"),
+        not(feature = "chatgpt-codex"),
     ))]
     fn feature_not_enabled(provider: &str) -> MotosanError {
         MotosanError::Config(format!("{provider} feature is not enabled"))
@@ -693,6 +733,27 @@ impl Client {
             }
         }
     }
+
+    #[cfg(feature = "chatgpt-codex")]
+    fn build_chatgpt_codex_provider(
+        &self,
+    ) -> crate::providers::chatgpt_codex::ChatGptCodexProvider {
+        // Constructed on demand from the stored OAuth credentials. The
+        // client-level `.model()` is used as a fallback when no
+        // chatgpt-codex-specific model was supplied via `chatgpt_codex(...)`.
+        let model = self
+            .chatgpt_codex_model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_default();
+        crate::providers::chatgpt_codex::ChatGptCodexProvider::new(
+            self.chatgpt_codex_access_token.clone().unwrap_or_default(),
+            self.chatgpt_codex_account_id.clone().unwrap_or_default(),
+            model,
+            None,
+        )
+        .with_retry_policy(self.retry_policy.clone())
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -723,6 +784,12 @@ pub struct ClientBuilder {
     gemini_code_assist: Option<crate::providers::gemini_code_assist::GeminiCodeAssistProvider>,
     #[cfg(feature = "gemini-code-assist")]
     gemini_code_assist_project_id: Option<String>,
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_access_token: Option<String>,
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_account_id: Option<String>,
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_model: Option<String>,
 }
 
 impl ClientBuilder {
@@ -950,6 +1017,25 @@ impl ClientBuilder {
         self
     }
 
+    /// Configure the ChatGPT-backend Responses provider
+    /// (`Provider::OpenAiChatGpt`). Stores the OAuth `access_token`, the
+    /// `chatgpt-account-id` header value, and the model id; the
+    /// [`ChatGptCodexProvider`] is constructed from these at dispatch time.
+    ///
+    /// [`ChatGptCodexProvider`]: crate::providers::chatgpt_codex::ChatGptCodexProvider
+    #[cfg(feature = "chatgpt-codex")]
+    pub fn chatgpt_codex(
+        mut self,
+        access_token: impl Into<String>,
+        account_id: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        self.chatgpt_codex_access_token = Some(access_token.into());
+        self.chatgpt_codex_account_id = Some(account_id.into());
+        self.chatgpt_codex_model = Some(model.into());
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -964,6 +1050,7 @@ impl ClientBuilder {
                 | Provider::CodexCli
                 | Provider::GeminiCli
                 | Provider::GeminiCodeAssist
+                | Provider::OpenAiChatGpt
         );
         let api_key = match self.api_key {
             Some(k) => k,
@@ -1025,6 +1112,12 @@ impl ClientBuilder {
             gemini_code_assist: self.gemini_code_assist,
             #[cfg(feature = "gemini-code-assist")]
             gemini_code_assist_project_id: self.gemini_code_assist_project_id,
+            #[cfg(feature = "chatgpt-codex")]
+            chatgpt_codex_access_token: self.chatgpt_codex_access_token,
+            #[cfg(feature = "chatgpt-codex")]
+            chatgpt_codex_account_id: self.chatgpt_codex_account_id,
+            #[cfg(feature = "chatgpt-codex")]
+            chatgpt_codex_model: self.chatgpt_codex_model,
         })
     }
 }

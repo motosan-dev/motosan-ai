@@ -26,6 +26,7 @@ pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "chatgpt-codex",
 ))]
 pub async fn collect_stream(
     mut stream: BoxStream,
