@@ -2,6 +2,13 @@
 
 All notable changes to `motosan-ai-oauth` are documented in this file.
 
+## [0.2.1] - 2026-06-13
+
+### Fixed
+- `exchange_code` now sends `state` to the token endpoint only for
+  `StateStrategy::EqualsVerifier` (Anthropic). `StateStrategy::Random`
+  providers omit it to avoid token endpoints that reject unexpected fields.
+
 ## [0.2.0] - 2026-05-18
 
 ### Added
