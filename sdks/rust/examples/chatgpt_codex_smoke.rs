@@ -105,7 +105,11 @@ async fn main() -> ExitCode {
         stop_reason,
         input_tokens,
         output_tokens,
-        if got_text { "" } else { " (no text deltas received)" },
+        if got_text {
+            ""
+        } else {
+            " (no text deltas received)"
+        },
     );
 
     ExitCode::SUCCESS
@@ -117,8 +121,7 @@ fn load_codex_auth() -> Result<(String, String), String> {
     let home = std::env::var("HOME").map_err(|_| "HOME env var is not set".to_string())?;
     let path = format!("{home}/.codex/auth.json");
 
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("could not read {path}: {e}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("could not read {path}: {e}"))?;
     let json: Value =
         serde_json::from_str(&raw).map_err(|e| format!("{path} is not valid JSON: {e}"))?;
 

@@ -820,7 +820,9 @@ mod tests {
             let mut adapter = fresh_adapter();
             let events = drive(
                 &mut adapter,
-                &[r#"{"type":"response.completed","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":1}}}"#],
+                &[
+                    r#"{"type":"response.completed","response":{"status":"incomplete","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+                ],
             );
             let done = events.iter().find(|e| e.done).expect("a done event");
             assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
@@ -830,8 +832,7 @@ mod tests {
         async fn adapter_surfaces_top_level_error() {
             use tokio_stream::StreamExt as _;
 
-            let frame =
-                r#"{"type":"error","message":"rate limited","code":"rate_limit_exceeded"}"#;
+            let frame = r#"{"type":"error","message":"rate limited","code":"rate_limit_exceeded"}"#;
             let items = vec![Ok(eventsource_stream::Event {
                 event: String::new(),
                 data: frame.to_string(),
@@ -848,7 +849,9 @@ mod tests {
 
             let item = adapter.next().await.expect("one item");
             match item {
-                Err(crate::error::MotosanError::Stream(msg)) => assert!(msg.contains("rate limited")),
+                Err(crate::error::MotosanError::Stream(msg)) => {
+                    assert!(msg.contains("rate limited"))
+                }
                 other => panic!("expected Stream error, got {other:?}"),
             }
         }
