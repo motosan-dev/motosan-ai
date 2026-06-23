@@ -2,7 +2,8 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.12.1 · Rust 0.20.0
+- Python 0.13.0 · Rust 0.20.0
+- Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
