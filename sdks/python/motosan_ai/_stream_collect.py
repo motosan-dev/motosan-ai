@@ -27,8 +27,13 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     current_tc_id = ""
     current_tc_name = ""
     current_tc_args = ""
+    session_id: str | None = None
 
     async for event in events:
+        # last-wins on session_id (HTTP providers never set it, so usually None);
+        # CLI readback uses the provider chat()/stream() first-wins path, not this.
+        if event.session_id is not None:
+            session_id = event.session_id
         if event.event_type == "text" and event.content:
             content += event.content
         elif event.event_type == "thinking" and event.content:
@@ -76,4 +81,5 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
         usage=usage,
         stop_reason=stop_reason,
         thinking=thinking or None,
+        session_id=session_id,
     )
