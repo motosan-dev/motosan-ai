@@ -15,6 +15,7 @@ import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
 import { RetryPolicy } from '../retry.js'
 import {
+  collectStream,
   doneEvent,
   doneWithStopReason,
   textEvent,
@@ -25,7 +26,7 @@ import {
   usageEvent,
   type BoxStream,
 } from '../stream.js'
-import type { ChatRequest, StopReason, StreamEvent, Usage } from '../types.js'
+import type { ChatRequest, ChatResponse, StopReason, StreamEvent, Usage } from '../types.js'
 
 export const DEFAULT_CHATGPT_CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const CHATGPT_CODEX_ORIGINATOR = 'codex_cli_rs'
@@ -206,6 +207,13 @@ export class ChatGptCodexProvider {
     return body
   }
 
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    const model = request.model ?? this.model
+    const response = await collectStream(this.stream(request))
+    if (!response.model) response.model = model
+    return response
+  }
+
   stream(request: ChatRequest): BoxStream {
     return this.streamImpl(request)
   }
@@ -325,6 +333,4 @@ export class ChatGptCodexProvider {
     // (mirrors anthropic.ts:386-391). response.completed returns earlier.
     yield doneEvent()
   }
-
-  // chat() lands in T3.
 }

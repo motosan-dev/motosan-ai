@@ -4,6 +4,8 @@ import {
   DEFAULT_CHATGPT_CODEX_MODEL,
   chatGptCodexErrorMessage,
 } from '../src/providers/chatgpt_codex.js'
+import { AuthError, NetworkError, ProviderError, RateLimitError } from '../src/error.js'
+import { RetryPolicy } from '../src/retry.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
 function p(): ChatGptCodexProvider {
@@ -363,5 +365,160 @@ describe('chatGptCodexErrorMessage', () => {
   })
   it('falls back when no message is present', () => {
     expect(chatGptCodexErrorMessage({ type: 'error' })).toBe('ChatGPT-backend stream error')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T3 — Provider HTTP behavior (headers/body, chat(), capabilities, errors)
+// ---------------------------------------------------------------------------
+
+describe('ChatGptCodexProvider HTTP', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('sends the six codex headers and the responses body', async () => {
+    let url = ''
+    let headers: Record<string, string> = {}
+    let body: any = null
+    streamFromTranscript(
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+      (u, opts) => {
+        url = u
+        headers = (opts?.headers as Record<string, string>) ?? {}
+        body = JSON.parse(String(opts?.body ?? '{}'))
+      },
+    )
+    const prov = new ChatGptCodexProvider('my-token', 'acct-123')
+    for await (const _ of prov.stream(REQ)) {
+      /* drain */
+    }
+
+    expect(url).toBe('https://chatgpt.com/backend-api/codex/responses')
+    expect(headers.authorization).toBe('Bearer my-token')
+    expect(headers['chatgpt-account-id']).toBe('acct-123')
+    expect(headers.originator).toBe('codex_cli_rs')
+    expect(headers['openai-beta']).toBe('responses=experimental')
+    expect(headers.accept).toBe('text/event-stream')
+    expect(body.store).toBe(false)
+    expect(body.stream).toBe(true)
+    expect(body.include).toEqual(['reasoning.encrypted_content'])
+    expect(body.input[0].type).toBe('message')
+    expect(body.input[0].content[0].type).toBe('input_text')
+  })
+
+  it('has text-only capabilities', () => {
+    expect(new ChatGptCodexProvider('t', 'a').capabilities()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+    })
+  })
+
+  it('chat() collects the stream into a ChatResponse', async () => {
+    streamFromTranscript(
+      'data: {"type":"response.output_text.delta","delta":"Hi there"}\n\n' +
+        'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":2}}}\n\n',
+    )
+    const resp = await new ChatGptCodexProvider('t', 'a').chat(REQ)
+    expect(resp.content).toBe('Hi there')
+    expect(resp.usage).toEqual({ inputTokens: 4, outputTokens: 2 })
+    expect(resp.model).toBe('gpt-5.5')
+    expect(resp.stopReason).toBe('end_turn')
+  })
+
+  it('chat() honors the per-request model in the result', async () => {
+    streamFromTranscript('data: {"type":"response.completed","response":{"status":"completed"}}\n\n')
+    const resp = await new ChatGptCodexProvider('t', 'a').chat({ ...REQ, model: 'gpt-x' })
+    expect(resp.model).toBe('gpt-x')
+  })
+
+  it('chat() surfaces thinking', async () => {
+    streamFromTranscript(
+      'data: {"type":"response.reasoning_text.delta","delta":"plan "}\n\n' +
+        'data: {"type":"response.reasoning_summary_text.delta","delta":"ahead"}\n\n' +
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+    )
+    const resp = await new ChatGptCodexProvider('t', 'a').chat(REQ)
+    expect(resp.thinking).toBe('plan ahead')
+  })
+
+  it('chat() yields a tool call from the lifecycle', async () => {
+    streamFromTranscript(
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_9","name":"lookup"}}\n\n' +
+        'data: {"type":"response.function_call_arguments.delta","item_id":"call_9","delta":"{\\"q\\":\\"x\\"}"}\n\n' +
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_9"}}\n\n' +
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+    )
+    const resp = await new ChatGptCodexProvider('t', 'a').chat(REQ)
+    expect(resp.stopReason).toBe('tool_use')
+    expect(resp.toolCalls).toHaveLength(1)
+    expect(resp.toolCalls[0]).toMatchObject({ id: 'call_9', name: 'lookup', input: { q: 'x' } })
+  })
+
+  function stubError(status: number): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: { message: `err ${status}` } }), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+      ),
+    )
+  }
+
+  const noRetry = new RetryPolicy({ maxRetries: 0 })
+
+  it('maps 401 to AuthError', async () => {
+    stubError(401)
+    const prov = new ChatGptCodexProvider('t', 'a').withRetryPolicy(noRetry)
+    await expect(
+      (async () => {
+        for await (const _ of prov.stream(REQ)) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toBeInstanceOf(AuthError)
+  })
+
+  it('maps 429 to RateLimitError', async () => {
+    stubError(429)
+    const prov = new ChatGptCodexProvider('t', 'a').withRetryPolicy(noRetry)
+    await expect(
+      (async () => {
+        for await (const _ of prov.stream(REQ)) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toBeInstanceOf(RateLimitError)
+  })
+
+  it('maps 500 to ProviderError', async () => {
+    stubError(500)
+    const prov = new ChatGptCodexProvider('t', 'a').withRetryPolicy(noRetry)
+    await expect(
+      (async () => {
+        for await (const _ of prov.stream(REQ)) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toBeInstanceOf(ProviderError)
+  })
+
+  it('propagates a transport error', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new NetworkError('socket hangup')
+      }),
+    )
+    const prov = new ChatGptCodexProvider('t', 'a').withRetryPolicy(noRetry)
+    await expect(
+      (async () => {
+        for await (const _ of prov.stream(REQ)) {
+          /* drain */
+        }
+      })(),
+    ).rejects.toBeInstanceOf(NetworkError)
   })
 })
