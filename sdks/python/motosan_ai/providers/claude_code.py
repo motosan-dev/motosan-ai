@@ -88,8 +88,8 @@ def _messages_to_prompt(messages: list[Message]) -> tuple[str | None, str]:
     return system, prompt
 
 
-def _parse_agent_json(raw: str) -> tuple[str, Usage]:
-    """Parse JSON output from agent mode, extracting ``result`` and ``usage``."""
+def _parse_agent_json(raw: str) -> tuple[str, Usage, str | None]:
+    """Parse JSON output from agent mode: ``result``, ``usage``, ``session_id``."""
     try:
         v = json.loads(raw)
     except json.JSONDecodeError as e:
@@ -97,9 +97,15 @@ def _parse_agent_json(raw: str) -> tuple[str, Usage]:
 
     text = v.get("result", "")
     u = v.get("usage", {})
-    return text, Usage(
-        input_tokens=int(u.get("input_tokens", 0)),
-        output_tokens=int(u.get("output_tokens", 0)),
+    sid = v.get("session_id")
+    session_id = sid if isinstance(sid, str) and sid else None
+    return (
+        text,
+        Usage(
+            input_tokens=int(u.get("input_tokens", 0)),
+            output_tokens=int(u.get("output_tokens", 0)),
+        ),
+        session_id,
     )
 
 
@@ -131,10 +137,13 @@ def _parse_ndjson_line(line: str) -> list[StreamEvent]:
         return [StreamEvent(content=text, done=False)]
 
     if event_type == "result":
-        events: list[StreamEvent] = []
+        events_out: list[StreamEvent] = []
+        sid = event.get("session_id")
+        if isinstance(sid, str) and sid:
+            events_out.append(StreamEvent(content="", done=False, session_id=sid))
         usage_obj = event.get("usage")
         if isinstance(usage_obj, dict):
-            events.append(
+            events_out.append(
                 StreamEvent(
                     content="",
                     done=False,
@@ -145,8 +154,8 @@ def _parse_ndjson_line(line: str) -> list[StreamEvent]:
                     ),
                 )
             )
-        events.append(StreamEvent(content="", done=True))
-        return events
+        events_out.append(StreamEvent(content="", done=True))
+        return events_out
 
     return []
 
@@ -452,10 +461,11 @@ class ClaudeCodeClient:
         raw = stdout.decode()
 
         if self._agent_mode:
-            text, usage = _parse_agent_json(raw)
+            text, usage, session_id = _parse_agent_json(raw)
         else:
             text = raw.strip()
             usage = Usage(input_tokens=0, output_tokens=0)
+            session_id = None
 
         effective_model = request.model or self._config.model or ""
 
@@ -465,6 +475,7 @@ class ClaudeCodeClient:
             model=effective_model,
             usage=usage,
             stop_reason=StopReason.end_turn,
+            session_id=session_id,
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:

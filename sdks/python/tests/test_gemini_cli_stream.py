@@ -15,8 +15,15 @@ from motosan_ai.providers.gemini_cli import (
 from motosan_ai.types import ChatRequest, Message
 
 
-def test_init_event_dropped():
-    assert _parse_jsonl_line('{"type": "init", "session_id": "s1"}') == []
+def test_init_event_without_session_id_dropped():
+    assert _parse_jsonl_line('{"type":"init"}') == []
+
+
+def test_init_event_yields_session_id():
+    events = _parse_jsonl_line('{"type":"init","session_id":"s1"}')
+    assert len(events) == 1
+    assert events[0].session_id == "s1"
+    assert events[0].done is False
 
 
 def test_user_message_dropped():
@@ -191,6 +198,20 @@ async def test_chat_returns_concatenated_text(monkeypatch):
     assert resp.content == "Hello world."
     assert resp.usage.input_tokens == 10
     assert resp.usage.output_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_chat_captures_session_id(monkeypatch):
+    jsonl = (
+        '{"type": "init", "session_id": "s1"}\n'
+        '{"type": "message", "role": "assistant", "content": "hi", "delta": true}\n'
+        '{"type": "result", "status": "success"}\n'
+    )
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl))
+    resp = await GeminiCliClient(binary_path="gemini").chat(
+        ChatRequest(messages=[Message.user("hi")])
+    )
+    assert resp.session_id == "s1"
 
 
 @pytest.mark.asyncio

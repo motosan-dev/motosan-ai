@@ -236,3 +236,25 @@ async def test_collect_stream_propagates_mid_stream_raise():
 
     with pytest.raises(StreamError, match="boom"):
         await collect_stream(_raising_stream())
+
+
+@pytest.mark.asyncio
+async def test_collect_stream_captures_session_id():
+    async def gen():
+        yield StreamEvent(content="", done=False, session_id="sid-1")
+        yield StreamEvent(content="hi", done=False)
+        yield StreamEvent(content="", done=True)
+
+    resp = await collect_stream(gen())
+    assert resp.session_id == "sid-1"
+    assert resp.content == "hi"
+
+
+@pytest.mark.asyncio
+async def test_collect_stream_session_id_none_when_absent():
+    async def gen():
+        yield StreamEvent(content="hi", done=False)
+        yield StreamEvent(content="", done=True)
+
+    resp = await collect_stream(gen())
+    assert resp.session_id is None

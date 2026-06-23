@@ -71,7 +71,20 @@ def test_top_level_error_raises_provider_error():
 
 
 def test_unknown_event_dropped():
-    assert _parse_jsonl_line('{"type": "thread.started", "thread_id": "t1"}') == []
+    # thread.started now parses (F3); use a still-unmodeled event type.
+    assert _parse_jsonl_line('{"type":"item.started","item_id":"abc"}') == []
+
+
+def test_thread_started_captures_session_id():
+    events = _parse_jsonl_line('{"type":"thread.started","thread_id":"th_abc"}')
+    assert len(events) == 1
+    assert events[0].session_id == "th_abc"
+    assert events[0].done is False
+    assert events[0].content == ""
+
+
+def test_thread_started_without_id_dropped():
+    assert _parse_jsonl_line('{"type":"thread.started"}') == []
 
 
 def test_malformed_json_returns_empty():
@@ -234,10 +247,16 @@ async def test_stream_yields_events_in_order(monkeypatch):
     client = CodexCliClient(binary_path="codex")
     events = [e async for e in client.stream(ChatRequest(messages=[Message.user("hi")]))]
 
-    text_events = [e for e in events if e.event_type == "text" and not e.done]
+    # thread.started now emits a session event (F3); exclude it from text events.
+    session_events = [e for e in events if e.session_id is not None]
+    text_events = [
+        e for e in events if e.event_type == "text" and not e.done and e.session_id is None
+    ]
     usage_events = [e for e in events if e.event_type == "usage"]
     done_events = [e for e in events if e.done]
 
+    assert len(session_events) == 1
+    assert session_events[0].session_id == "t1"
     assert [e.content for e in text_events] == ["hi"]
     assert len(usage_events) == 1
     assert usage_events[0].usage is not None

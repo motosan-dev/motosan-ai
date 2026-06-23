@@ -50,6 +50,7 @@ class _CodexCliConfig:
     enabled_features: list[str] = field(default_factory=list)
     disabled_features: list[str] = field(default_factory=list)
     config_overrides: list[tuple[str, str]] = field(default_factory=list)
+    resume: str | None = None
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -143,6 +144,12 @@ def _parse_jsonl_line(line: str) -> list[StreamEvent]:
         msg = event.get("message") or "codex error"
         raise ProviderError(f"codex error: {msg}")
 
+    if event_type == "thread.started":
+        thread_id = event.get("thread_id")
+        if thread_id:
+            return [StreamEvent(content="", done=False, session_id=thread_id)]
+        return []
+
     return []
 
 
@@ -212,13 +219,16 @@ class CodexCliClient:
         self._config.config_overrides.append((key, value))
         return self
 
+    def resume(self, thread_id: str) -> CodexCliClient:
+        """Resume a previous Codex thread (`codex exec resume <id>`)."""
+        self._config.resume = thread_id
+        return self
+
     def _build_args(self, model: str | None = None) -> list[str]:
-        args: list[str] = [
-            self._config.binary_path,
-            "exec",
-            "--json",
-            "--skip-git-repo-check",
-        ]
+        args: list[str] = [self._config.binary_path, "exec"]
+        if self._config.resume is not None and self._config.resume.strip():
+            args.extend(["resume", self._config.resume.strip()])
+        args.extend(["--json", "--skip-git-repo-check"])
         if self._config.agent_mode:
             args.append("--full-auto")
         if self._config.dangerously_bypass_approvals_and_sandbox:
@@ -280,9 +290,12 @@ class CodexCliClient:
 
         content_parts: list[str] = []
         usage = Usage(0, 0)
+        session_id: str | None = None
         for raw in stdout.decode().splitlines():
             for event in _parse_jsonl_line(raw):
-                if event.event_type == "text" and event.content:
+                if event.session_id is not None and session_id is None:
+                    session_id = event.session_id
+                elif event.event_type == "text" and event.content:
                     content_parts.append(event.content)
                 elif event.event_type == "usage" and event.usage is not None:
                     usage = event.usage
@@ -294,6 +307,7 @@ class CodexCliClient:
             model=request.model or self._config.model or "",
             usage=usage,
             stop_reason=StopReason.end_turn,
+            session_id=session_id,
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
