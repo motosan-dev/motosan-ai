@@ -3,13 +3,29 @@
  * `https://chatgpt.com/backend-api/codex/responses` using a caller-supplied
  * OAuth `accessToken` + `accountId` (codex CLI headers; no api key). Mirrors the
  * verified Python `chatgpt_codex.py` (a port of authoritative Rust
- * `chatgpt_codex.rs`) in idiomatic TS.
+ * `chatgpt_codex.rs`) in idiomatic TS, with one deliberate divergence: a
+ * mid-stream `error` / `response.failed` frame terminates the stream SILENTLY
+ * (TS convention — ollama.ts:362-366), instead of the Python mid-stream raise.
  */
 
+import { isRetryableNetworkError, isRetryableStatus } from '../error.js'
+import { postStream } from '../http/fetch.js'
+import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
 import { RetryPolicy } from '../retry.js'
-import type { ChatRequest } from '../types.js'
+import {
+  doneEvent,
+  doneWithStopReason,
+  textEvent,
+  thinkingDelta,
+  toolCallArgsWithId,
+  toolCallEndWithId,
+  toolCallStart,
+  usageEvent,
+  type BoxStream,
+} from '../stream.js'
+import type { ChatRequest, StopReason, StreamEvent, Usage } from '../types.js'
 
 export const DEFAULT_CHATGPT_CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const CHATGPT_CODEX_ORIGINATOR = 'codex_cli_rs'
@@ -17,6 +33,24 @@ const CHATGPT_CODEX_ORIGINATOR = 'codex_cli_rs'
 // Re-exported here (load-bearing): the T1 unit test imports the default model
 // from this provider module path.
 export { DEFAULT_CHATGPT_CODEX_MODEL }
+
+/**
+ * Extract the error message from an `error` / `response.failed` Responses frame.
+ * First non-empty wins: top-level `message` → `response.error.message` →
+ * `error.message` → fallback. Pure; used by tests only. The stream path silently
+ * terminates without surfacing this (plan §C), so this is NOT re-exported from
+ * `src/index.ts`.
+ *
+ * @internal
+ */
+export function chatGptCodexErrorMessage(chunk: any): string {
+  if (typeof chunk?.message === 'string' && chunk.message) return chunk.message
+  const nested = chunk?.response?.error?.message
+  if (typeof nested === 'string' && nested) return nested
+  const top = chunk?.error?.message
+  if (typeof top === 'string' && top) return top
+  return 'ChatGPT-backend stream error'
+}
 
 /**
  * No-api-key OAuth-Bearer HTTP provider over the OpenAI Responses API.
@@ -172,5 +206,125 @@ export class ChatGptCodexProvider {
     return body
   }
 
-  // chat()/stream() land in T2/T3.
+  stream(request: ChatRequest): BoxStream {
+    return this.streamImpl(request)
+  }
+
+  private async *streamImpl(request: ChatRequest): AsyncGenerator<StreamEvent> {
+    const model = request.model ?? this.model
+    const body = this.buildResponsesBody(request, model)
+    const headers = this.headers()
+
+    // Retry ONLY the initial fetch (mirrors anthropic.ts:259-288 / ollama.ts:300-321).
+    let attempt = 0
+    let responseBody: ReadableStream<Uint8Array>
+    while (true) {
+      try {
+        responseBody = await postStream(this.baseUrl, headers, body)
+        break
+      } catch (error) {
+        const status = (error as { status?: number }).status
+        const retryable =
+          (status !== undefined && isRetryableStatus(status)) || isRetryableNetworkError(error)
+        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
+          throw error
+        }
+        attempt += 1
+        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
+        const delay = this.retryPolicy.respectRetryAfter
+          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
+          : this.retryPolicy.delayForAttempt(attempt)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
+
+    // Only `sawToolCall` drives the terminal stop_reason (parity with Rust/Python,
+    // which also track a seen-ids set that is write-only — dropped here per plan R1).
+    let sawToolCall = false
+
+    // Mid-stream body errors terminate the stream SILENTLY (TS convention;
+    // ollama.ts:362-366, providers-ollama.test.ts:377). NO mid-stream throw.
+    try {
+      for await (const evt of parseSse(responseBody)) {
+        const data = evt.data
+        if (!data || data === '[DONE]' || typeof data !== 'object') continue
+
+        switch (data.type) {
+          case 'response.output_text.delta': {
+            const delta = data.delta
+            if (typeof delta === 'string' && delta) yield textEvent(delta)
+            break
+          }
+          case 'response.reasoning_text.delta':
+          case 'response.reasoning_summary_text.delta': {
+            const delta = data.delta
+            if (typeof delta === 'string' && delta) yield thinkingDelta(delta)
+            break
+          }
+          case 'response.output_item.added': {
+            const item = data.item
+            if (item && item.type === 'function_call' && item.call_id) {
+              sawToolCall = true
+              yield toolCallStart(String(item.call_id), String(item.name ?? ''))
+            }
+            break
+          }
+          case 'response.function_call_arguments.delta': {
+            const itemId = data.item_id
+            const delta = data.delta
+            if (itemId && typeof delta === 'string') {
+              yield toolCallArgsWithId(String(itemId), delta)
+            }
+            break
+          }
+          case 'response.output_item.done': {
+            const item = data.item
+            if (item && item.type === 'function_call' && item.call_id) {
+              yield toolCallEndWithId(String(item.call_id))
+            }
+            break
+          }
+          case 'response.completed': {
+            const response =
+              data.response && typeof data.response === 'object' ? data.response : {}
+            const usage = response.usage
+            if (usage && typeof usage === 'object') {
+              const u: Usage = {
+                inputTokens: Number(usage.input_tokens ?? 0),
+                outputTokens: Number(usage.output_tokens ?? 0),
+              }
+              const cached = Number(usage.input_tokens_details?.cached_tokens ?? 0)
+              if (cached > 0) u.cacheReadInputTokens = cached
+              yield usageEvent(u)
+            }
+            const status = response.status ?? 'completed'
+            const stop: StopReason = sawToolCall
+              ? 'tool_use'
+              : status === 'incomplete'
+                ? 'max_tokens'
+                : 'end_turn'
+            yield doneWithStopReason(stop)
+            return
+          }
+          case 'error':
+          case 'response.failed':
+            // Silent terminate (TS convention). The Python `raise StreamError`
+            // path is intentionally NOT ported. See plan §C.
+            return
+          default:
+            break
+        }
+      }
+    } catch {
+      // Ignore post-start stream-body errors; end without a terminal done
+      // (mirrors ollama.ts:362-366).
+      return
+    }
+
+    // Defensive terminal for a clean EOF without response.completed
+    // (mirrors anthropic.ts:386-391). response.completed returns earlier.
+    yield doneEvent()
+  }
+
+  // chat() lands in T3.
 }

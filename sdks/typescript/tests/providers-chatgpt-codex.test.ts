@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ChatGptCodexProvider,
   DEFAULT_CHATGPT_CODEX_MODEL,
+  chatGptCodexErrorMessage,
 } from '../src/providers/chatgpt_codex.js'
-import type { ChatRequest } from '../src/types.js'
+import type { ChatRequest, StreamEvent } from '../src/types.js'
 
 function p(): ChatGptCodexProvider {
   return new ChatGptCodexProvider('tok', 'acct')
@@ -183,5 +184,184 @@ describe('ChatGptCodexProvider buildResponsesBody', () => {
     prov.reasoningEffort(undefined)
     expect(prov.buildResponsesBody({ messages: [{ role: 'user', content: 'hi' }] }, 'gpt-5.5').reasoning)
       .toBeUndefined()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// T2 — SSE adapter (text / thinking / tool triplet / usage / terminal / error)
+// ---------------------------------------------------------------------------
+
+function streamFromTranscript(
+  sse: string,
+  onRequest?: (url: string, options?: RequestInit) => void,
+): void {
+  const bytes = new TextEncoder().encode(sse)
+  const mockStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes)
+      controller.close()
+    },
+  })
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, options?: RequestInit) => {
+      onRequest?.(url, options)
+      return new Response(mockStream, {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }),
+  )
+}
+
+const REQ: ChatRequest = { messages: [{ role: 'user', content: 'hi' }] }
+
+async function collect(sse: string): Promise<StreamEvent[]> {
+  streamFromTranscript(sse)
+  const prov = new ChatGptCodexProvider('tok', 'acct')
+  const events: StreamEvent[] = []
+  for await (const e of prov.stream(REQ)) events.push(e)
+  return events
+}
+
+describe('ChatGptCodexProvider SSE adapter', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('ignores empty/[DONE]/malformed/unknown frames and empty text deltas', async () => {
+    const sse =
+      'data: \n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not json}\n\n' +
+      'data: {"type":"response.unknown"}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":""}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    // only the terminal done
+    expect(events).toHaveLength(1)
+    expect(events[0].done).toBe(true)
+    expect(events[0].stopReason).toBe('end_turn')
+  })
+
+  it('concatenates text deltas and ends with end_turn', async () => {
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"Hello, "}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":"world"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    // The terminal done is itself an eventType:'text' event with empty content;
+    // exclude it with `!e.done` (matches providers-anthropic.test.ts:416).
+    expect(events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content)).toEqual([
+      'Hello, ',
+      'world',
+    ])
+    expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'end_turn' })
+  })
+
+  it('emits a usage event from response.completed (cacheRead omitted when absent)', async () => {
+    const sse =
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":12,"output_tokens":7}}}\n\n'
+    const events = await collect(sse)
+    const usage = events.find((e) => e.eventType === 'usage')
+    expect(usage?.usage).toEqual({ inputTokens: 12, outputTokens: 7 })
+    expect(usage?.usage?.cacheReadInputTokens).toBeUndefined()
+  })
+
+  it('surfaces cached_tokens as-is (not subtracted)', async () => {
+    const sse =
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":100,"output_tokens":5,"input_tokens_details":{"cached_tokens":30}}}}\n\n'
+    const events = await collect(sse)
+    const usage = events.find((e) => e.eventType === 'usage')?.usage
+    expect(usage?.inputTokens).toBe(100)
+    expect(usage?.cacheReadInputTokens).toBe(30)
+  })
+
+  it('maps both reasoning delta types to thinking_delta', async () => {
+    const sse =
+      'data: {"type":"response.reasoning_text.delta","delta":"plan "}\n\n' +
+      'data: {"type":"response.reasoning_summary_text.delta","delta":"ahead"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    expect(events.filter((e) => e.eventType === 'thinking_delta').map((e) => e.content)).toEqual([
+      'plan ',
+      'ahead',
+    ])
+  })
+
+  it('runs the function_call lifecycle and ends with tool_use', async () => {
+    const sse =
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"{\\"city\\":"}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"\\"Paris\\"}"}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_42"}}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    const tool = events.filter((e) => e.eventType.startsWith('tool_call'))
+    expect(tool[0]).toMatchObject({
+      eventType: 'tool_call_start',
+      toolCallId: 'call_42',
+      toolCallName: 'get_weather',
+    })
+    expect(tool[1]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
+    expect(tool[2]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
+    expect(tool[3]).toMatchObject({ eventType: 'tool_call_end', toolCallId: 'call_42' })
+    const argText = tool
+      .filter((e) => e.eventType === 'tool_call_args')
+      .map((e) => e.toolCallArgsDelta)
+      .join('')
+    expect(argText).toBe('{"city":"Paris"}')
+    expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'tool_use' })
+  })
+
+  it('maps status:"incomplete" to max_tokens', async () => {
+    const sse = 'data: {"type":"response.completed","response":{"status":"incomplete"}}\n\n'
+    const events = await collect(sse)
+    expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'max_tokens' })
+  })
+
+  it('terminates silently (no throw) on a top-level error frame', async () => {
+    streamFromTranscript(
+      'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' +
+        'data: {"type":"error","message":"rate limited"}\n\n',
+    )
+    const prov = new ChatGptCodexProvider('tok', 'acct')
+    const events: StreamEvent[] = []
+    await expect(
+      (async () => {
+        for await (const e of prov.stream(REQ)) events.push(e)
+      })(),
+    ).resolves.toBeUndefined()
+    // the partial text was yielded; NO terminal done; NO throw
+    expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])
+  })
+
+  it('terminates silently on a response.failed frame', async () => {
+    streamFromTranscript(
+      'data: {"type":"response.failed","response":{"error":{"message":"boom"}}}\n\n',
+    )
+    const prov = new ChatGptCodexProvider('tok', 'acct')
+    const events: StreamEvent[] = []
+    await expect(
+      (async () => {
+        for await (const e of prov.stream(REQ)) events.push(e)
+      })(),
+    ).resolves.toBeUndefined()
+    expect(events).toHaveLength(0)
+  })
+})
+
+describe('chatGptCodexErrorMessage', () => {
+  it('prefers the top-level message', () => {
+    expect(chatGptCodexErrorMessage({ type: 'error', message: 'rate limited' })).toBe('rate limited')
+  })
+  it('reads the nested response.error.message', () => {
+    expect(
+      chatGptCodexErrorMessage({ type: 'response.failed', response: { error: { message: 'boom' } } }),
+    ).toBe('boom')
+  })
+  it('reads the error.message branch', () => {
+    expect(chatGptCodexErrorMessage({ type: 'error', error: { message: 'nope' } })).toBe('nope')
+  })
+  it('falls back when no message is present', () => {
+    expect(chatGptCodexErrorMessage({ type: 'error' })).toBe('ChatGPT-backend stream error')
   })
 })
