@@ -91,6 +91,12 @@ def _parse_jsonl_line(line: str) -> list[StreamEvent]:
 
     event_type = event.get("type")
 
+    if event_type == "init":
+        session_id = event.get("session_id")
+        if isinstance(session_id, str) and session_id:
+            return [StreamEvent(content="", done=False, session_id=session_id)]
+        return []
+
     if event_type == "message":
         role = event.get("role")
         delta = event.get("delta", False)
@@ -180,6 +186,11 @@ class GeminiCliClient:
         return self
 
     def resume(self, session: str) -> GeminiCliClient:
+        """Resume a prior Gemini session (`--resume <id>`).
+
+        Resuming an arbitrary externally supplied id is validated only by the
+        skip-guarded live test; the captured-id round-trip is the supported path.
+        """
         self._config.resume = session
         return self
 
@@ -246,9 +257,12 @@ class GeminiCliClient:
 
         content_parts: list[str] = []
         usage = Usage(0, 0)
+        session_id: str | None = None
         for raw in stdout.decode().splitlines():
             for event in _parse_jsonl_line(raw):
-                if event.event_type == "text" and event.content:
+                if event.session_id and session_id is None:
+                    session_id = event.session_id
+                elif event.event_type == "text" and event.content:
                     content_parts.append(event.content)
                 elif event.event_type == "usage" and event.usage is not None:
                     usage = event.usage
@@ -259,6 +273,7 @@ class GeminiCliClient:
             model=request.model or self._config.model or "",
             usage=usage,
             stop_reason=StopReason.end_turn,
+            session_id=session_id,
         )
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
