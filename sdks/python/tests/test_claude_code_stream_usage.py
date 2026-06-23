@@ -30,3 +30,15 @@ def test_text_event_unchanged():
     assert len(events) == 1
     assert events[0].content == "hi"
     assert events[0].done is False
+
+
+def test_result_surfaces_session_id():
+    events = _parse_ndjson_line('{"type":"result","result":"done","session_id":"sess_99"}')
+    assert events[0].session_id == "sess_99"
+    assert events[0].done is False
+    assert events[-1].done is True  # session event precedes the terminal done
+
+
+def test_result_empty_session_id_omitted():
+    events = _parse_ndjson_line('{"type":"result","result":"done","session_id":""}')
+    assert all(e.session_id is None for e in events)

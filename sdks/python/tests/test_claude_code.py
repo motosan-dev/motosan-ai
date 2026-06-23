@@ -90,14 +90,14 @@ class TestParseAgentJson:
                 "usage": {"input_tokens": 10, "output_tokens": 5},
             }
         )
-        text, usage = _parse_agent_json(raw)
+        text, usage, _sid = _parse_agent_json(raw)
         assert text == "hello world"
         assert usage.input_tokens == 10
         assert usage.output_tokens == 5
 
     def test_without_usage(self):
         raw = json.dumps({"result": "hello"})
-        text, usage = _parse_agent_json(raw)
+        text, usage, _sid = _parse_agent_json(raw)
         assert text == "hello"
         assert usage.input_tokens == 0
         assert usage.output_tokens == 0
@@ -107,6 +107,15 @@ class TestParseAgentJson:
 
         with pytest.raises(ProviderError, match="failed to parse"):
             _parse_agent_json("not json")
+
+    def test_returns_session_id(self):
+        text, usage, sid = _parse_agent_json('{"result":"hi","session_id":"s1"}')
+        assert text == "hi"
+        assert sid == "s1"
+
+    def test_session_id_none_when_absent(self):
+        text, usage, sid = _parse_agent_json('{"result":"hi"}')
+        assert sid is None
 
 
 # ---------------------------------------------------------------------------
