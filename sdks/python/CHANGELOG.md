@@ -2,6 +2,18 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.13.0] - 2026-06-23
+
+### Added
+- **CLI working-directory setter** — `ClaudeCodeClient.cwd(dir)` and `GeminiCliClient.cwd(dir)` run the spawned subprocess in `dir`. (Codex uses its existing `cd()`/`--cd` flag.)
+- **Session continuity** — `StreamEvent` and `ChatResponse` gain an additive `session_id: str | None = None`. CLI providers read it back (Claude `result.session_id`, Codex `thread.started.thread_id`, Gemini `init.session_id`); `collect_stream` captures it. `CodexCliClient.resume(thread_id)` resumes a thread (`codex exec resume <id>`); `GeminiCliClient.resume()` forwards `--resume`.
+- **Per-run env injection** — `.env(key, value)` (append) / `.envs(map)` (replace) on the three CLI providers inject secrets into the child env, merged over a copy of `os.environ` (parent process env is never mutated). Values are redacted from `repr` (`<N redacted>`).
+- **CLI tool-call stream events** — `stream()` on the three CLI providers now surfaces `tool_call_start → tool_call_args → tool_call_end` for tool wire events (Claude `tool_use`; Codex `command_execution` / `mcp_tool_call`, MCP name `server/tool`; Gemini `tool_use`). The terminal `stop_reason` becomes `tool_use` when a tool call was seen. Blocking `chat().tool_calls` stays empty for CLI backends.
+- **Configurable timeout** — `.timeout(secs)` / `.no_timeout()` on the three CLI providers. Defaults: Claude 300s, Codex 600s, Gemini 600s. The stream read loop enforces a per-read stall deadline that raises `ProviderError` on stall; Codex and Gemini `stream()` gained a per-read deadline they previously lacked.
+
+### Changed
+- **BREAKING — fallible stream.** Every HTTP provider's `stream()` (`anthropic`, `openai`, `gemini`, `gemini_code_assist`, `minimax`, `ollama`) now RAISES `motosan_ai.error.StreamError` on a malformed SSE/NDJSON frame or a mid-stream transport fault, instead of silently swallowing it and ending. `collect_stream` propagates the raise. `Client.stream_with` no longer retries after a mid-stream raise (it would replay already-yielded deltas); only pre-first-yield connection errors are retried. `StreamError` is non-retryable. Callers that relied on a stream silently ending on error must now handle `StreamError`.
+
 ## [0.12.1] - 2026-05-29
 
 ### Added

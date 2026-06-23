@@ -5,9 +5,11 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.12.1 / Rust 0.20.0 / TypeScript 0.10.0
+Multi-provider LLM SDK — Python 0.13.0 / Rust 0.20.0 / TypeScript 0.10.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI
+
+Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
 ## Install
 
