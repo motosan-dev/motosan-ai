@@ -6,7 +6,7 @@ from typing import Any
 
 import httpx
 
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -209,52 +209,62 @@ class OpenAIProvider:
         except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
 
-        if not resp.is_success:
-            error_body = await resp.aread()
-            raise self._map_http_error(resp.status_code, error_body.decode())
+        try:
+            if not resp.is_success:
+                error_body = await resp.aread()
+                raise self._map_http_error(resp.status_code, error_body.decode())
 
-        async for line in resp.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
-                yield StreamEvent(content="", done=True)
-                return
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:].strip()
+                if not data or data == "[DONE]":
+                    if data == "[DONE]":
+                        yield StreamEvent(content="", done=True)
+                        return
+                    continue
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise StreamError(f"malformed SSE chunk: {exc}") from exc
 
-            try:
-                payload = json.loads(data)
-            except json.JSONDecodeError:
-                continue
+                for choice in payload.get("choices") or []:
+                    delta = choice.get("delta") or {}
+                    text = delta.get("content") or ""
+                    if text:
+                        yield StreamEvent(content=text, done=False)
 
-            for choice in payload.get("choices") or []:
-                delta = choice.get("delta") or {}
-                text = delta.get("content") or ""
-                if text:
-                    yield StreamEvent(content=text, done=False)
+                    for tc in delta.get("tool_calls") or []:
+                        fn = tc.get("function") or {}
+                        tc_id = tc.get("id")
+                        tc_name = fn.get("name")
+                        tc_args = fn.get("arguments")
+                        if tc_id and tc_name:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_id=tc_id,
+                                tool_call_name=tc_name,
+                                event_type="tool_call_start",
+                            )
+                        if tc_args:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_args_delta=tc_args,
+                                event_type="tool_call_args",
+                            )
 
-                for tc in delta.get("tool_calls") or []:
-                    fn = tc.get("function") or {}
-                    tc_id = tc.get("id")
-                    tc_name = fn.get("name")
-                    tc_args = fn.get("arguments")
-                    if tc_id and tc_name:
-                        yield StreamEvent(
-                            content="",
-                            done=False,
-                            tool_call_id=tc_id,
-                            tool_call_name=tc_name,
-                            event_type="tool_call_start",
-                        )
-                    if tc_args:
-                        yield StreamEvent(
-                            content="",
-                            done=False,
-                            tool_call_args_delta=tc_args,
-                            event_type="tool_call_args",
-                        )
-
-                if choice.get("finish_reason"):
-                    if choice.get("finish_reason") == "tool_calls":
-                        yield StreamEvent(content="", done=False, event_type="tool_call_end")
-                    yield StreamEvent(content="", done=True)
-                    return
+                    if choice.get("finish_reason"):
+                        if choice.get("finish_reason") == "tool_calls":
+                            yield StreamEvent(content="", done=False, event_type="tool_call_end")
+                        yield StreamEvent(content="", done=True)
+                        return
+        except StreamError:
+            raise
+        except (AuthError, RateLimitError, ProviderError, NetworkError):
+            raise
+        except httpx.HTTPError as exc:
+            raise StreamError(f"stream transport error: {exc}") from exc
+        finally:
+            await resp.aclose()
