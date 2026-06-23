@@ -324,6 +324,22 @@ async def test_chat_passes_env_to_subprocess(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_does_not_surface_tool_calls(monkeypatch):
+    jsonl = (
+        '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
+        '"command": "ls"}}\n'
+        '{"type": "item.completed", "item": {"type": "agent_message", "text": "done"}}\n'
+        '{"type": "turn.completed"}\n'
+    )
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl))
+    resp = await CodexCliClient(binary_path="codex").chat(
+        ChatRequest(messages=[Message.user("hi")])
+    )
+    assert resp.tool_calls == []
+    assert "done" in resp.content
+
+
+@pytest.mark.asyncio
 async def test_stream_tool_call_sets_tool_use_stop_reason(monkeypatch):
     jsonl = (
         '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
