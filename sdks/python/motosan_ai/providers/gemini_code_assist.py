@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from motosan_ai._stream_collect import collect_stream
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers.gemini import build_gemini_body
 from motosan_ai.types import ChatRequest, ChatResponse, StopReason, StreamEvent, Usage
@@ -50,8 +50,8 @@ def _parse_sse_event(data: str, state: _CodeAssistAdapterState) -> list[StreamEv
         return []
     try:
         chunk = json.loads(s)
-    except json.JSONDecodeError:
-        return []
+    except json.JSONDecodeError as exc:
+        raise StreamError(f"malformed SSE chunk: {exc}") from exc
 
     response_data = chunk.get("response")
     if not isinstance(response_data, dict):
@@ -212,14 +212,19 @@ class GeminiCodeAssistProvider(BaseProvider):
                 raise self._map_http_error(resp.status_code, error_body.decode())
 
             state = _CodeAssistAdapterState()
-            async for line in resp.aiter_lines():
-                if not line.startswith("data: "):
-                    continue
-                data = line[len("data: ") :]
-                for event in _parse_sse_event(data, state):
-                    yield event
-                    if event.done:
-                        return
+            try:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    data = line[len("data: ") :]
+                    for event in _parse_sse_event(data, state):
+                        yield event
+                        if event.done:
+                            return
+            except (StreamError, AuthError, RateLimitError, ProviderError, NetworkError):
+                raise
+            except httpx.HTTPError as exc:
+                raise StreamError(f"stream transport error: {exc}") from exc
         finally:
             await resp.aclose()
 
