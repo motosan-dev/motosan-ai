@@ -201,6 +201,36 @@ class TestParseNdjsonLine:
         assert _parse_ndjson_line("{") == []
         assert _parse_ndjson_line("") == []
 
+    def test_tool_use_block_yields_triplet(self):
+        line = (
+            '{"type":"assistant","message":{"content":['
+            '{"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"/tmp/x"}}]}}'
+        )
+        events = _parse_ndjson_line(line)
+        assert [e.event_type for e in events] == [
+            "tool_call_start",
+            "tool_call_args",
+            "tool_call_end",
+        ]
+        assert events[0].tool_call_id == "toolu_01"
+        assert events[0].tool_call_name == "Read"
+        assert events[1].tool_call_args_delta == '{"path":"/tmp/x"}'
+        assert events[2].tool_call_id == "toolu_01"
+
+    def test_assistant_text_and_tool_use_preserves_text(self):
+        line = (
+            '{"type":"assistant","message":{"content":['
+            '{"type":"text","text":"let me read it"},'
+            '{"type":"tool_use","id":"toolu_01","name":"Read","input":{}}]}}'
+        )
+        events = _parse_ndjson_line(line)
+        assert events[0].content == "let me read it"
+        assert [e.event_type for e in events[1:]] == [
+            "tool_call_start",
+            "tool_call_args",
+            "tool_call_end",
+        ]
+
 
 # ---------------------------------------------------------------------------
 # ClaudeCodeClient construction
