@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -272,66 +272,75 @@ class GeminiProvider(BaseProvider):
             )
             raise self._map_http_error(resp.status_code, message)
 
-        async for line in resp.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[len("data: ") :].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                payload = json.loads(data)
-            except json.JSONDecodeError:
-                continue
+        try:
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[len("data: ") :].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise StreamError(f"malformed SSE chunk: {exc}") from exc
 
-            candidates = payload.get("candidates") or []
-            if not candidates:
-                continue
-            candidate = candidates[0]
-            parts = (candidate.get("content") or {}).get("parts") or []
-            finish_reason = candidate.get("finishReason")
-            has_tool_calls = False
+                candidates = payload.get("candidates") or []
+                if not candidates:
+                    continue
+                candidate = candidates[0]
+                parts = (candidate.get("content") or {}).get("parts") or []
+                finish_reason = candidate.get("finishReason")
+                has_tool_calls = False
 
-            for part in parts:
-                text = part.get("text")
-                if text:
-                    yield StreamEvent(content=text, done=False)
-                function_call = part.get("functionCall")
-                if function_call:
-                    has_tool_calls = True
-                    call_id = _gen_tool_call_id()
-                    name = function_call.get("name", "")
-                    args = function_call.get("args") or {}
+                for part in parts:
+                    text = part.get("text")
+                    if text:
+                        yield StreamEvent(content=text, done=False)
+                    function_call = part.get("functionCall")
+                    if function_call:
+                        has_tool_calls = True
+                        call_id = _gen_tool_call_id()
+                        name = function_call.get("name", "")
+                        args = function_call.get("args") or {}
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=call_id,
+                            tool_call_name=name,
+                            event_type="tool_call_start",
+                        )
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=call_id,
+                            tool_call_args_delta=json.dumps(args),
+                            event_type="tool_call_args",
+                        )
+                        yield StreamEvent(
+                            content="", done=False, tool_call_id=call_id, event_type="tool_call_end"
+                        )
+
+                usage_meta = payload.get("usageMetadata")
+                if usage_meta:
                     yield StreamEvent(
                         content="",
                         done=False,
-                        tool_call_id=call_id,
-                        tool_call_name=name,
-                        event_type="tool_call_start",
+                        event_type="usage",
+                        usage=_usage_from_metadata(usage_meta),
                     )
+
+                if finish_reason:
                     yield StreamEvent(
                         content="",
-                        done=False,
-                        tool_call_id=call_id,
-                        tool_call_args_delta=json.dumps(args),
-                        event_type="tool_call_args",
+                        done=True,
+                        stop_reason=_stop_reason_for(finish_reason, has_tool_calls),
                     )
-                    yield StreamEvent(
-                        content="", done=False, tool_call_id=call_id, event_type="tool_call_end"
-                    )
-
-            usage_meta = payload.get("usageMetadata")
-            if usage_meta:
-                yield StreamEvent(
-                    content="",
-                    done=False,
-                    event_type="usage",
-                    usage=_usage_from_metadata(usage_meta),
-                )
-
-            if finish_reason:
-                yield StreamEvent(
-                    content="",
-                    done=True,
-                    stop_reason=_stop_reason_for(finish_reason, has_tool_calls),
-                )
-                return
+                    return
+        except StreamError:
+            raise
+        except (AuthError, RateLimitError, ProviderError, NetworkError):
+            raise
+        except httpx.HTTPError as exc:
+            raise StreamError(f"stream transport error: {exc}") from exc
+        finally:
+            await resp.aclose()

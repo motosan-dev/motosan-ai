@@ -4,6 +4,7 @@ import httpx
 import pytest
 import respx
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.gemini import GeminiProvider
 from motosan_ai.types import ChatRequest, Message, StopReason
 
@@ -107,3 +108,19 @@ async def test_stream_ignores_empty_data_and_done_marker(provider):
     )
     events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("hi")]))]
     assert [e.content for e in events if e.event_type == "text" and not e.done] == ["ok"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_malformed_chunk(provider):
+    sse = (
+        _sse({"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}) + "data: {not valid json\n"
+    )
+    respx.post(_stream_url()).mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    seen = []
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)
