@@ -120,6 +120,37 @@ def _parse_jsonl_line(line: str) -> list[StreamEvent]:
             return [StreamEvent(content="", done=False, session_id=session_id)]
         return []
 
+    if event_type == "tool_use":
+        tool_id = event.get("tool_id") or ""
+        tool_name = event.get("tool_name") or "tool_use"
+        parameters = event.get("parameters")
+        # Compact separators (finding 8) — matches Rust + claude/codex CLI providers.
+        args_json = (
+            json.dumps(parameters, separators=(",", ":")) if isinstance(parameters, dict) else "{}"
+        )
+        return [
+            StreamEvent(
+                content="",
+                done=False,
+                event_type="tool_call_start",
+                tool_call_id=tool_id,
+                tool_call_name=tool_name,
+            ),
+            StreamEvent(
+                content="",
+                done=False,
+                event_type="tool_call_args",
+                tool_call_id=tool_id,
+                tool_call_args_delta=args_json,
+            ),
+            StreamEvent(
+                content="",
+                done=False,
+                event_type="tool_call_end",
+                tool_call_id=tool_id,
+            ),
+        ]
+
     if event_type == "message":
         role = event.get("role")
         delta = event.get("delta", False)
@@ -332,6 +363,7 @@ class GeminiCliClient:
             cwd=self._config.cwd,
             env=self._child_env(),
         )
+        saw_tool_call = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
             proc.stdin.write(stdin_payload.encode())
@@ -341,9 +373,18 @@ class GeminiCliClient:
             with contextlib.suppress(BrokenPipeError, ConnectionResetError, AttributeError):
                 await proc.stdin.wait_closed()
 
-            async for raw in proc.stdout:
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
+                    if event.event_type == "tool_call_start":
+                        saw_tool_call = True
+                    if event.done:
+                        event.stop_reason = (
+                            StopReason.tool_use if saw_tool_call else StopReason.end_turn
+                        )
                     yield event
                     if event.done:
                         return

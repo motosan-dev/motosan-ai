@@ -13,7 +13,7 @@ from motosan_ai.providers.gemini_cli import (
     _messages_to_prompt,
     _parse_jsonl_line,
 )
-from motosan_ai.types import ChatRequest, Message
+from motosan_ai.types import ChatRequest, Message, StopReason
 
 
 def test_init_event_without_session_id_dropped():
@@ -95,6 +95,33 @@ def test_malformed_json_returns_empty():
     assert _parse_jsonl_line("") == []
 
 
+def test_tool_use_yields_triplet():
+    line = (
+        '{"type":"tool_use","tool_id":"read_file_1","tool_name":"read_file",'
+        '"parameters":{"file_path":"Cargo.toml"}}'
+    )
+    events = _parse_jsonl_line(line)
+    assert [e.event_type for e in events] == [
+        "tool_call_start",
+        "tool_call_args",
+        "tool_call_end",
+    ]
+    assert events[0].tool_call_id == "read_file_1"
+    assert events[0].tool_call_name == "read_file"
+    assert events[1].tool_call_args_delta == '{"file_path":"Cargo.toml"}'
+
+
+def test_tool_use_defaults():
+    events = _parse_jsonl_line('{"type":"tool_use"}')
+    assert events[0].tool_call_id == ""
+    assert events[0].tool_call_name == "tool_use"
+    assert events[1].tool_call_args_delta == "{}"
+
+
+def test_tool_result_dropped():
+    assert _parse_jsonl_line('{"type":"tool_result","tool_id":"x"}') == []
+
+
 def test_messages_to_prompt_single_user_returns_just_content():
     assert _messages_to_prompt([Message.user("hello")]) == (None, "hello")
 
@@ -141,6 +168,11 @@ class _FakeStdin:
 class _FakeStdout:
     def __init__(self, text: str) -> None:
         self._lines = [line.encode() for line in text.splitlines(True)]
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
 
     def __aiter__(self):
         self._iter = iter(self._lines)
@@ -290,3 +322,20 @@ async def test_chat_merges_env(monkeypatch):
     env = spawn.call_args.kwargs["env"]
     assert env["K"] == "v" and env["PATH"] == "/usr/bin"
     assert "K" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_call_terminal_is_tool_use(monkeypatch):
+    jsonl = (
+        '{"type": "tool_use", "tool_id": "t1", "tool_name": "read_file", "parameters": {}}\n'
+        '{"type": "result", "status": "success"}\n'
+    )
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl, returncode=None))
+    events = [
+        ev
+        async for ev in GeminiCliClient(binary_path="gemini").stream(
+            ChatRequest(messages=[Message.user("hi")])
+        )
+    ]
+    done = [e for e in events if e.done][-1]
+    assert done.stop_reason == StopReason.tool_use
