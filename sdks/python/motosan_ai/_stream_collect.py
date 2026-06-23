@@ -14,7 +14,9 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
 
     Handles text, thinking, tool-call start/args/end, usage, and terminal
     stop_reason events. Malformed streamed tool arguments are treated as an
-    empty object to match provider collector behavior.
+    empty object to match provider collector behavior. A mid-stream provider
+    error (StreamError / NetworkError / ProviderError) raised by ``events``
+    propagates out of this function uncollected.
     """
     content = ""
     thinking = ""

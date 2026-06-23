@@ -2,6 +2,7 @@ import pytest
 import respx
 from httpx import Response
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.minimax import MinimaxProvider
 from motosan_ai.types import ChatRequest, Message, StopReason
 
@@ -60,3 +61,18 @@ async def test_minimax_stream():
     assert route.called
     assert [e.content for e in events if not e.done] == ["hel", "lo"]
     assert events[-1].done is True
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_stream_error_not_network_error():
+    sse = 'data: {"choices":[{"delta":{"content":"hi"}}]}\ndata: {not valid json\n'
+    respx.post("https://api.minimax.chat/v1/text/chatcompletion_v2").mock(
+        return_value=Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    provider = MinimaxProvider("test-key")
+    seen = []
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)

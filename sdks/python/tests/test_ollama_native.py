@@ -5,6 +5,7 @@ import pytest
 import respx
 
 from motosan_ai import Client, Provider
+from motosan_ai.error import StreamError
 from motosan_ai.providers.ollama import OllamaProvider
 from motosan_ai.types import ChatRequest, Message, StopReason, Tool, ToolCall
 
@@ -356,3 +357,15 @@ async def test_chat_error_response(provider):
     respx.post(CHAT_URL).mock(return_value=httpx.Response(500, text="internal error"))
     with pytest.raises(Exception, match="Ollama error 500"):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_stream_error_on_malformed_ndjson(provider):
+    ndjson = '{"message":{"content":"hi"},"done":false}\n{not valid json\n'
+    respx.post(CHAT_URL).mock(return_value=httpx.Response(200, text=ndjson))
+    seen = []
+    with pytest.raises(StreamError, match="malformed NDJSON chunk"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)

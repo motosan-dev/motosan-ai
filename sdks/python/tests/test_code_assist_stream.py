@@ -6,6 +6,7 @@ import httpx
 import pytest
 import respx
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.gemini_code_assist import (
     GeminiCodeAssistProvider,
     _CodeAssistAdapterState,
@@ -198,8 +199,9 @@ def test_chunk_without_response_wrapper_skipped():
     assert _parse_sse_event(payload, state) == []
 
 
-def test_malformed_json_skipped():
-    assert _parse_sse_event("not json {", _CodeAssistAdapterState()) == []
+def test_malformed_json_raises_stream_error():
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        _parse_sse_event("not json {", _CodeAssistAdapterState())
 
 
 @respx.mock
@@ -292,3 +294,21 @@ async def test_stream_sends_envelope_in_body():
     assert captured["body"]["project"] == "myproj"
     assert captured["body"]["userAgent"] == "motosan-ai"
     assert "contents" in captured["body"]["request"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_malformed_chunk():
+    sse = (
+        _sse_text({"response": {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}})
+        + "data: {not valid json\n"
+    )
+    respx.post("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse").mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    p = GeminiCodeAssistProvider("ya29.fake", "myproj")
+    seen = []
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        async for ev in p.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)

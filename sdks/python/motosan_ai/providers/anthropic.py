@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from motosan_ai._stream_collect import collect_stream
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -390,101 +390,114 @@ class AnthropicProvider(BaseProvider):
         except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
 
-        if not resp.is_success:
-            error_body = await resp.aread()
-            message = self._response_error_message(
-                resp.status_code, resp.headers, error_body.decode()
-            )
-            raise self._map_http_error(resp.status_code, message)
-
         current_tool_id: str | None = None
         current_stop_reason: StopReason | None = None
 
-        async for line in resp.aiter_lines():
-            if not line.startswith("data: "):
-                continue
-            data = line[6:]
-            if data == "[DONE]":
-                yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
-                return
+        try:
+            if not resp.is_success:
+                error_body = await resp.aread()
+                message = self._response_error_message(
+                    resp.status_code, resp.headers, error_body.decode()
+                )
+                raise self._map_http_error(resp.status_code, message)
 
-            try:
-                payload = json.loads(data)
-            except json.JSONDecodeError:
-                continue
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:].strip()
+                if not data or data == "[DONE]":
+                    if data == "[DONE]":
+                        yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
+                        return
+                    continue
 
-            event_type = payload.get("type")
+                try:
+                    payload = json.loads(data)
+                except json.JSONDecodeError as exc:
+                    raise StreamError(f"malformed SSE chunk: {exc}") from exc
 
-            if event_type == "message_start":
-                usage = (payload.get("message") or {}).get("usage")
-                if usage:
-                    yield StreamEvent(
-                        content="",
-                        done=False,
-                        event_type="usage",
-                        usage=_usage_from_dict(usage),
-                    )
-                continue
+                event_type = payload.get("type")
 
-            if event_type == "message_delta":
-                delta = payload.get("delta") or {}
-                reason = delta.get("stop_reason")
-                if reason:
-                    current_stop_reason = _STOP_REASON_MAP.get(reason, StopReason.other)
-                usage = payload.get("usage")
-                if usage:
-                    yield StreamEvent(
-                        content="",
-                        done=False,
-                        event_type="usage",
-                        usage=_usage_from_dict(usage),
-                    )
-                continue
+                if event_type == "message_start":
+                    usage = (payload.get("message") or {}).get("usage")
+                    if usage:
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            event_type="usage",
+                            usage=_usage_from_dict(usage),
+                        )
+                    continue
 
-            if event_type == "content_block_start":
-                block = payload.get("content_block") or {}
-                if block.get("type") == "tool_use":
-                    current_tool_id = block.get("id", "")
-                    yield StreamEvent(
-                        content="",
-                        done=False,
-                        tool_call_id=current_tool_id,
-                        tool_call_name=block.get("name", ""),
-                        event_type="tool_call_start",
-                    )
+                if event_type == "message_delta":
+                    delta = payload.get("delta") or {}
+                    reason = delta.get("stop_reason")
+                    if reason:
+                        current_stop_reason = _STOP_REASON_MAP.get(reason, StopReason.other)
+                    usage = payload.get("usage")
+                    if usage:
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            event_type="usage",
+                            usage=_usage_from_dict(usage),
+                        )
+                    continue
 
-            elif event_type == "content_block_delta":
-                delta = payload.get("delta") or {}
-                delta_type = delta.get("type")
-                if delta_type == "text_delta":
-                    text = delta.get("text", "")
-                    if text:
-                        yield StreamEvent(content=text, done=False)
-                elif delta_type == "thinking_delta":
-                    thinking_text = delta.get("thinking", "")
-                    if thinking_text:
-                        yield StreamEvent(content=thinking_text, done=False, event_type="thinking")
-                elif delta_type == "input_json_delta":
-                    partial = delta.get("partial_json", "")
-                    if partial:
+                if event_type == "content_block_start":
+                    block = payload.get("content_block") or {}
+                    if block.get("type") == "tool_use":
+                        current_tool_id = block.get("id", "")
                         yield StreamEvent(
                             content="",
                             done=False,
                             tool_call_id=current_tool_id,
-                            tool_call_args_delta=partial,
-                            event_type="tool_call_args",
+                            tool_call_name=block.get("name", ""),
+                            event_type="tool_call_start",
                         )
 
-            elif event_type == "content_block_stop":
-                if current_tool_id is not None:
-                    yield StreamEvent(
-                        content="",
-                        done=False,
-                        tool_call_id=current_tool_id,
-                        event_type="tool_call_end",
-                    )
-                    current_tool_id = None
+                elif event_type == "content_block_delta":
+                    delta = payload.get("delta") or {}
+                    delta_type = delta.get("type")
+                    if delta_type == "text_delta":
+                        text = delta.get("text", "")
+                        if text:
+                            yield StreamEvent(content=text, done=False)
+                    elif delta_type == "thinking_delta":
+                        thinking_text = delta.get("thinking", "")
+                        if thinking_text:
+                            yield StreamEvent(
+                                content=thinking_text, done=False, event_type="thinking"
+                            )
+                    elif delta_type == "input_json_delta":
+                        partial = delta.get("partial_json", "")
+                        if partial:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_id=current_tool_id,
+                                tool_call_args_delta=partial,
+                                event_type="tool_call_args",
+                            )
 
-            elif event_type == "message_stop":
-                yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
-                return
+                elif event_type == "content_block_stop":
+                    if current_tool_id is not None:
+                        yield StreamEvent(
+                            content="",
+                            done=False,
+                            tool_call_id=current_tool_id,
+                            event_type="tool_call_end",
+                        )
+                        current_tool_id = None
+
+                elif event_type == "message_stop":
+                    yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
+                    return
+        except StreamError:
+            raise
+        except (AuthError, RateLimitError, ProviderError, NetworkError):
+            raise
+        except httpx.HTTPError as exc:
+            raise StreamError(f"stream transport error: {exc}") from exc
+        finally:
+            await resp.aclose()

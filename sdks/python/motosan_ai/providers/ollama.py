@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from motosan_ai.error import NetworkError, ProviderError
+from motosan_ai.error import NetworkError, ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -150,6 +150,10 @@ class OllamaProvider:
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         body = self._build_body(request, stream=True)
+        # Q2: an httpx fault BEFORE the first yield is connection-time
+        # (NetworkError, retryable); after the first yield it is mid-stream
+        # (StreamError, non-retryable). A malformed NDJSON line -> StreamError.
+        yielded = False
         try:
             async with self._http.stream("POST", f"{self.base_url}/api/chat", json=body) as resp:
                 if resp.status_code >= 400:
@@ -163,9 +167,10 @@ class OllamaProvider:
                         continue
                     try:
                         chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
+                    except json.JSONDecodeError as exc:
+                        raise StreamError(f"malformed NDJSON chunk: {exc}") from exc
                     if chunk.get("done"):
+                        yielded = True
                         yield StreamEvent(content="", done=True)
                         return
                     msg = chunk.get("message", {})
@@ -173,6 +178,7 @@ class OllamaProvider:
                     thinking = msg.get("thinking", "")
                     text = content or thinking
                     if text:
+                        yielded = True
                         yield StreamEvent(content=text, done=False)
 
                     for tc in msg.get("tool_calls") or []:
@@ -183,6 +189,7 @@ class OllamaProvider:
                         else:
                             args_str = json.dumps(raw_args, ensure_ascii=False)
                         tc_id = str(uuid.uuid4())
+                        yielded = True
                         yield StreamEvent(
                             content="",
                             done=False,
@@ -203,7 +210,9 @@ class OllamaProvider:
                             tool_call_id=tc_id,
                             event_type="tool_call_end",
                         )
-        except Exception as exc:
-            if isinstance(exc, ProviderError):
-                raise
+        except (ProviderError, StreamError):
+            raise
+        except httpx.HTTPError as exc:
+            if yielded:
+                raise StreamError(f"stream transport error: {exc}") from exc
             raise NetworkError(str(exc)) from exc

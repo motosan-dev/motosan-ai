@@ -8,6 +8,7 @@ import respx
 
 from motosan_ai import Client, Provider
 from motosan_ai._stream_collect import collect_stream
+from motosan_ai.error import StreamError
 from motosan_ai.types import ChatRequest, Message, StopReason, StreamEvent, Usage
 
 
@@ -225,3 +226,13 @@ def test_collect_stream_exported_from_top_level():
     import motosan_ai
 
     assert callable(motosan_ai.collect_stream)
+
+
+@pytest.mark.asyncio
+async def test_collect_stream_propagates_mid_stream_raise():
+    async def _raising_stream():
+        yield StreamEvent(content="partial", done=False)
+        raise StreamError("boom")
+
+    with pytest.raises(StreamError, match="boom"):
+        await collect_stream(_raising_stream())

@@ -12,6 +12,7 @@ from motosan_ai.error import (
     NetworkError,
     ProviderError,
     RateLimitError,
+    StreamError,
 )
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
@@ -200,6 +201,10 @@ class MinimaxProvider:
         if request.provider_options:
             body.update(request.provider_options)
 
+        # Q2: an httpx fault BEFORE the first yield is a connection-time fault
+        # (NetworkError, retryable). The SAME fault AFTER the first yield, or a
+        # malformed frame, is mid-stream -> StreamError (non-retryable).
+        yielded = False
         try:
             async with self._client.stream(
                 "POST",
@@ -216,17 +221,21 @@ class MinimaxProvider:
                     if not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
-                    if data == "[DONE]":
-                        yield StreamEvent(content="", done=True)
-                        return
+                    if not data or data == "[DONE]":
+                        if data == "[DONE]":
+                            yielded = True
+                            yield StreamEvent(content="", done=True)
+                            return
+                        continue
                     try:
                         payload = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
+                    except json.JSONDecodeError as exc:
+                        raise StreamError(f"malformed SSE chunk: {exc}") from exc
                     choice = (payload.get("choices") or [{}])[0]
                     delta = choice.get("delta") or {}
                     text = delta.get("content") or ""
                     if text:
+                        yielded = True
                         yield StreamEvent(content=text, done=False)
 
                     for tc in delta.get("tool_calls") or []:
@@ -235,6 +244,7 @@ class MinimaxProvider:
                         tc_name = fn.get("name")
                         tc_args = fn.get("arguments")
                         if tc_id and tc_name:
+                            yielded = True
                             yield StreamEvent(
                                 content="",
                                 done=False,
@@ -243,6 +253,7 @@ class MinimaxProvider:
                                 event_type="tool_call_start",
                             )
                         if tc_args:
+                            yielded = True
                             yield StreamEvent(
                                 content="",
                                 done=False,
@@ -252,8 +263,11 @@ class MinimaxProvider:
 
                     finish_reason = choice.get("finish_reason")
                     if finish_reason == "tool_calls":
+                        yielded = True
                         yield StreamEvent(content="", done=False, event_type="tool_call_end")
-        except Exception as exc:
-            if isinstance(exc, AuthError | RateLimitError | InvalidRequestError | ProviderError):
-                raise
+        except (AuthError, RateLimitError, InvalidRequestError, ProviderError, StreamError):
+            raise
+        except httpx.HTTPError as exc:
+            if yielded:
+                raise StreamError(f"stream transport error: {exc}") from exc
             raise NetworkError(str(exc)) from exc

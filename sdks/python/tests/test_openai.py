@@ -4,6 +4,7 @@ import httpx
 import pytest
 import respx
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.openai import OpenAIProvider
 from motosan_ai.types import ChatRequest, Message, StopReason, Tool
 
@@ -204,3 +205,17 @@ async def test_openai_401_raises_auth_error(provider):
 
     with pytest.raises(AuthError):
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_malformed_chunk(provider):
+    body = 'data: {"choices":[{"delta":{"content":"hi"}}]}\ndata: {not valid json\n'
+    respx.post("https://mock.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    )
+    seen = []
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)

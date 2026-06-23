@@ -4,6 +4,7 @@ import httpx
 import pytest
 import respx
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.anthropic import AnthropicProvider
 from motosan_ai.types import ChatRequest, Message, StopReason
 
@@ -99,3 +100,27 @@ async def test_stream_done_without_delta_has_no_stop_reason(provider):
     events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("hi")]))]
     done = next(e for e in events if e.done)
     assert done.stop_reason is None
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_malformed_chunk(provider):
+    # one good text delta (via the file's _sse helper), then a non-empty malformed data: frame
+    sse = (
+        _sse(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "hi"},
+            }
+        )
+        + "data: {not valid json\n"
+    )
+    respx.post("https://mock.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    seen = []
+    with pytest.raises(StreamError, match="malformed SSE chunk"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "hi" for e in seen)  # the good delta was yielded first
