@@ -344,6 +344,7 @@ class ChatResponse:
     usage: Usage = field(default_factory=lambda: Usage(0, 0))
     stop_reason: StopReason = StopReason.end_turn
     thinking: str | None = None
+    session_id: str | None = None
 
 
 @dataclass
@@ -356,6 +357,7 @@ class StreamEvent:
     event_type: str = "text"
     usage: Usage | None = None
     stop_reason: StopReason | None = None
+    session_id: str | None = None
 
 
 class ChatRequestBuilder:

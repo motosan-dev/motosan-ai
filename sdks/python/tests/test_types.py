@@ -145,3 +145,19 @@ def test_public_api_exports_new_types():
     assert m.McpToolConfigDenied is not None
     assert m.ProviderCapabilities is not None
     assert m.StreamEventType is not None
+
+
+def test_stream_event_session_id_defaults_none():
+    assert StreamEvent(content="hi", done=False).session_id is None
+
+
+def test_stream_event_session_id_settable():
+    assert StreamEvent(content="", done=False, session_id="s").session_id == "s"
+
+
+def test_chat_response_session_id_defaults_none():
+    assert ChatResponse(content="hi").session_id is None
+
+
+def test_chat_response_session_id_settable():
+    assert ChatResponse(content="hi", session_id="s").session_id == "s"
