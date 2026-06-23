@@ -8,6 +8,9 @@ export * from './providers/openai.js'
 export * from './providers/minimax.js'
 export * from './providers/ollama.js'
 export * from './providers/gemini.js'
+// chatgpt_codex: exports ChatGptCodexProvider + DEFAULT_CHATGPT_CODEX_MODEL.
+// `chatGptCodexErrorMessage` is @internal (test-only) and NOT re-exported.
+export { ChatGptCodexProvider, DEFAULT_CHATGPT_CODEX_URL } from './providers/chatgpt_codex.js'
 
 export { RetryPolicy } from './retry.js'
 export { ThinkStripper, stripThink } from './think_stripper.js'
@@ -17,10 +20,12 @@ export {
   DEFAULT_MINIMAX_MODEL,
   DEFAULT_OLLAMA_MODEL,
   DEFAULT_GEMINI_MODEL,
+  DEFAULT_CHATGPT_CODEX_MODEL,
   ANTHROPIC_MODELS,
   OPENAI_MODELS,
   MINIMAX_MODELS,
   GEMINI_MODELS,
+  CHATGPT_CODEX_MODELS,
 } from './models.js'
 export { serializeGeminiRequest } from './serialize/gemini.js'
 export type { ProviderCapabilities, Provider } from './provider.js'

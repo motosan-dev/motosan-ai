@@ -1,8 +1,8 @@
 # motosan-ai (TypeScript SDK)
 
-Multi-provider TypeScript/ESM SDK for Anthropic, OpenAI, MiniMax, Ollama, and Gemini.
+Multi-provider TypeScript/ESM SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, and ChatGPT Codex.
 Self-implemented wire protocol via native `fetch` — **zero official-provider-SDK dependencies**
-(no `@anthropic-ai/sdk`, no `openai`). All five providers ship in one package and tree-shake
+(no `@anthropic-ai/sdk`, no `openai`). All six providers ship in one package and tree-shake
 cleanly via ESM.
 
 ## Installation
@@ -15,7 +15,7 @@ pnpm add @motosan-ai/sdk
 yarn add @motosan-ai/sdk
 ```
 
-There are no extras or feature flags: all five providers ship in the single npm package and
+There are no extras or feature flags: all six providers ship in the single npm package and
 are tree-shaken via ESM (only what you import lands in your bundle).
 
 ## Requirements
@@ -170,6 +170,23 @@ const resp = await client.chat({ messages: [user('Hello')] })
 
 Gemini targets the `generativelanguage` REST API. It supports image content blocks; document/PDF
 input is rejected before any HTTP call (capabilities check).
+
+### ChatGPT Codex
+
+```ts
+import { Client, user } from '@motosan-ai/sdk'
+
+const client = Client.builder()
+  .chatgptCodex(accessToken, accountId, undefined, { reasoningEffort: 'medium' })
+  .build()
+
+const resp = await client.chat({ messages: [user('Hello')] })
+```
+
+ChatGPT Codex streams the OpenAI Responses API at `https://chatgpt.com/backend-api/codex/responses`
+using a caller-supplied OAuth `accessToken` + `accountId` (codex CLI headers) — **no API key**.
+The default model is `gpt-5.5`; it is text-only. A per-request `providerOptions.reasoning_effort`
+(string) overrides the provider-default `reasoningEffort`; otherwise no `reasoning` is sent.
 
 ## Streaming
 
@@ -370,6 +387,7 @@ terminates the stream silently (see Streaming).
 | MiniMax   | `MiniMax-M2.7`       |
 | Ollama    | `llama3.2`           |
 | Gemini    | `gemini-2.5-flash`   |
+| ChatGPT Codex | `gpt-5.5`        |
 
 Override per client with `.model('...')`, or per request via `request.model`:
 
@@ -464,8 +482,8 @@ Automated via `publish-typescript.yml` on a `ts-v*` tag push → npm.
 
 ```bash
 # Bump sdks/typescript/package.json version + CHANGELOG, then:
-git tag ts-v0.10.0
-git push origin ts-v0.10.0
+git tag ts-v0.11.0
+git push origin ts-v0.11.0
 ```
 
 The Rust, Python, and TypeScript SDKs are versioned and released independently.
