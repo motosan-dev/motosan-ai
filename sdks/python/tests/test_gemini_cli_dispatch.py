@@ -30,3 +30,12 @@ def test_gemini_cli_does_not_require_api_key(monkeypatch):
         monkeypatch.delenv(env, raising=False)
     client = Client(provider=Provider.gemini_cli)
     assert isinstance(client._provider, GeminiCliClient)
+
+
+def test_cwd_setter():
+    client = GeminiCliClient().cwd("/work/dir")
+    assert client._config.cwd == "/work/dir"
+
+
+def test_cwd_default_none():
+    assert GeminiCliClient()._config.cwd is None
