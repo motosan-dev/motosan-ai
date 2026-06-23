@@ -2,6 +2,18 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.14.0] - 2026-06-23
+
+### Added
+- **ChatGPT-backend Codex provider** (`ChatGptCodexProvider`, `Provider.openai_chatgpt`,
+  `Client.chatgpt_codex(access_token, account_id, model, reasoning_effort=None)`): native inference
+  against the OpenAI **Responses API** at `https://chatgpt.com/backend-api/codex/responses` using a
+  pre-obtained ChatGPT OAuth bearer token + `chatgpt-account-id` + the codex CLI headers. Streams typed
+  `response.*` SSE events (text, reasoning → thinking, function-call tool lifecycle, usage, terminal stop
+  reason). Text-only (`ProviderCapabilities.text_only()`); no `api_key` required. Reasoning effort via
+  per-request `provider_options["reasoning_effort"]` or a provider-level default
+  (`ChatGptCodexProvider.reasoning_effort(...)`). Mirrors the Rust `ChatGptCodexProvider`.
+
 ## [0.13.0] - 2026-06-23
 
 ### Added
