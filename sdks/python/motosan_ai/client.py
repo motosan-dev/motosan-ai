@@ -11,6 +11,7 @@ from typing import Any
 from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.providers import (
     AnthropicProvider,
+    ChatGptCodexProvider,
     CodexCliClient,
     GeminiCliClient,
     GeminiCodeAssistProvider,
@@ -33,6 +34,7 @@ class Provider(StrEnum):
     codex_cli = "codex_cli"
     gemini_cli = "gemini_cli"
     gemini_code_assist = "gemini_code_assist"
+    openai_chatgpt = "openai_chatgpt"
 
 
 def _normalize_message(item: Message | dict[str, Any]) -> Message:
@@ -62,7 +64,9 @@ class Client:
         binary_path: str | None = None,
         access_token: str | None = None,
         project_id: str | None = None,
+        account_id: str | None = None,
         *,
+        reasoning_effort: str | None = None,
         ollama_native: bool = False,
         ollama_think: bool = False,
         ollama_keep_alive: str | None = None,
@@ -86,6 +90,18 @@ class Client:
                 model=model,
                 base_url=base_url,
             )
+        elif provider_value == Provider.openai_chatgpt:
+            if not access_token:
+                raise ConfigError("openai_chatgpt requires access_token")
+            if not account_id:
+                raise ConfigError("openai_chatgpt requires account_id")
+            self.api_key = ""
+            self._provider = ChatGptCodexProvider(
+                access_token=access_token,
+                account_id=account_id,
+                model=model,
+                base_url=base_url,
+            ).reasoning_effort(reasoning_effort)
         elif provider_value == Provider.codex_cli:
             self.api_key = ""
             self._provider = CodexCliClient(binary_path=binary_path)
@@ -181,6 +197,26 @@ class Client:
             project_id=project_id,
             model=model,
             base_url=base_url,
+            max_retries=max_retries,
+        )
+
+    @classmethod
+    def chatgpt_codex(
+        cls,
+        access_token: str | None = None,
+        account_id: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        reasoning_effort: str | None = None,
+        max_retries: int = 3,
+    ) -> Client:
+        return cls(
+            provider=Provider.openai_chatgpt,
+            access_token=access_token,
+            account_id=account_id,
+            model=model,
+            base_url=base_url,
+            reasoning_effort=reasoning_effort,
             max_retries=max_retries,
         )
 

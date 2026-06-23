@@ -14,6 +14,7 @@ from motosan_ai.error import (
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers import (
     ApprovalMode,
+    ChatGptCodexProvider,
     ClaudeCodeClient,
     CodexCliClient,
     GeminiCliClient,
@@ -58,6 +59,7 @@ __all__ = [
     "ApprovalMode",
     "AuthError",
     "BaseProvider",
+    "ChatGptCodexProvider",
     "ChatRequest",
     "ChatRequestBuilder",
     "ChatResponse",
