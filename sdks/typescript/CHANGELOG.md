@@ -4,6 +4,20 @@ All notable changes to `@motosan-ai/sdk` TypeScript SDK are documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.11.0] - 2026-06-23
+
+### Added
+
+- `ChatGptCodexProvider`: streams the OpenAI Responses API at
+  `https://chatgpt.com/backend-api/codex/responses` using a caller-supplied OAuth `accessToken` +
+  `accountId` (codex CLI headers; no api key required). Maps typed `response.*` SSE to the
+  `StreamEvent` taxonomy (text, reasoning → `thinking_delta`, function-call tool lifecycle, usage,
+  terminal stop). Mid-stream error frames terminate the stream silently (TS convention).
+- New `Provider` variant `'chatgpt_codex'` and `Client.builder().chatgptCodex(accessToken, accountId,
+  model?, { reasoningEffort? })`. Per-request `providerOptions.reasoning_effort` (string) overrides the
+  provider default; otherwise `reasoning` is omitted.
+- `DEFAULT_CHATGPT_CODEX_MODEL` (`gpt-5.5`) and `CHATGPT_CODEX_MODELS` exported.
+
 ## [0.10.0] - 2026-06-07
 
 First published release of the TypeScript SDK. This consolidated entry documents the
