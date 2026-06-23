@@ -30,6 +30,28 @@ class ApprovalMode(StrEnum):
     plan = "plan"
 
 
+class _RedactedEnvs:
+    """Ordered env-var pairs whose ``repr`` never prints values (secrets)."""
+
+    def __init__(self, pairs: list[tuple[str, str]] | None = None) -> None:
+        self._pairs: list[tuple[str, str]] = list(pairs) if pairs else []
+
+    def push(self, key: str, value: str) -> None:
+        self._pairs.append((key, value))
+
+    def replace_from(self, vars: dict[str, str]) -> None:
+        self._pairs = [(str(k), str(v)) for k, v in vars.items()]
+
+    def as_dict(self) -> dict[str, str]:
+        return dict(self._pairs)
+
+    def __len__(self) -> int:
+        return len(self._pairs)
+
+    def __repr__(self) -> str:
+        return f"<{len(self._pairs)} redacted>"
+
+
 @dataclass
 class _GeminiCliConfig:
     binary_path: str = "gemini"
@@ -42,6 +64,7 @@ class _GeminiCliConfig:
     allowed_mcp_servers: list[str] = field(default_factory=list)
     resume: str | None = None
     cwd: str | None = None
+    envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -199,6 +222,23 @@ class GeminiCliClient:
         self._config.cwd = directory
         return self
 
+    def env(self, key: str, value: str) -> GeminiCliClient:
+        """Inject one environment variable into the child (repeatable; value is a secret)."""
+        self._config.envs.push(key, value)
+        return self
+
+    def envs(self, vars: dict[str, str]) -> GeminiCliClient:
+        """Replace the full set of injected environment variables (does not append)."""
+        self._config.envs.replace_from(vars)
+        return self
+
+    def _child_env(self) -> dict[str, str] | None:
+        if len(self._config.envs) == 0:
+            return None
+        merged = dict(os.environ)
+        merged.update(self._config.envs.as_dict())
+        return merged
+
     def _build_args(self, model: str | None = None) -> list[str]:
         args: list[str] = [self._config.binary_path, "-p", "", "-o", "stream-json"]
 
@@ -240,6 +280,7 @@ class GeminiCliClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._config.cwd,
+            env=self._child_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -289,6 +330,7 @@ class GeminiCliClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._config.cwd,
+            env=self._child_env(),
         )
         try:
             assert proc.stdin is not None and proc.stdout is not None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -269,3 +270,23 @@ async def test_chat_passes_cwd_to_subprocess(monkeypatch):
     client = GeminiCliClient().cwd("/work/dir")
     await client.chat(ChatRequest(messages=[Message.user("hi")]))
     assert spawn.call_args.kwargs["cwd"] == "/work/dir"
+
+
+@pytest.mark.asyncio
+async def test_chat_merges_env(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setattr(asyncio.subprocess, "PIPE", -1, raising=False)
+    fake = _FakeProc(
+        '{"type": "message", "role": "assistant", "content": "hi", "delta": true}\n'
+        '{"type": "result", "status": "success"}\n'
+    )
+    spawn = AsyncMock(return_value=fake)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    await (
+        GeminiCliClient(binary_path="gemini")
+        .env("K", "v")
+        .chat(ChatRequest(messages=[Message.user("hi")]))
+    )
+    env = spawn.call_args.kwargs["env"]
+    assert env["K"] == "v" and env["PATH"] == "/usr/bin"
+    assert "K" not in os.environ

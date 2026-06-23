@@ -270,6 +270,20 @@ class TestClaudeCodeClientConstruction:
     def test_cwd_default_none(self):
         assert ClaudeCodeClient()._config.cwd is None
 
+    def test_env_appends(self):
+        client = ClaudeCodeClient().env("A", "1").env("B", "2")
+        assert list(client._config.envs) == [("A", "1"), ("B", "2")]
+
+    def test_envs_replaces(self):
+        client = ClaudeCodeClient().env("X", "0").envs({"A": "1"})
+        assert list(client._config.envs) == [("A", "1")]
+
+    def test_repr_redacts_env_values(self):
+        client = ClaudeCodeClient().env("ANTHROPIC_API_KEY", "sk-secret")
+        r = repr(client._config)
+        assert "sk-secret" not in r
+        assert "<1 redacted>" in r
+
 
 # ---------------------------------------------------------------------------
 # _build_args
