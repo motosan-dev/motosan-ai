@@ -2,9 +2,11 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.20.0 · Python v0.14.0 (PyPI)
+Rust v0.21.1 · Python v0.14.0 (PyPI) · TypeScript v0.11.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
+
+Python 0.14.0 and TypeScript 0.11.0 add the **chatgpt-codex** provider — a native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python: `Client.chatgpt_codex(access_token, account_id, model, reasoning_effort=None)`; TypeScript: `Client.builder().chatgptCodex(accessToken, accountId, model?, { reasoningEffort })`. Mirrors the Rust `ChatGptCodexProvider`.
 
 ## Current Rust Tool Schema Note
 

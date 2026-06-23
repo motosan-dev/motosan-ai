@@ -2,8 +2,9 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.14.0 · Rust 0.20.0
+- Python 0.14.0 · TypeScript 0.11.0 · Rust 0.21.1
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
+- Python 0.14.0 / TypeScript 0.11.0: **chatgpt-codex** provider — native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python `Client.chatgpt_codex(...)`, TypeScript `Client.builder().chatgptCodex(...)`.
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -527,7 +528,7 @@ Providers declare which content types they accept. Passing unsupported content r
 | Anthropic | ✓ | ✓ |
 | OpenAI | ✓ | ✗ |
 | Gemini / GeminiCodeAssist | ✓ | ✗ |
-| MiniMax / Ollama / CLI backends | ✗ | ✗ |
+| MiniMax / Ollama / ChatGptCodex / CLI backends | ✗ | ✗ |
 
 ```rust
 use motosan_ai::ProviderCapabilities;
@@ -588,6 +589,34 @@ let client = Client::builder()
 ```
 
 Billing: subscription-based ($19–$45/seat/month). 1,000–2,000 requests/day depending on tier. If you have an active Gemini CLI subscription, this is effectively free (no extra cost). Default model must be `gemini-2.5-flash` or `gemini-2.5-pro` — `gemini-2.0-flash` is not available on `cloudcode-pa` for standard-tier accounts.
+
+### ChatGptCodex (HTTP — chatgpt.com/backend-api/codex/responses)
+
+Native ChatGPT-backend provider over the OpenAI **Responses API**. Pre-obtained ChatGPT OAuth bearer token + `chatgpt-account-id` + codex CLI headers (`originator: codex_cli_rs`, `openai-beta: responses=experimental`). No `api_key`. Default model `gpt-5.5`. Text-only. `chat()` = `stream()` + collect. Reasoning effort via per-request `provider_options["reasoning_effort"]` (TS: `providerOptions.reasoning_effort`) or a provider-level default.
+
+```python
+# Python (v0.14.0)
+from motosan_ai import Client, Message
+
+client = Client.chatgpt_codex(
+    access_token="...", account_id="...",   # ChatGPT OAuth token + account id
+    model="gpt-5.5",                         # optional default
+    reasoning_effort="high",                 # optional provider-level default
+)
+resp = await client.chat([Message.user("Hi")])
+```
+
+```ts
+// TypeScript (v0.11.0)
+import { Client } from '@motosan-ai/sdk';
+
+const client = Client.builder()
+  .chatgptCodex(accessToken, accountId, 'gpt-5.5', { reasoningEffort: 'high' })
+  .build();
+const resp = await client.chat([{ role: 'user', content: 'Hi' }]);
+```
+
+A mid-stream `error` / `response.failed` frame terminates the stream — Rust and Python raise `StreamError`; TypeScript terminates silently (per its streaming convention).
 
 ### Anthropic Auth
 

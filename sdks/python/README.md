@@ -1,6 +1,6 @@
 # motosan-ai (Python SDK)
 
-Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, Gemini Code Assist, and CLI backends.
+Multi-provider Python SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, Gemini Code Assist, ChatGPT Codex, and CLI backends.
 All HTTP providers use `httpx` directly — no official provider SDKs required.
 Also includes `ClaudeCodeClient`, `CodexCliClient`, and `GeminiCliClient` backends that shell out to local CLI binaries.
 
@@ -385,6 +385,29 @@ Notes:
 - The provider takes an access token + `project_id`; OAuth helpers are separate and reusable.
 - Token cache path: `~/.config/motosan-ai/google-tokens.json`, written with `0600` permissions.
 - Live tests are opt-in: set `MOTOSAN_RUN_CODE_ASSIST_LIVE=1` and `GOOGLE_PROJECT_ID`, with a cached token present.
+
+## ChatGPT Codex
+
+Native ChatGPT-backend provider over the OpenAI **Responses API** (`chatgpt.com/backend-api/codex/responses`). Auth is a pre-obtained ChatGPT OAuth bearer token + account id — no `api_key`:
+
+```python
+from motosan_ai import Client, Message
+
+client = Client.chatgpt_codex(
+    access_token="...",          # ChatGPT OAuth access token
+    account_id="...",            # chatgpt-account-id
+    model="gpt-5.5",             # optional, this is the default
+    reasoning_effort="high",     # optional provider-level default
+)
+resp = await client.chat([Message.user("Hello from ChatGPT Codex")])
+print(resp.content)
+```
+
+Notes:
+- No `api_key` required (token-based, like Gemini Code Assist); supply `access_token` + `account_id`.
+- `chat()` is `stream()` + collect (no non-streaming endpoint); reasoning surfaces as `ChatResponse.thinking`.
+- Reasoning effort: a per-request `provider_options["reasoning_effort"]` overrides the provider-level default.
+- Also available via `ChatGptCodexProvider` directly. Live tests are opt-in: `MOTOSAN_RUN_CHATGPT_CODEX_LIVE=1` + `CHATGPT_CODEX_ACCESS_TOKEN` / `CHATGPT_CODEX_ACCOUNT_ID`.
 
 ## Anthropic Auth Matrix
 
