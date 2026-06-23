@@ -254,6 +254,13 @@ class TestClaudeCodeClientConstruction:
         assert client._model == "opus"
         assert client._agent_mode is True
 
+    def test_cwd_setter(self):
+        client = ClaudeCodeClient().cwd("/work")
+        assert client._config.cwd == "/work"
+
+    def test_cwd_default_none(self):
+        assert ClaudeCodeClient()._config.cwd is None
+
 
 # ---------------------------------------------------------------------------
 # _build_args

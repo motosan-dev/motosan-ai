@@ -197,3 +197,9 @@ def test_full_config_argv_order_matches_rust_common_args():
         "approval_policy=never",
         "-",
     ]
+
+
+def test_codex_has_no_os_cwd_setter():
+    # Codex's working-directory mechanism is the --cd argv flag (cd()),
+    # not asyncio create_subprocess_exec(cwd=). Confirm no cwd() builder.
+    assert not hasattr(CodexCliClient(binary_path="codex"), "cwd")

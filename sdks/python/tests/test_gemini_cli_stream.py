@@ -234,3 +234,17 @@ async def test_stream_yields_events_in_order(monkeypatch):
     assert len(done_events) == 1
     assert events.index(text_events[0]) < events.index(usage_events[0])
     assert events.index(usage_events[0]) < events.index(done_events[0])
+
+
+@pytest.mark.asyncio
+async def test_chat_passes_cwd_to_subprocess(monkeypatch):
+    monkeypatch.setattr(asyncio.subprocess, "PIPE", -1, raising=False)
+    fake = _FakeProc(
+        '{"type": "message", "role": "assistant", "content": "hi", "delta": true}\n'
+        '{"type": "result", "status": "success"}\n'
+    )
+    spawn = AsyncMock(return_value=fake)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    client = GeminiCliClient().cwd("/work/dir")
+    await client.chat(ChatRequest(messages=[Message.user("hi")]))
+    assert spawn.call_args.kwargs["cwd"] == "/work/dir"

@@ -47,6 +47,7 @@ class _ClaudeCodeConfig:
     no_session_persistence: bool = False
     plugin_dirs: list[str] = field(default_factory=list)
     max_budget_usd: float | None = None
+    cwd: str | None = None
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -303,6 +304,11 @@ class ClaudeCodeClient:
         self._config.max_budget_usd = amount
         return self
 
+    def cwd(self, directory: str) -> ClaudeCodeClient:
+        """Set the working directory for the spawned ``claude`` subprocess."""
+        self._config.cwd = directory
+        return self
+
     def _build_args(
         self,
         *,
@@ -425,6 +431,7 @@ class ClaudeCodeClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._config.cwd,
         )
 
         try:
@@ -480,6 +487,7 @@ class ClaudeCodeClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._config.cwd,
         )
 
         # Write prompt to stdin then close it

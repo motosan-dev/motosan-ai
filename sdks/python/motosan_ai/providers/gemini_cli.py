@@ -41,6 +41,7 @@ class _GeminiCliConfig:
     extensions: list[str] = field(default_factory=list)
     allowed_mcp_servers: list[str] = field(default_factory=list)
     resume: str | None = None
+    cwd: str | None = None
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -182,6 +183,11 @@ class GeminiCliClient:
         self._config.resume = session
         return self
 
+    def cwd(self, directory: str) -> GeminiCliClient:
+        """Run the spawned ``gemini`` process in ``directory`` (subprocess cwd)."""
+        self._config.cwd = directory
+        return self
+
     def _build_args(self, model: str | None = None) -> list[str]:
         args: list[str] = [self._config.binary_path, "-p", "", "-o", "stream-json"]
 
@@ -222,6 +228,7 @@ class GeminiCliClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._config.cwd,
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -266,6 +273,7 @@ class GeminiCliClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            cwd=self._config.cwd,
         )
         try:
             assert proc.stdin is not None and proc.stdout is not None
