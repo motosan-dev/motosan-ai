@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.20.0 · Python v0.13.0 (PyPI)
+Rust v0.20.0 · Python v0.14.0 (PyPI)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
@@ -24,7 +24,7 @@ composes `motosan_agent_primitives::ToolSchema` (also re-exported as
 | TypeScript SDK entry point | `sdks/typescript/src/index.ts` → `client.ts` |
 | OAuth helper crates | `sdks/rust/crates/motosan-ai-oauth/`, `sdks/rust/crates/codex-oauth/`, `sdks/rust/crates/anthropic-oauth/` |
 | Provider implementations | `sdks/rust/src/providers/`, `sdks/python/motosan_ai/providers/`, `sdks/typescript/src/providers/` |
-| HTTP providers | Rust: `sdks/rust/src/providers/gemini.rs` (feature `gemini`), `sdks/rust/src/providers/gemini_code_assist.rs` (feature `gemini-code-assist`); Python: `sdks/python/motosan_ai/providers/gemini.py`, `gemini_code_assist.py` |
+| HTTP providers | Rust: `sdks/rust/src/providers/gemini.rs` (feature `gemini`), `sdks/rust/src/providers/gemini_code_assist.rs` (feature `gemini-code-assist`); Python: `sdks/python/motosan_ai/providers/gemini.py`, `gemini_code_assist.py`, `chatgpt_codex.py` |
 | CLI backends | Rust: `sdks/rust/src/providers/claude_code/`, `codex_cli/`, `gemini_cli/`; Python: `sdks/python/motosan_ai/providers/claude_code.py`, `codex_cli.py`, `gemini_cli.py` |
 | Rust format/lint config | `sdks/rust/rustfmt.toml`, `sdks/rust/.clippy.toml` |
 | Python format/lint config | `sdks/python/ruff.toml` |

@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.13.0 · Rust 0.20.0
+- Python 0.14.0 · Rust 0.20.0
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
@@ -198,11 +198,13 @@ let client = Client::builder()
     .build()?;
 ```
 
-Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `GeminiCodeAssist` | `ClaudeCode` | `CodexCli` | `GeminiCli`
+Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `GeminiCodeAssist` | `ClaudeCode` | `CodexCli` | `GeminiCli` | `ChatGptCodex`
 
 `Gemini` (v0.13.0, feature `gemini`) — HTTP client for `generativelanguage.googleapis.com`. API key via `x-goog-api-key` header. Default model `gemini-2.0-flash`. **Gemini-specific convention**: `Message::tool_result` must pass the function name (not an opaque call ID) as `tool_call_id`, because Gemini's `functionResponse.name` must be the function name.
 
 `GeminiCodeAssist` (Rust v0.13.0 feature `gemini-code-assist`; Python v0.10.0 `GeminiCodeAssistProvider` / `Provider.gemini_code_assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` in Rust or `motosan_ai.oauth` PKCE flow in Python). Requires GCP project ID. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint). Python Anthropic Claude Pro/Max OAuth is available via `motosan_ai.oauth.claude_pro_max_config()` + `login()` (returns an `sk-ant-oat01-*` token).
+
+`ChatGptCodex` (Python v0.14.0 `ChatGptCodexProvider` / `Provider.openai_chatgpt` / `Client.chatgpt_codex(access_token, account_id, model)`) — HTTP client for the OpenAI **Responses API** at `chatgpt.com/backend-api/codex/responses`. Pre-obtained ChatGPT OAuth bearer token + `chatgpt-account-id` + codex CLI headers (`originator: codex_cli_rs`, `openai-beta: responses=experimental`). No `api_key`. Default model `gpt-5.5`. Text-only. `chat()` = `stream()` + collect (no non-streaming endpoint). Reasoning effort via `provider_options["reasoning_effort"]` or a provider-level default (`ChatGptCodexProvider.reasoning_effort(...)`). Mirrors the Rust `ChatGptCodexProvider`.
 
 CLI backends (`ClaudeCode` / `CodexCli` / `GeminiCli`) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` via `.claude_code(...)` / `.codex_cli(...)` / `.gemini_cli(...)`. `ClaudeCode` and `CodexCli` landed in v0.11.0; `GeminiCli` followed in the same generation. See the CLI Backends section under Provider-Specific Notes for a full example.
 

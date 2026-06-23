@@ -1,4 +1,5 @@
 from .anthropic import AnthropicProvider
+from .chatgpt_codex import ChatGptCodexProvider
 from .claude_code import ClaudeCodeClient
 from .codex_cli import CodexCliClient, LocalProvider, SandboxMode
 from .gemini import GeminiProvider
@@ -11,6 +12,7 @@ from .openai import OpenAIProvider
 __all__ = [
     "AnthropicProvider",
     "ApprovalMode",
+    "ChatGptCodexProvider",
     "ClaudeCodeClient",
     "CodexCliClient",
     "GeminiCliClient",
