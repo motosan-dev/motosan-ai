@@ -325,6 +325,21 @@ async def test_chat_merges_env(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_blocking_chat_tool_calls_empty(monkeypatch):
+    jsonl = (
+        '{"type": "tool_use", "tool_id": "t1", "tool_name": "read_file", "parameters": {}}\n'
+        '{"type": "message", "role": "assistant", "content": "hi", "delta": true}\n'
+        '{"type": "result", "status": "success"}\n'
+    )
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl))
+    resp = await GeminiCliClient(binary_path="gemini").chat(
+        ChatRequest(messages=[Message.user("hi")])
+    )
+    assert resp.tool_calls == []
+    assert "hi" in resp.content
+
+
+@pytest.mark.asyncio
 async def test_stream_tool_call_terminal_is_tool_use(monkeypatch):
     jsonl = (
         '{"type": "tool_use", "tool_id": "t1", "tool_name": "read_file", "parameters": {}}\n'
