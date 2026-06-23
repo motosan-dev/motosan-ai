@@ -20,7 +20,7 @@ from motosan_ai.types import (
     Usage,
 )
 
-_TIMEOUT_SECS = 600
+_DEFAULT_TIMEOUT_SECS = 600.0
 
 
 class SandboxMode(StrEnum):
@@ -59,6 +59,7 @@ class _CodexCliConfig:
     config_overrides: list[tuple[str, str]] = field(default_factory=list)
     resume: str | None = None
     envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
+    timeout_secs: float | None = _DEFAULT_TIMEOUT_SECS
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -288,6 +289,16 @@ class CodexCliClient:
         self._config.envs = _RedactedEnvs(vars.items())
         return self
 
+    def timeout(self, secs: float) -> CodexCliClient:
+        """Override the per-invocation timeout (chat + per-read stream deadline)."""
+        self._config.timeout_secs = secs
+        return self
+
+    def no_timeout(self) -> CodexCliClient:
+        """Disable the invocation timeout (run until the child exits)."""
+        self._config.timeout_secs = None
+        return self
+
     def _subprocess_env(self) -> dict[str, str] | None:
         if not self._config.envs:
             return None
@@ -347,14 +358,18 @@ class CodexCliClient:
             stderr=asyncio.subprocess.PIPE,
             env=self._subprocess_env(),
         )
+        timeout = self._config.timeout_secs
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(prompt.encode()), timeout=_TIMEOUT_SECS
-            )
+            if timeout is None:
+                stdout, stderr = await proc.communicate(prompt.encode())
+            else:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(prompt.encode()), timeout=timeout
+                )
         except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise ProviderError(f"codex CLI timed out after {_TIMEOUT_SECS}s") from exc
+            raise ProviderError(f"codex CLI timed out after {timeout}s") from exc
 
         if proc.returncode != 0:
             raise ProviderError(
@@ -406,8 +421,17 @@ class CodexCliClient:
             with contextlib.suppress(BrokenPipeError, ConnectionResetError, AttributeError):
                 await proc.stdin.wait_closed()
 
+            timeout = self._config.timeout_secs
             while True:
-                raw = await proc.stdout.readline()
+                if timeout is None:
+                    raw = await proc.stdout.readline()
+                else:
+                    try:
+                        raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
+                    except TimeoutError as exc:
+                        raise ProviderError(
+                            f"codex CLI stream read timed out after {timeout}s"
+                        ) from exc
                 if not raw:
                     break
                 line = raw.decode().rstrip("\n")

@@ -19,8 +19,6 @@ from motosan_ai.types import (
     Usage,
 )
 
-_TIMEOUT_SECS = 300
-
 
 class _RedactedEnvs(list):
     """list[tuple[str, str]] of (key, value) env pairs whose repr hides values."""
@@ -56,6 +54,7 @@ class _ClaudeCodeConfig:
     max_budget_usd: float | None = None
     cwd: str | None = None
     envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
+    timeout_secs: float | None = 300.0
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -381,6 +380,16 @@ class ClaudeCodeClient:
         self._config.envs = _RedactedEnvs(vars.items())
         return self
 
+    def timeout(self, secs: float) -> ClaudeCodeClient:
+        """Override the per-invocation timeout (``chat`` and the stream read loop)."""
+        self._config.timeout_secs = secs
+        return self
+
+    def no_timeout(self) -> ClaudeCodeClient:
+        """Disable the invocation timeout (run until the child exits)."""
+        self._config.timeout_secs = None
+        return self
+
     def _subprocess_env(self) -> dict[str, str] | None:
         """Child env: a copy of os.environ overlaid with injected vars.
 
@@ -520,15 +529,19 @@ class ClaudeCodeClient:
             env=self._subprocess_env(),
         )
 
+        timeout = self._config.timeout_secs
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(user_prompt.encode()),
-                timeout=_TIMEOUT_SECS,
-            )
+            if timeout is None:
+                stdout, stderr = await proc.communicate(user_prompt.encode())
+            else:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(user_prompt.encode()),
+                    timeout=timeout,
+                )
         except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise ProviderError(f"claude CLI timed out after {_TIMEOUT_SECS} seconds") from exc
+            raise ProviderError(f"claude CLI timed out after {timeout} seconds") from exc
 
         if proc.returncode != 0:
             raise ProviderError(
@@ -559,7 +572,8 @@ class ClaudeCodeClient:
         """Stream via ``claude --print --output-format stream-json``, yielding NDJSON events.
 
         Raises :class:`~motosan_ai.error.ProviderError` if no output is received
-        within ``_TIMEOUT_SECS`` seconds.
+        within the configured ``timeout_secs`` (default 300s; disabled by
+        :meth:`no_timeout`).
         """
         msg_system, user_prompt = _messages_to_prompt(request.messages)
         system_prompt = request.system or msg_system
@@ -587,15 +601,19 @@ class ClaudeCodeClient:
         await proc.stdin.wait_closed()
 
         assert proc.stdout is not None
+        timeout = self._config.timeout_secs
         saw_tool_call = False
         try:
             while True:
-                try:
-                    raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=_TIMEOUT_SECS)
-                except TimeoutError as exc:
-                    raise ProviderError(
-                        f"claude CLI stream read timed out after {_TIMEOUT_SECS}s"
-                    ) from exc
+                if timeout is None:
+                    raw_line = await proc.stdout.readline()
+                else:
+                    try:
+                        raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
+                    except TimeoutError as exc:
+                        raise ProviderError(
+                            f"claude CLI stream read timed out after {timeout}s"
+                        ) from exc
                 if not raw_line:
                     break
                 line = raw_line.decode().strip()

@@ -354,3 +354,26 @@ async def test_stream_tool_call_terminal_is_tool_use(monkeypatch):
     ]
     done = [e for e in events if e.done][-1]
     assert done.stop_reason == StopReason.tool_use
+
+
+@pytest.mark.asyncio
+async def test_stream_stall_raises(monkeypatch):
+    class _StallStdout:
+        async def readline(self):
+            await asyncio.Event().wait()
+            return b""
+
+    proc = AsyncMock()
+    proc.stdin = AsyncMock()
+    proc.stdin.write = lambda b: None
+    proc.stdin.close = lambda: None
+    proc.stdout = _StallStdout()
+    proc.returncode = None
+    proc.kill = lambda: None
+    proc.wait = AsyncMock(return_value=0)
+    monkeypatch.setattr(asyncio.subprocess, "PIPE", -1, raising=False)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
+    client = GeminiCliClient(binary_path="gemini").timeout(0.05)
+    with pytest.raises(ProviderError, match="timed out"):
+        async for _ in client.stream(ChatRequest(messages=[Message.user("hi")])):
+            pass

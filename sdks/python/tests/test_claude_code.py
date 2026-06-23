@@ -314,6 +314,15 @@ class TestClaudeCodeClientConstruction:
         assert "sk-secret" not in r
         assert "<1 redacted>" in r
 
+    def test_default_timeout_is_300(self):
+        assert ClaudeCodeClient()._config.timeout_secs == 300.0
+
+    def test_timeout_override(self):
+        assert ClaudeCodeClient().timeout(5)._config.timeout_secs == 5
+
+    def test_no_timeout_sets_none(self):
+        assert ClaudeCodeClient().no_timeout()._config.timeout_secs is None
+
 
 # ---------------------------------------------------------------------------
 # _build_args

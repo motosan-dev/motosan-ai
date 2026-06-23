@@ -232,3 +232,12 @@ def test_env_repr_redacts_secret():
 def test_env_not_in_argv():
     args = CodexCliClient(binary_path="codex").env("OPENAI_API_KEY", "sk-secret")._build_args()
     assert all("sk-secret" not in a for a in args)
+
+
+def test_default_timeout_is_600():
+    assert CodexCliClient(binary_path="codex")._config.timeout_secs == 600.0
+
+
+def test_timeout_override_and_no_timeout():
+    assert CodexCliClient(binary_path="codex").timeout(5)._config.timeout_secs == 5
+    assert CodexCliClient(binary_path="codex").no_timeout()._config.timeout_secs is None
