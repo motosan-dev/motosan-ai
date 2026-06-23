@@ -20,7 +20,7 @@ from motosan_ai.types import (
     Usage,
 )
 
-_TIMEOUT_SECS = 600
+_DEFAULT_TIMEOUT_SECS = 600.0
 
 
 class ApprovalMode(StrEnum):
@@ -65,6 +65,7 @@ class _GeminiCliConfig:
     resume: str | None = None
     cwd: str | None = None
     envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
+    timeout_secs: float | None = _DEFAULT_TIMEOUT_SECS
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -263,6 +264,16 @@ class GeminiCliClient:
         self._config.envs.replace_from(vars)
         return self
 
+    def timeout(self, seconds: float) -> GeminiCliClient:
+        """Override the per-invocation timeout (chat + per-read stream deadline)."""
+        self._config.timeout_secs = seconds
+        return self
+
+    def no_timeout(self) -> GeminiCliClient:
+        """Disable the invocation timeout (run until the child exits)."""
+        self._config.timeout_secs = None
+        return self
+
     def _child_env(self) -> dict[str, str] | None:
         if len(self._config.envs) == 0:
             return None
@@ -314,13 +325,17 @@ class GeminiCliClient:
             env=self._child_env(),
         )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(stdin_payload.encode()), timeout=_TIMEOUT_SECS
-            )
+            if self._config.timeout_secs is None:
+                stdout, stderr = await proc.communicate(stdin_payload.encode())
+            else:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(stdin_payload.encode()),
+                    timeout=self._config.timeout_secs,
+                )
         except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise ProviderError(f"gemini CLI timed out after {_TIMEOUT_SECS}s") from exc
+            raise ProviderError(f"gemini CLI timed out after {self._config.timeout_secs}s") from exc
 
         if proc.returncode != 0:
             raise ProviderError(
@@ -373,8 +388,17 @@ class GeminiCliClient:
             with contextlib.suppress(BrokenPipeError, ConnectionResetError, AttributeError):
                 await proc.stdin.wait_closed()
 
+            timeout = self._config.timeout_secs
             while True:
-                raw = await proc.stdout.readline()
+                if timeout is None:
+                    raw = await proc.stdout.readline()
+                else:
+                    try:
+                        raw = await asyncio.wait_for(proc.stdout.readline(), timeout=timeout)
+                    except TimeoutError as exc:
+                        raise ProviderError(
+                            f"gemini CLI stream read timed out after {timeout}s"
+                        ) from exc
                 if not raw:
                     break
                 line = raw.decode().rstrip("\n")

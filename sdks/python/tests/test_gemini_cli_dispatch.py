@@ -53,3 +53,12 @@ def test_env_repr_redacts():
     client = GeminiCliClient().env("GEMINI_API_KEY", "sk-x")
     r = repr(client._config)
     assert "<1 redacted>" in r and "sk-x" not in r
+
+
+def test_default_timeout_is_600():
+    assert GeminiCliClient()._config.timeout_secs == 600.0
+
+
+def test_timeout_override_and_no_timeout():
+    assert GeminiCliClient().timeout(5)._config.timeout_secs == 5
+    assert GeminiCliClient().no_timeout()._config.timeout_secs is None
