@@ -39,3 +39,17 @@ def test_cwd_setter():
 
 def test_cwd_default_none():
     assert GeminiCliClient()._config.cwd is None
+
+
+def test_env_appends_and_envs_replaces():
+    client = GeminiCliClient().env("A", "1").env("B", "2")
+    assert client._child_env()["A"] == "1" and client._child_env()["B"] == "2"
+    client.envs({"C": "3"})
+    child = client._child_env()
+    assert child["C"] == "3" and "A" not in child
+
+
+def test_env_repr_redacts():
+    client = GeminiCliClient().env("GEMINI_API_KEY", "sk-x")
+    r = repr(client._config)
+    assert "<1 redacted>" in r and "sk-x" not in r
