@@ -133,16 +133,58 @@ def _parse_ndjson_line(line: str) -> list[StreamEvent]:
     if event_type == "assistant":
         message = event.get("message", {})
         content_blocks = message.get("content", [])
-        parts: list[str] = []
+        events: list[StreamEvent] = []
+        text_parts: list[str] = []
+
+        def _flush_text() -> None:
+            joined = "".join(text_parts)
+            if joined:
+                events.append(StreamEvent(content=joined, done=False))
+            text_parts.clear()
+
         for block in content_blocks:
-            if isinstance(block, dict) and block.get("type") == "text":
+            if not isinstance(block, dict):
+                continue
+            btype = block.get("type")
+            if btype == "text":
                 t = block.get("text", "")
                 if t:
-                    parts.append(t)
-        text = "".join(parts)
-        if not text:
-            return []
-        return [StreamEvent(content=text, done=False)]
+                    text_parts.append(t)
+            elif btype == "tool_use":
+                _flush_text()
+                tool_id = block.get("id", "")
+                tool_name = block.get("name", "")
+                tool_input = block.get("input", {})
+                args = json.dumps(tool_input, separators=(",", ":"))
+                events.append(
+                    StreamEvent(
+                        content="",
+                        done=False,
+                        event_type="tool_call_start",
+                        tool_call_id=tool_id,
+                        tool_call_name=tool_name,
+                    )
+                )
+                events.append(
+                    StreamEvent(
+                        content="",
+                        done=False,
+                        event_type="tool_call_args",
+                        tool_call_id=tool_id,
+                        tool_call_args_delta=args,
+                    )
+                )
+                events.append(
+                    StreamEvent(
+                        content="",
+                        done=False,
+                        event_type="tool_call_end",
+                        tool_call_id=tool_id,
+                    )
+                )
+            # thinking / other blocks ignored
+        _flush_text()
+        return events
 
     if event_type == "result":
         events_out: list[StreamEvent] = []
@@ -545,13 +587,14 @@ class ClaudeCodeClient:
         await proc.stdin.wait_closed()
 
         assert proc.stdout is not None
+        saw_tool_call = False
         try:
             while True:
                 try:
                     raw_line = await asyncio.wait_for(proc.stdout.readline(), timeout=_TIMEOUT_SECS)
                 except TimeoutError as exc:
                     raise ProviderError(
-                        f"claude CLI stream timed out after {_TIMEOUT_SECS} seconds"
+                        f"claude CLI stream read timed out after {_TIMEOUT_SECS}s"
                     ) from exc
                 if not raw_line:
                     break
@@ -559,6 +602,16 @@ class ClaudeCodeClient:
                 if not line:
                     continue
                 for event in _parse_ndjson_line(line):
+                    if event.event_type in (
+                        "tool_call_start",
+                        "tool_call_args",
+                        "tool_call_end",
+                    ):
+                        saw_tool_call = True
+                    if event.done:
+                        event.stop_reason = (
+                            StopReason.tool_use if saw_tool_call else StopReason.end_turn
+                        )
                     yield event
                     if event.done:
                         return
