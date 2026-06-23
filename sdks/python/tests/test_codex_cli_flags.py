@@ -203,3 +203,14 @@ def test_codex_has_no_os_cwd_setter():
     # Codex's working-directory mechanism is the --cd argv flag (cd()),
     # not asyncio create_subprocess_exec(cwd=). Confirm no cwd() builder.
     assert not hasattr(CodexCliClient(binary_path="codex"), "cwd")
+
+
+def test_resume_inserts_exec_resume_subcommand():
+    args = CodexCliClient(binary_path="codex").resume("th_abc")._build_args()
+    assert args[:4] == ["codex", "exec", "resume", "th_abc"]
+    assert "--json" in args
+
+
+def test_resume_blank_skipped():
+    args = CodexCliClient(binary_path="codex").resume("   ")._build_args()
+    assert "resume" not in args
