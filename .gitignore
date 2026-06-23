@@ -25,3 +25,6 @@ sdks/typescript/dist/
 # IDE caches (developer-local, don't need to be tracked)
 .idea/
 .vscode/
+
+# CodeGraph index (local, rebuilt via `codegraph init`)
+/.codegraph/
