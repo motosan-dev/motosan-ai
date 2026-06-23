@@ -44,3 +44,9 @@ export const GEMINI_MODELS = [
 
 /** Default Gemini model (models.rs:22) */
 export const DEFAULT_GEMINI_MODEL = 'gemini-2.5-flash'
+
+/** ChatGPT-Codex model IDs */
+export const CHATGPT_CODEX_MODELS = ['gpt-5.5'] as const
+
+/** Default ChatGPT-Codex model (distinct from DEFAULT_OPENAI_MODEL = 'gpt-5.3-codex') */
+export const DEFAULT_CHATGPT_CODEX_MODEL = 'gpt-5.5'
