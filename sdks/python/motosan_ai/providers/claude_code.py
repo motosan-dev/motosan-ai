@@ -22,6 +22,13 @@ from motosan_ai.types import (
 _TIMEOUT_SECS = 300
 
 
+class _RedactedEnvs(list):
+    """list[tuple[str, str]] of (key, value) env pairs whose repr hides values."""
+
+    def __repr__(self) -> str:
+        return f"<{len(self)} redacted>"
+
+
 @dataclass
 class _ClaudeCodeConfig:
     binary_path: str = "claude"
@@ -48,6 +55,7 @@ class _ClaudeCodeConfig:
     plugin_dirs: list[str] = field(default_factory=list)
     max_budget_usd: float | None = None
     cwd: str | None = None
+    envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -318,6 +326,32 @@ class ClaudeCodeClient:
         self._config.cwd = directory
         return self
 
+    def env(self, key: str, value: str) -> ClaudeCodeClient:
+        """Inject one environment variable into the spawned subprocess (repeatable).
+
+        The value is treated as a secret and is redacted from ``repr``.
+        """
+        self._config.envs.append((key, value))
+        return self
+
+    def envs(self, vars: dict[str, str]) -> ClaudeCodeClient:
+        """Replace the full set of injected environment variables (does not append)."""
+        self._config.envs = _RedactedEnvs(vars.items())
+        return self
+
+    def _subprocess_env(self) -> dict[str, str] | None:
+        """Child env: a copy of os.environ overlaid with injected vars.
+
+        Returns ``None`` when nothing is injected so the child inherits the
+        parent environment unchanged (and os.environ is never mutated).
+        """
+        if not self._config.envs:
+            return None
+        merged = dict(os.environ)
+        for key, value in self._config.envs:
+            merged[key] = value
+        return merged
+
     def _build_args(
         self,
         *,
@@ -441,6 +475,7 @@ class ClaudeCodeClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._config.cwd,
+            env=self._subprocess_env(),
         )
 
         try:
@@ -499,6 +534,7 @@ class ClaudeCodeClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._config.cwd,
+            env=self._subprocess_env(),
         )
 
         # Write prompt to stdin then close it
