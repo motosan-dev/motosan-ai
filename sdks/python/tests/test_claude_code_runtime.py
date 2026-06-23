@@ -81,3 +81,19 @@ async def test_stream_tool_use_sets_terminal_stop_reason(monkeypatch):
     ]
     done = [e for e in events if e.done][-1]
     assert done.stop_reason == StopReason.tool_use
+
+
+@pytest.mark.asyncio
+async def test_chat_no_timeout_skips_wait_for(monkeypatch):
+    proc = _make_proc()
+    monkeypatch.setattr(
+        "motosan_ai.providers.claude_code.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=proc),
+    )
+
+    def _boom(*a, **k):
+        raise AssertionError("wait_for must not be called under no_timeout")
+
+    monkeypatch.setattr("motosan_ai.providers.claude_code.asyncio.wait_for", _boom)
+    client = ClaudeCodeClient().no_timeout()
+    await client.chat(ChatRequest(messages=[Message(role=Role.user, content="hi")]))
