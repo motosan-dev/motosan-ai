@@ -13,7 +13,7 @@ from motosan_ai.providers.codex_cli import (
     _messages_to_prompt,
     _parse_jsonl_line,
 )
-from motosan_ai.types import ChatRequest, Message
+from motosan_ai.types import ChatRequest, Message, StopReason
 
 
 def test_agent_message_emits_text_event():
@@ -93,6 +93,37 @@ def test_malformed_json_returns_empty():
     assert _parse_jsonl_line("") == []
 
 
+def test_command_execution_yields_tool_call_events():
+    line = (
+        '{"type":"item.completed","item":{"id":"item_0",'
+        '"type":"command_execution","command":"ls -la"}}'
+    )
+    events = _parse_jsonl_line(line)
+    assert [e.event_type for e in events] == [
+        "tool_call_start",
+        "tool_call_args",
+        "tool_call_end",
+    ]
+    assert events[0].tool_call_id == "item_0"
+    assert events[0].tool_call_name == "command_execution"
+    assert events[1].tool_call_args_delta == '{"command":"ls -la"}'
+
+
+def test_mcp_tool_call_uses_server_qualified_name():
+    line = (
+        '{"type":"item.completed","item":{"id":"i1","type":"mcp_tool_call",'
+        '"server":"node_repl","tool":"js","arguments":{"code":"x"}}}'
+    )
+    events = _parse_jsonl_line(line)
+    assert events[0].tool_call_name == "node_repl/js"
+    assert "code" in events[1].tool_call_args_delta
+
+
+def test_tool_call_only_tool_name_when_no_server():
+    line = '{"type":"item.completed","item":{"id":"i2","type":"mcp_tool_call","tool":"js"}}'
+    assert _parse_jsonl_line(line)[0].tool_call_name == "js"
+
+
 def test_messages_to_prompt_extracts_system_and_user_prompt():
     system, prompt = _messages_to_prompt([Message.system("be terse"), Message.user("hello")])
     assert system == "be terse"
@@ -137,6 +168,11 @@ class _FakeStdin:
 class _FakeStdout:
     def __init__(self, text: str) -> None:
         self._lines = [line.encode() for line in text.splitlines(True)]
+
+    async def readline(self) -> bytes:
+        if self._lines:
+            return self._lines.pop(0)
+        return b""
 
     def __aiter__(self):
         self._iter = iter(self._lines)
@@ -285,3 +321,21 @@ async def test_chat_passes_env_to_subprocess(monkeypatch):
     env = spawn.call_args.kwargs["env"]
     assert env["K"] == "v" and env["PATH"] == "/usr/bin"
     assert "K" not in os.environ
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_call_sets_tool_use_stop_reason(monkeypatch):
+    jsonl = (
+        '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
+        '"command": "ls"}}\n'
+        '{"type": "turn.completed"}\n'
+    )
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl, returncode=None))
+    events = [
+        ev
+        async for ev in CodexCliClient(binary_path="codex").stream(
+            ChatRequest(messages=[Message.user("hi")])
+        )
+    ]
+    done = [e for e in events if e.done][-1]
+    assert done.stop_reason == StopReason.tool_use

@@ -98,6 +98,47 @@ def _compose_prompt(system: str | None, user: str) -> str:
     return user
 
 
+def _tool_call_events(item: dict) -> list[StreamEvent]:
+    """Expand a command_execution / mcp_tool_call item into start/args/end events."""
+    call_id = item.get("id") or ""
+    server = item.get("server")
+    tool = item.get("tool")
+    if server and tool:
+        name = f"{server}/{tool}"
+    elif tool:
+        name = tool
+    else:
+        name = item.get("type") or ""
+
+    arguments = item.get("arguments")
+    # Compact separators (finding 8) — matches Rust's serde_json::to_string and
+    # the claude/gemini CLI providers: {"command":"ls -la"}, no spaces.
+    if arguments is not None:
+        args_json = json.dumps(arguments, separators=(",", ":"))
+    elif item.get("command") is not None:
+        args_json = json.dumps({"command": item["command"]}, separators=(",", ":"))
+    else:
+        args_json = "{}"
+
+    return [
+        StreamEvent(
+            content="",
+            done=False,
+            tool_call_id=call_id,
+            tool_call_name=name,
+            event_type="tool_call_start",
+        ),
+        StreamEvent(
+            content="",
+            done=False,
+            tool_call_id=call_id,
+            tool_call_args_delta=args_json,
+            event_type="tool_call_args",
+        ),
+        StreamEvent(content="", done=False, tool_call_id=call_id, event_type="tool_call_end"),
+    ]
+
+
 def _parse_jsonl_line(line: str) -> list[StreamEvent]:
     """Parse one JSONL line from ``codex exec --json`` into stream events."""
     if not line:
@@ -111,12 +152,17 @@ def _parse_jsonl_line(line: str) -> list[StreamEvent]:
 
     if event_type == "item.completed":
         item = event.get("item") or {}
-        if not isinstance(item, dict) or item.get("type") != "agent_message":
+        if not isinstance(item, dict):
             return []
-        text = item.get("text") or ""
-        if not text:
-            return []
-        return [StreamEvent(content=text, done=False)]
+        item_type = item.get("type")
+        if item_type == "agent_message":
+            text = item.get("text") or ""
+            if not text:
+                return []
+            return [StreamEvent(content=text, done=False)]
+        if item_type in ("command_execution", "mcp_tool_call"):
+            return _tool_call_events(item)
+        return []
 
     if event_type == "turn.completed":
         out: list[StreamEvent] = []
@@ -350,6 +396,7 @@ class CodexCliClient:
             env=self._subprocess_env(),
         )
 
+        saw_tool_call = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
             proc.stdin.write(prompt.encode())
@@ -359,9 +406,20 @@ class CodexCliClient:
             with contextlib.suppress(BrokenPipeError, ConnectionResetError, AttributeError):
                 await proc.stdin.wait_closed()
 
-            async for raw in proc.stdout:
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
+                    if event.event_type in (
+                        "tool_call_start",
+                        "tool_call_args",
+                        "tool_call_end",
+                    ):
+                        saw_tool_call = True
+                    if event.done and saw_tool_call:
+                        event.stop_reason = StopReason.tool_use
                     yield event
                     if event.done:
                         return
