@@ -214,3 +214,21 @@ def test_resume_inserts_exec_resume_subcommand():
 def test_resume_blank_skipped():
     args = CodexCliClient(binary_path="codex").resume("   ")._build_args()
     assert "resume" not in args
+
+
+def test_env_appends_and_envs_replaces():
+    client = CodexCliClient(binary_path="codex").env("A", "1").env("B", "2")
+    assert list(client._config.envs) == [("A", "1"), ("B", "2")]
+    client.envs({"C": "3"})
+    assert list(client._config.envs) == [("C", "3")]
+
+
+def test_env_repr_redacts_secret():
+    client = CodexCliClient(binary_path="codex").env("OPENAI_API_KEY", "sk-secret")
+    r = repr(client._config)
+    assert "<1 redacted>" in r and "sk-secret" not in r
+
+
+def test_env_not_in_argv():
+    args = CodexCliClient(binary_path="codex").env("OPENAI_API_KEY", "sk-secret")._build_args()
+    assert all("sk-secret" not in a for a in args)

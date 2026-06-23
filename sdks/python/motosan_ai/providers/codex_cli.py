@@ -34,6 +34,13 @@ class LocalProvider(StrEnum):
     ollama = "ollama"
 
 
+class _RedactedEnvs(list):
+    """list[tuple[str, str]] of (key, value) env pairs whose repr hides values."""
+
+    def __repr__(self) -> str:
+        return f"<{len(self)} redacted>"
+
+
 @dataclass
 class _CodexCliConfig:
     binary_path: str = "codex"
@@ -51,6 +58,7 @@ class _CodexCliConfig:
     disabled_features: list[str] = field(default_factory=list)
     config_overrides: list[tuple[str, str]] = field(default_factory=list)
     resume: str | None = None
+    envs: _RedactedEnvs = field(default_factory=_RedactedEnvs)
 
 
 def _model_to_forward(model: str) -> str | None:
@@ -224,6 +232,24 @@ class CodexCliClient:
         self._config.resume = thread_id
         return self
 
+    def env(self, key: str, value: str) -> CodexCliClient:
+        """Inject one env var into the spawned child (repeatable). Value is a secret."""
+        self._config.envs.append((key, value))
+        return self
+
+    def envs(self, vars: dict[str, str]) -> CodexCliClient:
+        """Replace the full set of injected env vars (does not append)."""
+        self._config.envs = _RedactedEnvs(vars.items())
+        return self
+
+    def _subprocess_env(self) -> dict[str, str] | None:
+        if not self._config.envs:
+            return None
+        merged = dict(os.environ)
+        for key, value in self._config.envs:
+            merged[key] = value
+        return merged
+
     def _build_args(self, model: str | None = None) -> list[str]:
         args: list[str] = [self._config.binary_path, "exec"]
         if self._config.resume is not None and self._config.resume.strip():
@@ -273,6 +299,7 @@ class CodexCliClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._subprocess_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(
@@ -320,6 +347,7 @@ class CodexCliClient:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=self._subprocess_env(),
         )
 
         try:

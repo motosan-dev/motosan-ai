@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from unittest.mock import AsyncMock
 
 import pytest
@@ -264,3 +265,23 @@ async def test_stream_yields_events_in_order(monkeypatch):
     assert len(done_events) == 1
     assert events.index(text_events[0]) < events.index(usage_events[0])
     assert events.index(usage_events[0]) < events.index(done_events[0])
+
+
+@pytest.mark.asyncio
+async def test_chat_passes_env_to_subprocess(monkeypatch):
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setattr(asyncio.subprocess, "PIPE", -1, raising=False)
+    fake = _FakeProc(
+        '{"type": "item.completed", "item": {"type": "agent_message", "text": "hi"}}\n'
+        '{"type": "turn.completed"}\n'
+    )
+    spawn = AsyncMock(return_value=fake)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", spawn)
+    await (
+        CodexCliClient(binary_path="codex")
+        .env("K", "v")
+        .chat(ChatRequest(messages=[Message.user("hi")]))
+    )
+    env = spawn.call_args.kwargs["env"]
+    assert env["K"] == "v" and env["PATH"] == "/usr/bin"
+    assert "K" not in os.environ
