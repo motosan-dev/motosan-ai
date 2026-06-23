@@ -333,18 +333,22 @@ class Client:
         last_error: RateLimitError | None = None
         max_attempts = self._max_retries + 1 if self._max_retries > 0 else 1
         for attempt in range(max_attempts):
+            yielded = False
             try:
                 stripper = ThinkStripper()
                 async for event in self._provider.stream(request):
                     if event.event_type == "text" and event.content:
                         clean = stripper.feed(event.content)
                         if clean:
+                            yielded = True
                             yield StreamEvent(content=clean, done=False)
                     else:
                         if event.done:
                             remaining = stripper.flush()
                             if remaining:
+                                yielded = True
                                 yield StreamEvent(content=remaining, done=False)
+                        yielded = True
                         yield event
                 return
             except (RateLimitError, NetworkError, ProviderError) as e:
@@ -355,7 +359,11 @@ class Client:
                     _parse_retry_after,
                 )
 
-                if not _is_retryable(e):
+                # F1: once the stream has emitted any event, a mid-stream error
+                # must propagate verbatim — retrying would replay a partially
+                # consumed request and double-emit. Only connection-time
+                # (pre-first-yield) failures are retried.
+                if yielded or not _is_retryable(e):
                     raise
                 last_error = e
                 if attempt >= self._max_retries:
