@@ -3,6 +3,7 @@ import { Client, ClientBuilder } from '../src/client.js'
 import { ConfigError, UnsupportedFeatureError } from '../src/error.js'
 import { dispatchChat, readTimeoutStream } from '../src/provider.js'
 import { RetryPolicy } from '../src/retry.js'
+import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
 import type { ChatRequest } from '../src/types.js'
 
 describe('ClientBuilder', () => {
@@ -563,6 +564,31 @@ describe('ClientBuilder Ollama routing (native vs compat)', () => {
     const client = new ClientBuilder().provider('ollama').build()
     await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
     expect(urls[0]).toBe('http://localhost:11434/v1/chat/completions')
+  })
+})
+
+describe('ClientBuilder.chatgptCodex', () => {
+  it('builds a Client without an api key', () => {
+    const client = new ClientBuilder().chatgptCodex('tok', 'acct').build()
+    expect(client).toBeInstanceOf(Client)
+  })
+
+  it('constructs a ChatGptCodexProvider with the given token/accountId/model', () => {
+    const prov = new ClientBuilder().chatgptCodex('tok', 'acct', 'gpt-x').buildProviderForTest()
+    expect(prov).toBeInstanceOf(ChatGptCodexProvider)
+    expect((prov as ChatGptCodexProvider).modelId()).toBe('gpt-x')
+  })
+
+  it('threads the reasoning effort default', () => {
+    const prov = new ClientBuilder()
+      .chatgptCodex('tok', 'acct', undefined, { reasoningEffort: 'high' })
+      .buildProviderForTest() as ChatGptCodexProvider
+    const body = prov.buildResponsesBody({ messages: [{ role: 'user', content: 'hi' }] }, prov.modelId())
+    expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
+  it('does not require an api key (no ConfigError)', () => {
+    expect(() => new ClientBuilder().chatgptCodex('tok', 'acct').build()).not.toThrow()
   })
 })
 

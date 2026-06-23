@@ -96,8 +96,10 @@ export function validateRequest(req: ChatRequest, caps: ProviderCapabilities): v
  * decided at provider-construction time in ClientBuilder.buildProvider (see
  * client.ts) — dispatchChat/dispatchStream stay provider-agnostic, so NO
  * 'ollama' arm is added here.
+ * chatgpt_codex added in 0.11.0 — built only via ClientBuilder.chatgptCodex
+ * (no env-key dispatch arm; keyed '' in ENV_KEY_BY_PROVIDER, kept out of HTTP_PROVIDERS).
  */
-export type Provider = 'anthropic' | 'openai' | 'minimax' | 'ollama' | 'gemini'
+export type Provider = 'anthropic' | 'openai' | 'minimax' | 'ollama' | 'gemini' | 'chatgpt_codex'
 
 /**
  * Minimal shape a provider must expose to be dispatched: a capability reshape

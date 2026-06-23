@@ -97,6 +97,15 @@ describe('M6 Gemini public surface (index re-exports)', () => {
   })
 })
 
+describe('ChatGPT-Codex public surface (index re-exports)', () => {
+  it('exports ChatGptCodexProvider and its default model', async () => {
+    const sdk = await import('../src/index.js')
+    expect(typeof sdk.ChatGptCodexProvider).toBe('function')
+    expect(sdk.DEFAULT_CHATGPT_CODEX_MODEL).toBe('gpt-5.5')
+    expect(sdk.CHATGPT_CODEX_MODELS).toContain('gpt-5.5')
+  })
+})
+
 describe('M6 Gemini done-criteria smoke (builder round-trip)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()

@@ -15,6 +15,7 @@ import { MinimaxProvider } from './providers/minimax.js'
 import { OllamaProvider } from './providers/ollama.js'
 import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
 import { GeminiProvider } from './providers/gemini.js'
+import { ChatGptCodexProvider } from './providers/chatgpt_codex.js'
 import { DEFAULT_OLLAMA_MODEL } from './models.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
@@ -46,6 +47,9 @@ const ENV_KEY_BY_PROVIDER: Record<ProviderName, string> = {
   // process.env[''] yields undefined (harmless — apiKey not required).
   ollama: '',
   gemini: 'GEMINI_API_KEY',
+  // ChatGPT-Codex uses a caller-supplied OAuth token (no env key, no
+  // HTTP_PROVIDERS membership); '' keeps the Record total.
+  chatgpt_codex: '',
 }
 
 function asDispatchProvider(provider: ProviderLike): DispatchProvider {
@@ -82,6 +86,9 @@ export class ClientBuilder {
   protected _ollamaThink?: string
   protected _ollamaKeepAlive?: string
   protected _ollamaNumCtx?: number
+  protected _chatgptAccessToken?: string
+  protected _chatgptAccountId?: string
+  protected _chatgptReasoningEffort?: string
 
   provider(p: Provider): this {
     this._provider = p
@@ -180,6 +187,26 @@ export class ClientBuilder {
   }
 
   /**
+   * Configure the no-api-key ChatGPT-Codex provider with a caller-supplied OAuth
+   * `accessToken` + `accountId`. Optional `model` overrides the default
+   * (`gpt-5.5`); `opts.reasoningEffort` sets the provider-default reasoning
+   * effort (per-request `providerOptions.reasoning_effort` still wins).
+   */
+  chatgptCodex(
+    accessToken: string,
+    accountId: string,
+    model?: string,
+    opts?: { reasoningEffort?: string },
+  ): this {
+    this._provider = 'chatgpt_codex'
+    this._chatgptAccessToken = accessToken
+    this._chatgptAccountId = accountId
+    if (model !== undefined) this._model = model
+    this._chatgptReasoningEffort = opts?.reasoningEffort
+    return this
+  }
+
+  /**
    * Construct the configured provider with its existing constructor signature,
    * then chain Task 5's mutating `withRetryPolicy(policy): this` setter.
    * Subclass tasks (7/8) override the 'openai' arm to apply auth-style /
@@ -242,9 +269,27 @@ export class ClientBuilder {
         this._retryPolicy,
       )
     }
+    if (provider === 'chatgpt_codex') {
+      const codex = new ChatGptCodexProvider(
+        this._chatgptAccessToken ?? '',
+        this._chatgptAccountId ?? '',
+        this._model,
+      ).withRetryPolicy(this._retryPolicy)
+      return this._chatgptReasoningEffort !== undefined
+        ? codex.reasoningEffort(this._chatgptReasoningEffort)
+        : codex
+    }
     return new MinimaxProvider(apiKey, this._model, this._minimaxBaseUrl).withRetryPolicy(
       this._retryPolicy,
     )
+  }
+
+  /** Test-only: build the provider without wrapping it in a Client. */
+  buildProviderForTest(): DispatchProvider {
+    if (!this._provider) {
+      throw new ConfigError('provider is required')
+    }
+    return this.buildProvider(this._provider, this._apiKey ?? '')
   }
 
   /** Build a Client. Throws ConfigError on missing provider / missing key for HTTP providers. */
