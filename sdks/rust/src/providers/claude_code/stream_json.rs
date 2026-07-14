@@ -19,10 +19,11 @@ pub enum ClaudeStreamEvent {
 
     #[serde(rename = "result")]
     Result {
-        // The `result` field on a terminal `result` event duplicates what
-        // we already yielded as Text from the preceding `assistant` event.
-        // Kept parsed so the variant matches the wire shape, and used as the
-        // provider error message when `is_error` is true.
+        // The `result` field on a successful terminal `result` event duplicates
+        // what we already yielded as Text from the preceding `assistant` event.
+        // Error-subtype terminals may omit it, so default to an empty string and
+        // use a fallback detail when surfacing the provider error.
+        #[serde(default)]
         result: String,
         #[serde(default)]
         usage: Option<ClaudeStreamUsage>,
@@ -128,13 +129,19 @@ pub fn parse_ndjson_line(line: &str) -> Option<NdjsonAction> {
             is_error,
             subtype,
         } => {
-            if is_error {
-                let msg = if result.is_empty() {
-                    subtype.unwrap_or_else(|| "claude CLI provider error".to_string())
+            let subtype_is_error = subtype
+                .as_deref()
+                .is_some_and(|subtype| subtype.starts_with("error"));
+            if is_error || subtype_is_error {
+                let subtype = subtype.as_deref().unwrap_or("unknown");
+                let detail = if result.is_empty() {
+                    "no result message"
                 } else {
-                    result
+                    result.as_str()
                 };
-                return Some(NdjsonAction::Error(msg));
+                return Some(NdjsonAction::Error(format!(
+                    "claude_code terminal error ({subtype}): {detail}"
+                )));
             }
             let usage_event = usage.map(|u| {
                 StreamEvent::usage(Usage {
@@ -204,6 +211,29 @@ mod tests {
         let line = r#"{"type":"result","subtype":"success","is_error":true,"result":"bad model"}"#;
         match parse_ndjson_line(line).expect("parse") {
             NdjsonAction::Error(msg) => assert!(msg.contains("bad model")),
+            _ => panic!("expected Error action"),
+        }
+    }
+
+    #[test]
+    fn result_error_subtype_without_result_field_maps_to_error() {
+        let line = r#"{"type":"result","subtype":"error_max_turns","is_error":true,"duration_ms":42,"num_turns":10,"session_id":"sess_1"}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::Error(msg) => {
+                assert!(msg.contains("error_max_turns"), "got: {msg}");
+                assert!(msg.contains("claude_code terminal error"), "got: {msg}");
+            }
+            _ => panic!("expected Error action"),
+        }
+    }
+
+    #[test]
+    fn result_error_subtype_without_is_error_flag_maps_to_error() {
+        let line = r#"{"type":"result","subtype":"error_during_execution"}"#;
+        match parse_ndjson_line(line).expect("parse") {
+            NdjsonAction::Error(msg) => {
+                assert!(msg.contains("error_during_execution"), "got: {msg}");
+            }
             _ => panic!("expected Error action"),
         }
     }

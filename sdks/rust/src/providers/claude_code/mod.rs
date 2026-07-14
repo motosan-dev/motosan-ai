@@ -559,8 +559,15 @@ where
 
             let line = match next {
                 Ok(Some(line)) => line.trim().to_string(),
-                Ok(None) => break,
-                Err(_) => break,
+                // EOF/read error before a terminal event surfaces an abnormal child exit.
+                Ok(None) => {
+                    yield Err(abnormal_exit_error(&mut child, None).await);
+                    break;
+                }
+                Err(e) => {
+                    yield Err(abnormal_exit_error(&mut child, Some(e)).await);
+                    break;
+                }
             };
             if line.is_empty() {
                 continue;
@@ -622,6 +629,121 @@ async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
             }
         }
     }
+}
+
+const CLI_LABEL: &str = "claude CLI";
+
+async fn abnormal_exit_error(
+    child: &mut Option<tokio::process::Child>,
+    read_err: Option<std::io::Error>,
+) -> MotosanError {
+    use std::future::{poll_fn, Future};
+    use std::pin::Pin;
+    use std::task::Poll;
+    use tokio::io::{AsyncRead, ReadBuf};
+
+    let mut status = "unknown".to_string();
+    let mut stderr_excerpt = String::new();
+
+    if let Some(mut c) = child.take() {
+        let mut stderr = c.stderr.take();
+        let mut stderr_buf = Vec::with_capacity(8000);
+        let mut read_buf = [0_u8; 8192];
+        let mut child_done = false;
+        let mut stderr_done = stderr.is_none();
+        let mut wait_failed = false;
+
+        let collection_timed_out = {
+            let wait = c.wait();
+            tokio::pin!(wait);
+            let collect = poll_fn(|cx| {
+                if !child_done {
+                    match wait.as_mut().poll(cx) {
+                        Poll::Ready(Ok(exit)) => {
+                            child_done = true;
+                            status = exit
+                                .code()
+                                .map_or_else(|| exit.to_string(), |code| code.to_string());
+                        }
+                        Poll::Ready(Err(_)) => {
+                            wait_failed = true;
+                            return Poll::Ready(());
+                        }
+                        Poll::Pending => {}
+                    }
+                }
+
+                if !stderr_done {
+                    if let Some(pipe) = stderr.as_mut() {
+                        let mut reads = 0;
+                        loop {
+                            let read = {
+                                let mut buf = ReadBuf::new(&mut read_buf);
+                                match Pin::new(&mut *pipe).poll_read(cx, &mut buf) {
+                                    Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.filled().len())),
+                                    Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
+                                    Poll::Pending => Poll::Pending,
+                                }
+                            };
+                            match read {
+                                Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
+                                    stderr_done = true;
+                                    break;
+                                }
+                                Poll::Ready(Ok(n)) => {
+                                    let retained = (8000 - stderr_buf.len()).min(n);
+                                    stderr_buf.extend_from_slice(&read_buf[..retained]);
+                                    reads += 1;
+                                    if reads == 16 {
+                                        cx.waker().wake_by_ref();
+                                        break;
+                                    }
+                                }
+                                Poll::Pending => break,
+                            }
+                        }
+                    }
+                }
+
+                if child_done && stderr_done {
+                    Poll::Ready(())
+                } else {
+                    Poll::Pending
+                }
+            });
+
+            tokio::time::timeout(Duration::from_secs(5), collect)
+                .await
+                .is_err()
+        };
+
+        if wait_failed || (collection_timed_out && !child_done) {
+            let _ = c.start_kill();
+            if let Ok(exit) = c.wait().await {
+                status = exit
+                    .code()
+                    .map_or_else(|| exit.to_string(), |code| code.to_string());
+            }
+        }
+
+        stderr_excerpt = String::from_utf8_lossy(&stderr_buf)
+            .trim()
+            .chars()
+            .take(2000)
+            .collect();
+    }
+
+    let detail = if !stderr_excerpt.is_empty() {
+        stderr_excerpt
+    } else if let Some(err) = read_err {
+        format!("stdout read error: {err}")
+    } else {
+        "stream ended before a terminal event".to_string()
+    };
+
+    MotosanError::Stream(format!(
+        "{CLI_LABEL} exited unexpectedly (status {status}): {detail}"
+    ))
 }
 
 impl Default for ClaudeCodeProvider {
@@ -706,6 +828,110 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn premature_child_exit_surfaces_status_and_stderr() {
+        use std::process::Stdio;
+        use std::time::Duration;
+        use tokio::io::BufReader;
+        use tokio::process::Command;
+        use tokio_stream::StreamExt;
+
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("printf '%s\n' '{\"type\":\"text\",\"text\":\"hello\"}'; echo boom >&2; exit 1")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn child");
+        let stdout = child.stdout.take().expect("child stdout");
+        let mut stream = super::drive_lines(
+            Some(child),
+            BufReader::new(stdout),
+            Some(Duration::from_secs(10)),
+        );
+
+        let first = stream
+            .next()
+            .await
+            .expect("first event")
+            .expect("text event");
+        assert_eq!(first.content, "hello");
+        assert!(!first.done);
+        match stream.next().await {
+            Some(Err(crate::error::MotosanError::Stream(msg))) => {
+                assert!(msg.contains("exited unexpectedly"), "got: {msg}");
+                assert!(msg.contains("status 1"), "got: {msg}");
+                assert!(msg.contains("boom"), "got: {msg}");
+            }
+            other => panic!("expected Stream error, got {other:?}"),
+        }
+        assert!(stream.next().await.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abnormal_exit_retains_buffered_stderr_when_read_times_out() {
+        use std::process::Stdio;
+        use tokio::process::Command;
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("echo boom >&2; sleep 10 & exit 1")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn child");
+        let mut child = Some(child);
+
+        match super::abnormal_exit_error(&mut child, None).await {
+            crate::error::MotosanError::Stream(msg) => {
+                assert!(msg.contains("status 1"), "got: {msg}");
+                assert!(msg.contains("boom"), "got: {msg}");
+            }
+            other => panic!("expected Stream error, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn abnormal_exit_drains_large_stderr_without_losing_status() {
+        use std::process::Stdio;
+        use std::time::Duration;
+        use tokio::process::Command;
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg("yes x | head -c 1048576 >&2; exit 7")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawn child");
+        let mut child = Some(child);
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(2),
+            super::abnormal_exit_error(&mut child, None),
+        )
+        .await
+        .expect("abnormal exit collection should not block on a full stderr pipe");
+
+        match error {
+            crate::error::MotosanError::Stream(msg) => {
+                assert!(msg.contains("status 7"), "got: {msg}");
+                assert!(
+                    msg.len() <= 2100,
+                    "diagnostic was not capped: {} bytes",
+                    msg.len()
+                );
+            }
+            other => panic!("expected Stream error, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn stream_surfaces_provider_error_as_err_item() {
         use std::io::Cursor;
@@ -729,6 +955,26 @@ mod tests {
             ),
             "a provider-error line must surface as a terminal Err item, got {last:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn stream_error_subtype_terminal_yields_provider_error() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let raw = b"{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true,\"duration_ms\":42,\"num_turns\":10}\n";
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            BufReader::new(Cursor::new(&raw[..])),
+            None,
+        );
+        match s.next().await {
+            Some(Err(crate::error::MotosanError::ProviderError(msg))) => {
+                assert!(msg.contains("error_max_turns"), "got: {msg}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
     }
 
     #[cfg(unix)]

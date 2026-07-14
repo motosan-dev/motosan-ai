@@ -777,3 +777,56 @@ async fn orphan_thinking_delta_without_start_does_not_crash() {
     );
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn anthropic_stream_surfaces_mid_stream_error_frame() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{}}\n\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"partial\"}}\n\n",
+        "event: error\n",
+        "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n",
+    );
+
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+
+    let mut ok_events = Vec::new();
+    let mut stream_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(event) => ok_events.push(event),
+            Err(err) => {
+                stream_err = Some(err);
+                break;
+            }
+        }
+    }
+
+    assert!(ok_events
+        .iter()
+        .any(|event| { event.event_type == StreamEventType::Text && event.content == "partial" }));
+    assert!(!ok_events.iter().any(|event| event.done));
+    let err = stream_err.expect("stream must yield Err for the error frame");
+    match err {
+        motosan_ai::MotosanError::Stream(message) => {
+            assert!(message.contains("overloaded_error"));
+            assert!(message.contains("Overloaded"));
+        }
+        other => panic!("expected MotosanError::Stream, got {other:?}"),
+    }
+
+    mock.assert_async().await;
+}

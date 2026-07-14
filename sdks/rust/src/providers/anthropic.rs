@@ -1112,6 +1112,16 @@ impl Stream for AnthropicStreamAdapter {
                             };
                             return Poll::Ready(Some(Ok(done)));
                         }
+                        "error" => {
+                            let err_type =
+                                payload["error"]["type"].as_str().unwrap_or("unknown_error");
+                            let message = payload["error"]["message"]
+                                .as_str()
+                                .unwrap_or("unknown stream error");
+                            return Poll::Ready(Some(Err(MotosanError::Stream(format!(
+                                "anthropic stream error: {err_type}: {message}"
+                            )))));
+                        }
                         _ => continue,
                     }
                 }
