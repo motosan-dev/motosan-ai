@@ -505,13 +505,11 @@ impl ProviderImpl for OpenAIProvider {
                 return self.chat_via_responses(&fallback_request).await;
             }
 
-            let current_payload: Value = response
-                .json()
-                .await
-                .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
-
             if status.is_success() {
-                payload = current_payload;
+                payload = response
+                    .json()
+                    .await
+                    .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
                 break;
             }
 
@@ -521,7 +519,8 @@ impl ProviderImpl for OpenAIProvider {
                 continue;
             }
 
-            let message = extract_error_message(&current_payload, "openai request failed");
+            let error_payload: Value = response.json().await.unwrap_or_else(|_| json!({}));
+            let message = extract_error_message(&error_payload, "openai request failed");
             return Err(map_http_error(status.as_u16(), message));
         }
 
