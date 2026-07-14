@@ -3,7 +3,9 @@
  *
  * Parses a ReadableStream<Uint8Array> into an async generator of SSE events.
  * Uses TextDecoder to handle UTF-8 decoding across chunk boundaries, buffers
- * incomplete events, splits on \n\n boundaries, and parses event:/data: lines.
+ * incomplete events, normalizes \r\n / bare \r to \n, splits on blank-line
+ * boundaries, and parses event:/data: lines (at most one leading space is
+ * removed after the colon, per the WHATWG SSE spec).
  * Malformed JSON in data fields is silently skipped. [DONE] is recognized as
  * data but does NOT terminate the stream (completion is adapter-specific).
  */
@@ -32,7 +34,23 @@ export async function* parseSse(
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  let pendingCr = false
   let pendingEventName: string | undefined
+
+  // Normalize \r\n and bare \r line terminators to \n (WHATWG SSE spec).
+  // A chunk ending in \r is held back (pendingCr) so a \r\n pair split
+  // across chunk boundaries is not mistaken for two terminators.
+  function normalizeNewlines(text: string): string {
+    if (pendingCr) {
+      text = '\r' + text
+      pendingCr = false
+    }
+    if (text.endsWith('\r')) {
+      pendingCr = true
+      text = text.substring(0, text.length - 1)
+    }
+    return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  }
 
   function eventFromText(text: string): SseEvent | null {
     const parsed = parseEventText(text)
@@ -54,12 +72,17 @@ export async function* parseSse(
       const { done, value } = await reader.read()
 
       if (value) {
-        buffer += decoder.decode(value, { stream: true })
+        buffer += normalizeNewlines(decoder.decode(value, { stream: true }))
       }
 
       if (done) {
         // Flush any remaining decoded bytes
-        buffer += decoder.decode()
+        buffer += normalizeNewlines(decoder.decode())
+        if (pendingCr) {
+          // A trailing lone \r is a line terminator too
+          buffer += '\n'
+          pendingCr = false
+        }
         // Process final event if buffer is non-empty
         if (buffer.trim()) {
           const event = eventFromText(buffer)
@@ -106,15 +129,23 @@ function parseEventText(text: string): ParsedEventText {
   const dataLines: string[] = []
 
   for (const line of lines) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      continue
+    if (!line || line.startsWith(':')) {
+      continue // empty line or comment
     }
 
-    if (trimmed.startsWith('event:')) {
-      eventName = trimmed.substring('event:'.length).trim()
-    } else if (trimmed.startsWith('data:')) {
-      dataLines.push(trimmed.substring('data:'.length).trim())
+    const colonIndex = line.indexOf(':')
+    const field = colonIndex === -1 ? line : line.substring(0, colonIndex)
+    let value = colonIndex === -1 ? '' : line.substring(colonIndex + 1)
+    // WHATWG SSE spec: remove at most ONE leading space after the colon;
+    // the rest of the value is preserved verbatim.
+    if (value.startsWith(' ')) {
+      value = value.substring(1)
+    }
+
+    if (field === 'event') {
+      eventName = value
+    } else if (field === 'data') {
+      dataLines.push(value)
     }
   }
 
