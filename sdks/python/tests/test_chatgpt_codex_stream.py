@@ -123,25 +123,38 @@ def test_adapter_maps_reasoning_delta_to_thinking():
 
 
 def test_adapter_handles_function_call_lifecycle():
+    # Real wire: the item carries both an item id ("fc_...") and a call_id
+    # ("call_..."); argument fragments are keyed by the ITEM id. All emitted
+    # events must use the call_id.
     events = _drive(
         [
             {
                 "type": "response.output_item.added",
-                "item": {"type": "function_call", "call_id": "call_42", "name": "get_weather"},
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_42",
+                    "call_id": "call_42",
+                    "name": "get_weather",
+                },
             },
             {
                 "type": "response.function_call_arguments.delta",
-                "item_id": "call_42",
+                "item_id": "fc_42",
                 "delta": '{"city":',
             },
             {
                 "type": "response.function_call_arguments.delta",
-                "item_id": "call_42",
+                "item_id": "fc_42",
                 "delta": '"Paris"}',
             },
             {
                 "type": "response.output_item.done",
-                "item": {"type": "function_call", "call_id": "call_42", "name": "get_weather"},
+                "item": {
+                    "type": "function_call",
+                    "id": "fc_42",
+                    "call_id": "call_42",
+                    "name": "get_weather",
+                },
             },
             {
                 "type": "response.completed",
@@ -157,14 +170,33 @@ def test_adapter_handles_function_call_lifecycle():
     assert start.tool_call_id == "call_42"
     assert start.tool_call_name == "get_weather"
 
-    args = "".join(e.tool_call_args_delta or "" for e in events if e.event_type == "tool_call_args")
-    assert args == '{"city":"Paris"}'
+    arg_events = [e for e in events if e.event_type == "tool_call_args"]
+    assert [e.tool_call_id for e in arg_events] == ["call_42", "call_42"]
+    assert "".join(e.tool_call_args_delta or "" for e in arg_events) == '{"city":"Paris"}'
 
     end = next(e for e in events if e.event_type == "tool_call_end")
     assert end.tool_call_id == "call_42"
 
     done = next(e for e in events if e.done)
     assert done.stop_reason == StopReason.tool_use
+
+
+def test_args_delta_for_unknown_item_id_passes_through():
+    state = _ChatGptCodexAdapterState()
+    events = _parse_sse_event(
+        json.dumps(
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_orphan",
+                "delta": "{}",
+            }
+        ),
+        state,
+    )
+    assert len(events) == 1
+    assert events[0].event_type == "tool_call_args"
+    assert events[0].tool_call_id == "fc_orphan"
+    assert events[0].tool_call_args_delta == "{}"
 
 
 def test_adapter_maps_incomplete_to_max_tokens():

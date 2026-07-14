@@ -33,6 +33,7 @@ _ORIGINATOR = "codex_cli_rs"
 @dataclass
 class _ChatGptCodexAdapterState:
     seen_tool_ids: set[str] = field(default_factory=set)
+    item_to_call_id: dict[str, str] = field(default_factory=dict)
     saw_tool_call: bool = False
     error: str | None = None
 
@@ -79,6 +80,9 @@ def _parse_sse_event(data: str, state: _ChatGptCodexAdapterState) -> list[Stream
             if call_id:
                 state.saw_tool_call = True
                 state.seen_tool_ids.add(call_id)
+                item_id = item.get("id")
+                if isinstance(item_id, str) and item_id:
+                    state.item_to_call_id[item_id] = call_id
                 out.append(
                     StreamEvent(
                         content="",
@@ -98,7 +102,10 @@ def _parse_sse_event(data: str, state: _ChatGptCodexAdapterState) -> list[Stream
                     content="",
                     done=False,
                     event_type="tool_call_args",
-                    tool_call_id=item_id,
+                    # Wire fragments are keyed by the item's "fc_..." id; translate
+                    # to the "call_..." call_id announced in output_item.added so
+                    # consumers can correlate. Unknown ids pass through unchanged.
+                    tool_call_id=state.item_to_call_id.get(item_id, item_id),
                     tool_call_args_delta=delta,
                 )
             )
