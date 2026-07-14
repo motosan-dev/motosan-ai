@@ -13,7 +13,7 @@ use eventsource_stream::Eventsource;
 use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -295,6 +295,7 @@ impl ProviderImpl for ChatGptCodexProvider {
                     let adapter = ChatGptCodexStreamAdapter {
                         inner: Box::pin(sse),
                         pending: VecDeque::new(),
+                        item_to_call_id: HashMap::new(),
                         seen_tool_ids: HashSet::new(),
                         saw_tool_call: false,
                         error: None,
@@ -328,6 +329,9 @@ struct ChatGptCodexStreamAdapter {
         >,
     >,
     pending: VecDeque<StreamEvent>,
+    /// Map Responses output item ids (`fc_*`) to public tool call ids
+    /// (`call_*`) for argument deltas, which arrive keyed by `item_id`.
+    item_to_call_id: HashMap<String, String>,
     /// `call_id`s seen via `response.output_item.added` (function_call) so the
     /// matching `response.output_item.done` can close the same id.
     seen_tool_ids: HashSet<String>,
@@ -343,8 +347,9 @@ struct ChatGptCodexStreamAdapter {
 impl ChatGptCodexStreamAdapter {
     /// Map a single decoded Responses SSE `data` JSON value to zero or more
     /// [`StreamEvent`]s, queued onto `pending`. Pure (no I/O); the only side
-    /// effects are mutations of `pending` / `seen_tool_ids` / `saw_tool_call`
-    /// / `error`. See the module-level mapping table.
+    /// effects are mutations of `pending` / `item_to_call_id` /
+    /// `seen_tool_ids` / `saw_tool_call` / `error`. See the module-level
+    /// mapping table.
     fn handle_event(&mut self, data: &Value) {
         let event_type = data.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -383,6 +388,12 @@ impl ChatGptCodexStreamAdapter {
                             .unwrap_or("")
                             .to_string();
                         if !call_id.is_empty() {
+                            if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                                if !item_id.is_empty() {
+                                    self.item_to_call_id
+                                        .insert(item_id.to_string(), call_id.clone());
+                                }
+                            }
                             self.saw_tool_call = true;
                             self.seen_tool_ids.insert(call_id.clone());
                             self.pending
@@ -394,13 +405,18 @@ impl ChatGptCodexStreamAdapter {
 
             // Streamed tool-call argument fragments. The wire key is `item_id`.
             "response.function_call_arguments.delta" => {
-                let id = data
+                let wire_id = data
                     .get("item_id")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string();
                 if let Some(delta) = data.get("delta").and_then(Value::as_str) {
-                    if !id.is_empty() {
+                    if !wire_id.is_empty() {
+                        let id = self
+                            .item_to_call_id
+                            .get(&wire_id)
+                            .cloned()
+                            .unwrap_or(wire_id);
                         self.pending
                             .push_back(StreamEvent::tool_call_args_with_id(&id, delta));
                     }
@@ -737,7 +753,7 @@ mod tests {
         use super::super::ChatGptCodexStreamAdapter;
         use crate::types::{StopReason, StreamEvent, StreamEventType};
         use serde_json::Value;
-        use std::collections::{HashSet, VecDeque};
+        use std::collections::{HashMap, HashSet, VecDeque};
 
         /// A fresh adapter wired to an empty inner stream — `handle_event` is
         /// driven directly, so the `inner` stream is never polled in these
@@ -746,6 +762,7 @@ mod tests {
             ChatGptCodexStreamAdapter {
                 inner: Box::pin(tokio_stream::iter(Vec::new())),
                 pending: VecDeque::new(),
+                item_to_call_id: HashMap::new(),
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
@@ -832,15 +849,16 @@ mod tests {
 
         #[test]
         fn adapter_handles_function_call_lifecycle() {
-            // Synthetic added/args.delta/done triple for a function_call item.
+            // Real ChatGPT-backend Responses frames key argument deltas by
+            // output item id (`fc_*`) while public tool events use `call_id`.
             let mut adapter = fresh_adapter();
             let events = drive(
                 &mut adapter,
                 &[
-                    r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}"#,
-                    r#"{"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"{\"city\":"}"#,
-                    r#"{"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"\"Paris\"}"}"#,
-                    r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}"#,
+                    r#"{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"get_weather"}}"#,
+                    r#"{"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"{\"city\":"}"#,
+                    r#"{"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"\"Paris\"}"}"#,
+                    r#"{"type":"response.output_item.done","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"get_weather"}}"#,
                     r#"{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":3,"output_tokens":7}}}"#,
                 ],
             );
@@ -849,9 +867,16 @@ mod tests {
                 .iter()
                 .find(|e| e.event_type == StreamEventType::ToolCallStart)
                 .expect("tool_call_start");
-            assert_eq!(start.tool_call_id.as_deref(), Some("call_42"));
+            assert_eq!(start.tool_call_id.as_deref(), Some("call_001"));
             assert_eq!(start.tool_call_name.as_deref(), Some("get_weather"));
 
+            let arg_events: Vec<&StreamEvent> = events
+                .iter()
+                .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
+                .collect();
+            assert_eq!(arg_events.len(), 2);
+            assert_eq!(arg_events[0].tool_call_id.as_deref(), Some("call_001"));
+            assert_eq!(arg_events[1].tool_call_id.as_deref(), Some("call_001"));
             let args: String = events
                 .iter()
                 .filter(|e| e.event_type == StreamEventType::ToolCallArgs)
@@ -863,11 +888,29 @@ mod tests {
                 .iter()
                 .find(|e| e.event_type == StreamEventType::ToolCallEnd)
                 .expect("tool_call_end");
-            assert_eq!(end.tool_call_id.as_deref(), Some("call_42"));
+            assert_eq!(end.tool_call_id.as_deref(), Some("call_001"));
 
             // Any tool call seen => terminal stop reason is ToolUse, not EndTurn.
             let done = events.iter().find(|e| e.done).expect("a done event");
             assert_eq!(done.stop_reason, Some(StopReason::ToolUse));
+        }
+
+        #[test]
+        fn adapter_passes_through_unknown_arg_item_id() {
+            let mut adapter = fresh_adapter();
+            let events = drive(
+                &mut adapter,
+                &[
+                    r#"{"type":"response.function_call_arguments.delta","item_id":"fc_unseen","delta":"{}"}"#,
+                ],
+            );
+
+            let args = events
+                .iter()
+                .find(|e| e.event_type == StreamEventType::ToolCallArgs)
+                .expect("tool_call_args");
+            assert_eq!(args.tool_call_id.as_deref(), Some("fc_unseen"));
+            assert_eq!(args.tool_call_args_delta.as_deref(), Some("{}"));
         }
 
         #[test]
@@ -897,6 +940,7 @@ mod tests {
             let mut adapter = ChatGptCodexStreamAdapter {
                 inner: Box::pin(tokio_stream::iter(items)),
                 pending: VecDeque::new(),
+                item_to_call_id: HashMap::new(),
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
