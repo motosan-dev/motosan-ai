@@ -731,6 +731,26 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn stream_error_subtype_terminal_yields_provider_error() {
+        use std::io::Cursor;
+        use tokio::io::BufReader;
+        use tokio_stream::StreamExt;
+
+        let raw = b"{\"type\":\"result\",\"subtype\":\"error_max_turns\",\"is_error\":true,\"duration_ms\":42,\"num_turns\":10}\n";
+        let mut s = super::drive_lines(
+            None::<tokio::process::Child>,
+            BufReader::new(Cursor::new(&raw[..])),
+            None,
+        );
+        match s.next().await {
+            Some(Err(crate::error::MotosanError::ProviderError(msg))) => {
+                assert!(msg.contains("error_max_turns"), "got: {msg}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn terminal_error_reaps_child_before_yield() {

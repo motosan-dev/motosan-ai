@@ -452,6 +452,24 @@ fn parse_agent_json(raw: &str) -> Result<(String, Usage, Option<String>), Motosa
         MotosanError::ProviderError(format!("failed to parse claude JSON output: {e}"))
     })?;
 
+    let subtype = v.get("subtype").and_then(|subtype| subtype.as_str());
+    let is_error = v
+        .get("is_error")
+        .and_then(|is_error| is_error.as_bool())
+        .unwrap_or(false);
+    let subtype_is_error = subtype.is_some_and(|subtype| subtype.starts_with("error"));
+    if is_error || subtype_is_error {
+        let subtype = subtype.unwrap_or("unknown");
+        let detail = v
+            .get("result")
+            .and_then(|result| result.as_str())
+            .filter(|result| !result.is_empty())
+            .unwrap_or("no result message");
+        return Err(MotosanError::ProviderError(format!(
+            "claude_code terminal error ({subtype}): {detail}"
+        )));
+    }
+
     let text = v
         .get("result")
         .and_then(|r| r.as_str())
@@ -1003,5 +1021,28 @@ mod tests {
                 "3",
             ]
         );
+    }
+
+    #[test]
+    fn agent_json_error_subtype_without_result_is_err() {
+        let raw = r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#;
+        match parse_agent_json(raw) {
+            Err(MotosanError::ProviderError(msg)) => {
+                assert!(msg.contains("error_max_turns"), "got: {msg}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn agent_json_is_error_with_result_surfaces_message() {
+        let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}"#;
+        match parse_agent_json(raw) {
+            Err(MotosanError::ProviderError(msg)) => {
+                assert!(msg.contains("error_during_execution"), "got: {msg}");
+                assert!(msg.contains("boom"), "got: {msg}");
+            }
+            other => panic!("expected ProviderError, got {other:?}"),
+        }
     }
 }
