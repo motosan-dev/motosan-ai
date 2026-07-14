@@ -3,7 +3,9 @@
 use mockito::Matcher;
 use motosan_ai::providers::anthropic::AnthropicProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, MotosanError, StopReason, DEFAULT_ANTHROPIC_MODEL};
+use motosan_ai::{
+    ChatRequest, Message, MotosanError, RetryPolicy, StopReason, DEFAULT_ANTHROPIC_MODEL,
+};
 use serde_json::json;
 
 #[tokio::test]
@@ -218,4 +220,52 @@ async fn chat_with_explicit_max_tokens_overrides_default() {
     let response = provider.chat(request).await.expect("chat response");
     assert_eq!(response.content, "ok");
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn anthropic_chat_retries_503_with_non_json_body() {
+    let mut server = mockito::Server::new_async().await;
+    // Canonical proxy/LB failure: retryable status with an HTML (non-JSON) body.
+    let unavailable = server
+        .mock("POST", "/v1/messages")
+        .with_status(503)
+        .with_body("<html>Service Unavailable</html>")
+        .expect(1)
+        .create_async()
+        .await;
+    let success = server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": DEFAULT_ANTHROPIC_MODEL,
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "recovered"}]
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let policy = RetryPolicy::new()
+        .max_retries(1)
+        .base_delay_ms(0)
+        .max_delay_ms(0)
+        .jitter(false);
+    let provider =
+        AnthropicProvider::new("test-key", None, Some(server.url())).with_retry_policy(policy);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider
+        .chat(request)
+        .await
+        .expect("503 with non-JSON body should be retried, not aborted with a parse error");
+
+    assert_eq!(response.content, "recovered");
+    unavailable.assert_async().await;
+    success.assert_async().await;
 }

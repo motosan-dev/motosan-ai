@@ -491,13 +491,12 @@ impl ProviderImpl for AnthropicProvider {
 
             let status = response.status();
             let retry_after = parse_retry_after(response.headers());
-            let current_payload: Value = response
-                .json()
-                .await
-                .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
 
             if status.is_success() {
-                payload = current_payload;
+                payload = response
+                    .json()
+                    .await
+                    .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
                 break;
             }
 
@@ -507,7 +506,8 @@ impl ProviderImpl for AnthropicProvider {
                 continue;
             }
 
-            let message = extract_error_message(&current_payload, "anthropic request failed");
+            let error_payload: Value = response.json().await.unwrap_or(json!({}));
+            let message = extract_error_message(&error_payload, "anthropic request failed");
             let message = Self::with_auth_hint(
                 status.as_u16(),
                 message,
