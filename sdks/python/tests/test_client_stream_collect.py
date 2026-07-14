@@ -258,3 +258,27 @@ async def test_collect_stream_session_id_none_when_absent():
 
     resp = await collect_stream(gen())
     assert resp.session_id is None
+
+
+@pytest.mark.asyncio
+async def test_collect_infers_tool_use_when_done_lacks_stop_reason():
+    events = [
+        StreamEvent(
+            content="",
+            done=False,
+            event_type="tool_call_start",
+            tool_call_id="t1",
+            tool_call_name="get_weather",
+        ),
+        StreamEvent(
+            content="",
+            done=False,
+            event_type="tool_call_args",
+            tool_call_id="t1",
+            tool_call_args_delta='{"city":"Taipei"}',
+        ),
+        StreamEvent(content="", done=False, event_type="tool_call_end", tool_call_id="t1"),
+        StreamEvent(content="", done=True),
+    ]
+    resp = await collect_stream(_events_to_iter(events))
+    assert resp.stop_reason == StopReason.tool_use
