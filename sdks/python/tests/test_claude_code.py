@@ -117,6 +117,13 @@ class TestParseAgentJson:
         text, usage, sid = _parse_agent_json('{"result":"hi"}')
         assert sid is None
 
+    def test_error_result_raises_stream_error(self):
+        from motosan_ai.error import StreamError
+
+        raw = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True})
+        with pytest.raises(StreamError, match="error_max_turns"):
+            _parse_agent_json(raw)
+
 
 # ---------------------------------------------------------------------------
 # parse_ndjson_line
@@ -192,6 +199,20 @@ class TestParseNdjsonLine:
         events = _parse_ndjson_line('{"type":"result","subtype":"success","result":"done"}')
         assert len(events) == 1
         assert events[0].done
+
+    def test_result_is_error_raises_stream_error(self):
+        from motosan_ai.error import StreamError
+
+        line = '{"type":"result","subtype":"error_max_turns","is_error":true}'
+        with pytest.raises(StreamError, match="error_max_turns"):
+            _parse_ndjson_line(line)
+
+    def test_result_error_subtype_without_is_error_flag_raises(self):
+        from motosan_ai.error import StreamError
+
+        line = '{"type":"result","subtype":"error_during_execution","result":"boom"}'
+        with pytest.raises(StreamError, match="error_during_execution: boom"):
+            _parse_ndjson_line(line)
 
     def test_unknown_type_ignored(self):
         assert _parse_ndjson_line('{"type":"system","subtype":"init"}') == []

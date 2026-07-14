@@ -76,3 +76,47 @@ async def test_stream_raises_stream_error_not_network_error():
         async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
             seen.append(ev)
     assert any(e.content == "hi" for e in seen)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_minimax_502_then_200_is_retried():
+    from motosan_ai.retry import with_retry
+
+    route = respx.post("https://api.minimax.chat/v1/text/chatcompletion_v2").mock(
+        side_effect=[
+            Response(502, text="<html>bad gateway</html>"),
+            Response(
+                200,
+                json={
+                    "model": "MiniMax-Text-01",
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                },
+            ),
+        ]
+    )
+    provider = MinimaxProvider("test-key")
+    resp = await with_retry(
+        lambda: provider.chat(ChatRequest(messages=[Message.user("hi")])),
+        max_retries=2,
+        initial_backoff=0.001,
+    )
+    assert resp.content == "ok"
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_minimax_5xx_message_has_status_and_retry_after():
+    from motosan_ai.error import ProviderError
+
+    respx.post("https://api.minimax.chat/v1/text/chatcompletion_v2").mock(
+        return_value=Response(503, text="overloaded", headers={"retry-after": "7"})
+    )
+    provider = MinimaxProvider("test-key")
+    with pytest.raises(ProviderError) as exc_info:
+        await provider.chat(ChatRequest(messages=[Message.user("hi")]))
+    msg = str(exc_info.value)
+    assert "HTTP 503: overloaded" in msg
+    assert "Retry-After: 7" in msg

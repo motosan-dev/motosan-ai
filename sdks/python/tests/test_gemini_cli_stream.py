@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from motosan_ai.error import ProviderError
+from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.providers.gemini_cli import (
     GeminiCliClient,
     _merge_system_into_prompt,
@@ -185,6 +185,14 @@ class _FakeStdout:
             raise StopAsyncIteration from exc
 
 
+class _FakeStderr:
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def read(self) -> bytes:
+        return self._data
+
+
 class _FakeProc:
     def __init__(self, stdout: str, returncode: int | None = 0, stderr: str = "") -> None:
         self._stdout_bytes = stdout.encode()
@@ -192,6 +200,7 @@ class _FakeProc:
         self.returncode = returncode
         self.stdin = _FakeStdin()
         self.stdout = _FakeStdout(stdout)
+        self.stderr = _FakeStderr(self._stderr)
         self.killed = False
 
     async def communicate(self, input: bytes | None = None) -> tuple[bytes, bytes]:
@@ -354,6 +363,23 @@ async def test_stream_tool_call_terminal_is_tool_use(monkeypatch):
     ]
     done = [e for e in events if e.done][-1]
     assert done.stop_reason == StopReason.tool_use
+
+
+@pytest.mark.asyncio
+async def test_stream_child_death_raises_stream_error(monkeypatch):
+    # One valid event, then EOF with exit code 1: the child crashed mid-turn.
+    jsonl = '{"type": "message", "role": "assistant", "content": "par", "delta": true}\n'
+    _stub_subprocess(monkeypatch, _FakeProc(jsonl, returncode=1, stderr="boom\n"))
+
+    client = GeminiCliClient(binary_path="gemini")
+    events = []
+    with pytest.raises(StreamError, match="returncode 1") as excinfo:
+        async for event in client.stream(ChatRequest(messages=[Message.user("hi")])):
+            events.append(event)
+
+    assert "boom" in str(excinfo.value)
+    assert [e.content for e in events] == ["par"]
+    assert not any(e.done for e in events)
 
 
 @pytest.mark.asyncio

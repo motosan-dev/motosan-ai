@@ -140,14 +140,21 @@ class MinimaxProvider:
         except Exception as exc:
             raise NetworkError(str(exc)) from exc
 
-        payload = response.json() if response.content else {}
         if response.status_code >= 400:
-            message = (
-                (payload.get("error") or {}).get("message")
-                or response.text
-                or "minimax request failed"
-            )
+            try:
+                error_payload = response.json() if response.content else {}
+                detail = str((error_payload.get("error") or {}).get("message") or "")
+            except (json.JSONDecodeError, TypeError, AttributeError):
+                detail = ""
+            if not detail:
+                detail = response.text or "minimax request failed"
+            message = f"HTTP {response.status_code}: {detail}"
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                message = f"Retry-After: {retry_after}\n{message}"
             self._raise_for_status(response.status_code, message)
+
+        payload = response.json() if response.content else {}
 
         choice = (payload.get("choices") or [{}])[0]
         message_obj = choice.get("message") or {}
@@ -214,7 +221,11 @@ class MinimaxProvider:
             ) as response:
                 if response.status_code >= 400:
                     text = await response.aread()
-                    message = text.decode("utf-8", errors="ignore") or "minimax stream failed"
+                    detail = text.decode("utf-8", errors="ignore") or "minimax stream failed"
+                    message = f"HTTP {response.status_code}: {detail}"
+                    retry_after = response.headers.get("retry-after")
+                    if retry_after:
+                        message = f"Retry-After: {retry_after}\n{message}"
                     self._raise_for_status(response.status_code, message)
 
                 async for line in response.aiter_lines():

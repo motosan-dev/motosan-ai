@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from motosan_ai.error import ProviderError
+from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -379,6 +379,7 @@ class GeminiCliClient:
             env=self._child_env(),
         )
         saw_tool_call = False
+        saw_done = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
             proc.stdin.write(stdin_payload.encode())
@@ -400,12 +401,29 @@ class GeminiCliClient:
                             f"gemini CLI stream read timed out after {timeout}s"
                         ) from exc
                 if not raw:
-                    break
+                    if saw_done:
+                        break
+                    # EOF before the terminal event: the child crashed or
+                    # closed stdout early — raise instead of truncating.
+                    returncode = proc.returncode
+                    if returncode is None:
+                        with contextlib.suppress(TimeoutError):
+                            returncode = await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    stderr_excerpt = ""
+                    if proc.stderr is not None:
+                        with contextlib.suppress(TimeoutError, OSError):
+                            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5.0)
+                            stderr_excerpt = stderr_bytes.decode(errors="replace").strip()[-2048:]
+                    raise StreamError(
+                        f"gemini CLI exited unexpectedly "
+                        f"(returncode {returncode}): {stderr_excerpt}"
+                    )
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
                     if event.event_type == "tool_call_start":
                         saw_tool_call = True
                     if event.done:
+                        saw_done = True
                         event.stop_reason = (
                             StopReason.tool_use if saw_tool_call else StopReason.end_turn
                         )

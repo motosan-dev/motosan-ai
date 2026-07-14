@@ -155,6 +155,14 @@ class OpenAIProvider:
             return RateLimitError(message)
         return ProviderError(message)
 
+    @staticmethod
+    def _response_error_message(status: int, headers: httpx.Headers, text: str) -> str:
+        message = f"HTTP {status}: {text}"
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            message = f"Retry-After: {retry_after}\n{message}"
+        return message
+
     async def chat(self, request: ChatRequest) -> ChatResponse:
         body = self._build_body(request)
         try:
@@ -163,7 +171,8 @@ class OpenAIProvider:
             raise NetworkError(str(exc)) from exc
 
         if not resp.is_success:
-            raise self._map_http_error(resp.status_code, resp.text)
+            message = self._response_error_message(resp.status_code, resp.headers, resp.text)
+            raise self._map_http_error(resp.status_code, message)
 
         payload = resp.json()
         choice = (payload.get("choices") or [{}])[0]
@@ -212,7 +221,10 @@ class OpenAIProvider:
         try:
             if not resp.is_success:
                 error_body = await resp.aread()
-                raise self._map_http_error(resp.status_code, error_body.decode())
+                message = self._response_error_message(
+                    resp.status_code, resp.headers, error_body.decode()
+                )
+                raise self._map_http_error(resp.status_code, message)
 
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):

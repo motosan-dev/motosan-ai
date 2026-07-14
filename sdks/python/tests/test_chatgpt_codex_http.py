@@ -186,3 +186,39 @@ async def test_stream_transport_error_raises_network_error():
     with pytest.raises(NetworkError):
         async for _ in p.stream(ChatRequest(messages=[Message.user("hi")])):
             pass
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_chat_502_then_200_is_retried():
+    from motosan_ai.retry import with_retry
+
+    route = respx.post(_URL).mock(
+        side_effect=[
+            httpx.Response(502, text="<html>bad gateway</html>"),
+            httpx.Response(200, text=_text_stream(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+    p = ChatGptCodexProvider("tok", "acct-123", "gpt-5.5", None)
+    resp = await with_retry(
+        lambda: p.chat(ChatRequest(messages=[Message.user("hi")])),
+        max_retries=2,
+        initial_backoff=0.001,
+    )
+    assert resp.content == "Hello world."
+    assert route.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_5xx_message_has_status_and_retry_after():
+    respx.post(_URL).mock(
+        return_value=httpx.Response(503, text="overloaded", headers={"retry-after": "7"})
+    )
+    p = ChatGptCodexProvider("tok", "acct-123", "gpt-5.5", None)
+    with pytest.raises(ProviderError) as exc_info:
+        async for _ in p.stream(ChatRequest(messages=[Message.user("hi")])):
+            pass
+    msg = str(exc_info.value)
+    assert "HTTP 503: overloaded" in msg
+    assert "Retry-After: 7" in msg
