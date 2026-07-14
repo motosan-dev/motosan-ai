@@ -85,6 +85,31 @@ async def test_stream_tool_use_sets_terminal_stop_reason(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stream_child_death_raises_stream_error(monkeypatch):
+    # One valid assistant event, then EOF with exit code 1 and stderr "boom".
+    stdout = b'{"type":"assistant","message":{"content":[{"type":"text","text":"par"}]}}\n'
+    proc = _make_proc(stdout=stdout)
+    proc.returncode = 1
+    proc.wait = AsyncMock(return_value=1)
+    proc.stderr = AsyncMock()
+    proc.stderr.read = AsyncMock(return_value=b"boom\n")
+    monkeypatch.setattr(
+        "motosan_ai.providers.claude_code.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=proc),
+    )
+    events = []
+    with pytest.raises(StreamError, match="returncode 1") as excinfo:
+        async for ev in ClaudeCodeClient().stream(
+            ChatRequest(messages=[Message(role=Role.user, content="hi")])
+        ):
+            events.append(ev)
+
+    assert "boom" in str(excinfo.value)
+    assert [e.content for e in events] == ["par"]
+    assert not any(e.done for e in events)
+
+
+@pytest.mark.asyncio
 async def test_chat_no_timeout_skips_wait_for(monkeypatch):
     proc = _make_proc()
     monkeypatch.setattr(

@@ -629,6 +629,7 @@ class ClaudeCodeClient:
         assert proc.stdout is not None
         timeout = self._config.timeout_secs
         saw_tool_call = False
+        saw_done = False
         try:
             while True:
                 if timeout is None:
@@ -641,7 +642,23 @@ class ClaudeCodeClient:
                             f"claude CLI stream read timed out after {timeout}s"
                         ) from exc
                 if not raw_line:
-                    break
+                    if saw_done:
+                        break
+                    # EOF before the terminal event: the child crashed or
+                    # closed stdout early — raise instead of truncating.
+                    returncode = proc.returncode
+                    if returncode is None:
+                        with contextlib.suppress(TimeoutError):
+                            returncode = await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    stderr_excerpt = ""
+                    if proc.stderr is not None:
+                        with contextlib.suppress(TimeoutError, OSError):
+                            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5.0)
+                            stderr_excerpt = stderr_bytes.decode(errors="replace").strip()[-2048:]
+                    raise StreamError(
+                        f"claude CLI exited unexpectedly "
+                        f"(returncode {returncode}): {stderr_excerpt}"
+                    )
                 line = raw_line.decode().strip()
                 if not line:
                     continue
@@ -653,6 +670,7 @@ class ClaudeCodeClient:
                     ):
                         saw_tool_call = True
                     if event.done:
+                        saw_done = True
                         event.stop_reason = (
                             StopReason.tool_use if saw_tool_call else StopReason.end_turn
                         )

@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from motosan_ai.error import ProviderError
+from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -412,6 +412,7 @@ class CodexCliClient:
         )
 
         saw_tool_call = False
+        saw_done = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
             proc.stdin.write(prompt.encode())
@@ -433,7 +434,22 @@ class CodexCliClient:
                             f"codex CLI stream read timed out after {timeout}s"
                         ) from exc
                 if not raw:
-                    break
+                    if saw_done:
+                        break
+                    # EOF before the terminal event: the child crashed or
+                    # closed stdout early — raise instead of truncating.
+                    returncode = proc.returncode
+                    if returncode is None:
+                        with contextlib.suppress(TimeoutError):
+                            returncode = await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    stderr_excerpt = ""
+                    if proc.stderr is not None:
+                        with contextlib.suppress(TimeoutError, OSError):
+                            stderr_bytes = await asyncio.wait_for(proc.stderr.read(), timeout=5.0)
+                            stderr_excerpt = stderr_bytes.decode(errors="replace").strip()[-2048:]
+                    raise StreamError(
+                        f"codex CLI exited unexpectedly (returncode {returncode}): {stderr_excerpt}"
+                    )
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
                     if event.event_type in (
@@ -442,6 +458,8 @@ class CodexCliClient:
                         "tool_call_end",
                     ):
                         saw_tool_call = True
+                    if event.done:
+                        saw_done = True
                     if event.done and saw_tool_call:
                         event.stop_reason = StopReason.tool_use
                     yield event
