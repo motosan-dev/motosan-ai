@@ -124,3 +124,34 @@ async def test_stream_raises_on_malformed_chunk(provider):
         async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
             seen.append(ev)
     assert any(e.content == "hi" for e in seen)  # the good delta was yielded first
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_raises_on_error_event(provider):
+    # message_start + one good text delta, then a mid-stream error frame on HTTP 200
+    sse = _sse(
+        {"type": "message_start", "message": {"usage": {"input_tokens": 3, "output_tokens": 0}}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "par"}},
+        {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}},
+    )
+    respx.post("https://mock.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    seen = []
+    with pytest.raises(StreamError, match="anthropic stream error: overloaded_error: Overloaded"):
+        async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            seen.append(ev)
+    assert any(e.content == "par" for e in seen)  # text before the error was still yielded
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_error_event_with_missing_fields(provider):
+    sse = _sse({"type": "error"})
+    respx.post("https://mock.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+    with pytest.raises(StreamError, match="anthropic stream error: unknown_error"):
+        async for _ in provider.stream(ChatRequest(messages=[Message.user("hi")])):
+            pass

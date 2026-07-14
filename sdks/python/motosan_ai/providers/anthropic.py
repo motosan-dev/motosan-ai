@@ -418,6 +418,12 @@ class AnthropicProvider(BaseProvider):
 
                 event_type = payload.get("type")
 
+                if event_type == "error":
+                    error = payload.get("error") or {}
+                    error_type = error.get("type") or "unknown_error"
+                    error_message = error.get("message") or ""
+                    raise StreamError(f"anthropic stream error: {error_type}: {error_message}")
+
                 if event_type == "message_start":
                     usage = (payload.get("message") or {}).get("usage")
                     if usage:
