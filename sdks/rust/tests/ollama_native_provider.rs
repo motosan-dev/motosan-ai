@@ -3,7 +3,9 @@
 use mockito::Matcher;
 use motosan_ai::providers::ollama::OllamaProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, StopReason, StreamEventType, Tool, DEFAULT_OLLAMA_MODEL};
+use motosan_ai::{
+    ChatRequest, Message, RetryPolicy, StopReason, StreamEventType, Tool, DEFAULT_OLLAMA_MODEL,
+};
 use serde_json::json;
 use tokio_stream::StreamExt;
 
@@ -466,4 +468,55 @@ async fn ollama_native_stream_two_tool_calls_emits_6_events() {
     assert_eq!(ends[1].tool_call_id.as_ref().unwrap(), id1);
 
     mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn ollama_native_chat_retries_non_json_5xx_then_succeeds() {
+    let mut server = mockito::Server::new_async().await;
+    let error_mock = server
+        .mock("POST", "/api/chat")
+        .with_status(503)
+        .with_header("content-type", "text/plain")
+        .with_body("Service Unavailable")
+        .expect(1)
+        .create_async()
+        .await;
+    let success_mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+                "model": "llama3.2",
+                "message": {"role": "assistant", "content": "recovered"},
+                "done": true,
+                "prompt_eval_count": 3,
+                "eval_count": 2
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let policy = RetryPolicy::new()
+        .max_retries(1)
+        .base_delay_ms(0)
+        .max_delay_ms(0)
+        .jitter(false);
+    let provider = build_provider(server.url()).with_retry_policy(policy);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider
+        .chat(request)
+        .await
+        .expect("should retry and succeed");
+
+    assert_eq!(response.content, "recovered");
+    assert!(matches!(response.stop_reason, StopReason::Stop));
+    // Exactly 2 requests total: one 503, one 200.
+    error_mock.assert_async().await;
+    success_mock.assert_async().await;
 }
