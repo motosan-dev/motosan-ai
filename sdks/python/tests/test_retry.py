@@ -200,3 +200,16 @@ class TestWithRetry:
         result = await with_retry(fn, max_retries=3, initial_backoff=0.001)
         assert result == "ok"
         assert calls == 3
+
+
+class TestProviderErrorHttpMessageFormat:
+    """Pins the message format providers must emit for retry classification."""
+
+    def test_http_prefixed_502_is_retryable(self):
+        assert _is_retryable(ProviderError("HTTP 502: <html>bad gateway</html>")) is True
+
+    def test_retry_after_prefixed_message_is_retryable(self):
+        assert _is_retryable(ProviderError("Retry-After: 3\nHTTP 503: overloaded")) is True
+
+    def test_retry_after_prefix_is_parsed(self):
+        assert _parse_retry_after("Retry-After: 3\nHTTP 503: overloaded") == 3.0

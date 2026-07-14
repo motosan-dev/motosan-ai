@@ -219,3 +219,46 @@ async def test_stream_raises_on_malformed_chunk(provider):
         async for ev in provider.stream(ChatRequest(messages=[Message.user("hi")])):
             seen.append(ev)
     assert any(e.content == "hi" for e in seen)
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openai_502_then_200_is_retried(provider):
+    from motosan_ai.retry import with_retry
+
+    route = respx.post("https://mock.openai.com/v1/chat/completions").mock(
+        side_effect=[
+            httpx.Response(502, text="<html>bad gateway</html>"),
+            httpx.Response(
+                200,
+                json={
+                    "model": "gpt-4o",
+                    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                },
+            ),
+        ]
+    )
+
+    resp = await with_retry(
+        lambda: provider.chat(ChatRequest(messages=[Message.user("hi")])),
+        max_retries=2,
+        initial_backoff=0.001,
+    )
+    assert resp.content == "ok"
+    assert route.call_count == 2
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openai_5xx_message_has_status_and_retry_after(provider):
+    from motosan_ai.error import ProviderError
+
+    respx.post("https://mock.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(503, text="overloaded", headers={"retry-after": "7"})
+    )
+    with pytest.raises(ProviderError) as exc_info:
+        await provider.chat(ChatRequest(messages=[Message.user("hi")]))
+    msg = str(exc_info.value)
+    assert "HTTP 503: overloaded" in msg
+    assert "Retry-After: 7" in msg

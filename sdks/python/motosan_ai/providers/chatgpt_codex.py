@@ -340,7 +340,11 @@ class ChatGptCodexProvider(BaseProvider):
         try:
             if not resp.is_success:
                 error_body = await resp.aread()
-                raise self._map_http_error(resp.status_code, error_body.decode())
+                message = f"HTTP {resp.status_code}: {error_body.decode()}"
+                retry_after = resp.headers.get("retry-after")
+                if retry_after:
+                    message = f"Retry-After: {retry_after}\n{message}"
+                raise self._map_http_error(resp.status_code, message)
 
             state = _ChatGptCodexAdapterState()
             try:
