@@ -87,6 +87,11 @@ export async function* parseSse(
       }
     }
   } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // Ignore cancel errors — the stream may already be closed or errored.
+    }
     reader.releaseLock()
   }
 }

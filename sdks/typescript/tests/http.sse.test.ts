@@ -187,4 +187,25 @@ describe('parseSse', () => {
     expect(events[0].event).toBe('last')
     expect(events[0].data).toEqual({ final: true })
   })
+
+  it('cancels the underlying stream when the consumer exits early', async () => {
+    let cancelled = false
+    const input = 'event: first\ndata: {"n":1}\n\nevent: second\ndata: {"n":2}\n\n'
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(input))
+        // Never close: simulates a long-lived HTTP body held open by the server.
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+
+    for await (const event of parseSse(stream)) {
+      expect(event.data).toEqual({ n: 1 })
+      break // early exit after the first event
+    }
+
+    expect(cancelled).toBe(true)
+  })
 })

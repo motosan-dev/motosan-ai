@@ -248,4 +248,24 @@ describe('parseNdjson', () => {
     expect(objects[0].message.content).toBe('ok1')
     expect(objects[1].done).toBe(true)
   })
+
+  it('cancels the underlying stream when the consumer exits early', async () => {
+    let cancelled = false
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"n":1}\n{"n":2}\n'))
+        // Never close: simulates a long-lived HTTP body held open by the server.
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+
+    for await (const obj of parseNdjson(stream)) {
+      expect(obj).toEqual({ n: 1 })
+      break // early exit after the first object
+    }
+
+    expect(cancelled).toBe(true)
+  })
 })
