@@ -2,6 +2,7 @@ import {
   isRetryableNetworkError,
   isRetryableStatus,
   ProviderError,
+  StreamError,
 } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
@@ -375,6 +376,15 @@ export class AnthropicProvider {
             ? doneWithStopReason(state.stopReason)
             : doneEvent()
           return
+        }
+
+        case 'error': {
+          // Anthropic emits `event: error` frames mid-stream on an HTTP 200
+          // (e.g. overloaded_error). Surface them as a StreamError instead
+          // of swallowing them and fabricating a clean done at EOF.
+          const errType = String(data?.error?.type ?? 'error')
+          const errMessage = String(data?.error?.message ?? 'unknown')
+          throw new StreamError(`anthropic stream error (${errType}): ${errMessage}`)
         }
 
         default:
