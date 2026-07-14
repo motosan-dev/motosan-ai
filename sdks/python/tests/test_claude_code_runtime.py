@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from motosan_ai.error import StreamError
 from motosan_ai.providers.claude_code import ClaudeCodeClient
 from motosan_ai.types import ChatRequest, Message, Role, StopReason
 
@@ -97,3 +98,40 @@ async def test_chat_no_timeout_skips_wait_for(monkeypatch):
     monkeypatch.setattr("motosan_ai.providers.claude_code.asyncio.wait_for", _boom)
     client = ClaudeCodeClient().no_timeout()
     await client.chat(ChatRequest(messages=[Message(role=Role.user, content="hi")]))
+
+
+@pytest.mark.asyncio
+async def test_stream_error_result_raises_stream_error(monkeypatch):
+    stdout = (
+        b'{"type":"assistant","message":{"content":[{"type":"text","text":"partial"}]}}\n'
+        b'{"type":"result","subtype":"error_max_turns","is_error":true}\n'
+    )
+    proc = _make_proc(stdout=stdout)
+    monkeypatch.setattr(
+        "motosan_ai.providers.claude_code.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=proc),
+    )
+    events = []
+    with pytest.raises(StreamError, match="error_max_turns"):
+        async for ev in ClaudeCodeClient().stream(
+            ChatRequest(messages=[Message(role=Role.user, content="hi")])
+        ):
+            events.append(ev)
+    # partial text already yielded is kept; no fabricated clean done event
+    assert [e.content for e in events] == ["partial"]
+    assert not any(e.done for e in events)
+
+
+@pytest.mark.asyncio
+async def test_chat_agent_mode_error_result_raises_stream_error(monkeypatch):
+    stdout = (
+        b'{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}\n'
+    )
+    proc = _make_proc(stdout=stdout)
+    monkeypatch.setattr(
+        "motosan_ai.providers.claude_code.asyncio.create_subprocess_exec",
+        AsyncMock(return_value=proc),
+    )
+    client = ClaudeCodeClient().agent_mode(True)
+    with pytest.raises(StreamError, match="error_during_execution"):
+        await client.chat(ChatRequest(messages=[Message(role=Role.user, content="hi")]))

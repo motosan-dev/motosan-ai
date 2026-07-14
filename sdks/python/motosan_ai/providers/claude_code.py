@@ -7,7 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
-from motosan_ai.error import ProviderError
+from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
     ChatRequest,
@@ -95,12 +95,37 @@ def _messages_to_prompt(messages: list[Message]) -> tuple[str | None, str]:
     return system, prompt
 
 
+def _raise_on_error_result(event: dict) -> None:
+    """Raise ``StreamError`` when a terminal ``result`` payload reports an error.
+
+    Claude Code marks failed/truncated turns with ``is_error: true`` and an
+    ``error_*`` subtype (e.g. ``error_max_turns``, ``error_during_execution``).
+    Emitting them as clean completions would let agent loops consume a
+    truncated turn as a genuine one, so surface them as ``StreamError``.
+    """
+    subtype = event.get("subtype")
+    has_error_subtype = isinstance(subtype, str) and subtype.startswith("error")
+    if not (event.get("is_error") or has_error_subtype):
+        return
+    result_text = event.get("result")
+    parts = [p for p in (subtype, result_text) if isinstance(p, str) and p]
+    detail = ": ".join(parts) if parts else "unknown error"
+    raise StreamError(f"claude CLI reported an error result: {detail}")
+
+
 def _parse_agent_json(raw: str) -> tuple[str, Usage, str | None]:
-    """Parse JSON output from agent mode: ``result``, ``usage``, ``session_id``."""
+    """Parse JSON output from agent mode: ``result``, ``usage``, ``session_id``.
+
+    Raises :class:`~motosan_ai.error.StreamError` when the payload reports an
+    error result (``is_error: true`` or an ``error_*`` subtype).
+    """
     try:
         v = json.loads(raw)
     except json.JSONDecodeError as e:
         raise ProviderError(f"failed to parse claude JSON output: {e}") from e
+
+    if isinstance(v, dict):
+        _raise_on_error_result(v)
 
     text = v.get("result", "")
     u = v.get("usage", {})
@@ -186,6 +211,7 @@ def _parse_ndjson_line(line: str) -> list[StreamEvent]:
         return events
 
     if event_type == "result":
+        _raise_on_error_result(event)
         events_out: list[StreamEvent] = []
         sid = event.get("session_id")
         if isinstance(sid, str) and sid:
