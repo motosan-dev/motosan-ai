@@ -290,28 +290,41 @@ describe('ChatGptCodexProvider SSE adapter', () => {
   })
 
   it('runs the function_call lifecycle and ends with tool_use', async () => {
+    // Distinct ids as on the real wire: item.id "fc_001" keys the argument
+    // deltas; call_id "call_001" keys start/end. Every tool event must carry
+    // the call_id.
     const sse =
-      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}\n\n' +
-      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"{\\"city\\":"}\n\n' +
-      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"\\"Paris\\"}"}\n\n' +
-      'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_42"}}\n\n' +
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"get_weather"}}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"{\\"city\\":"}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"\\"Paris\\"}"}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_001","call_id":"call_001"}}\n\n' +
       'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
     const events = await collect(sse)
     const tool = events.filter((e) => e.eventType.startsWith('tool_call'))
     expect(tool[0]).toMatchObject({
       eventType: 'tool_call_start',
-      toolCallId: 'call_42',
+      toolCallId: 'call_001',
       toolCallName: 'get_weather',
     })
-    expect(tool[1]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
-    expect(tool[2]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
-    expect(tool[3]).toMatchObject({ eventType: 'tool_call_end', toolCallId: 'call_42' })
+    expect(tool[1]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_001' })
+    expect(tool[2]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_001' })
+    expect(tool[3]).toMatchObject({ eventType: 'tool_call_end', toolCallId: 'call_001' })
     const argText = tool
       .filter((e) => e.eventType === 'tool_call_args')
       .map((e) => e.toolCallArgsDelta)
       .join('')
     expect(argText).toBe('{"city":"Paris"}')
     expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'tool_use' })
+  })
+
+  it('passes an unmapped item_id through on argument deltas (fallback)', async () => {
+    const sse =
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_orphan","delta":"{}"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    const args = events.filter((e) => e.eventType === 'tool_call_args')
+    expect(args).toHaveLength(1)
+    expect(args[0]).toMatchObject({ toolCallId: 'fc_orphan', toolCallArgsDelta: '{}' })
   })
 
   it('maps status:"incomplete" to max_tokens', async () => {
@@ -449,15 +462,15 @@ describe('ChatGptCodexProvider HTTP', () => {
 
   it('chat() yields a tool call from the lifecycle', async () => {
     streamFromTranscript(
-      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_9","name":"lookup"}}\n\n' +
-        'data: {"type":"response.function_call_arguments.delta","item_id":"call_9","delta":"{\\"q\\":\\"x\\"}"}\n\n' +
-        'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_9"}}\n\n' +
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"lookup"}}\n\n' +
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"{\\"q\\":\\"x\\"}"}\n\n' +
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_001","call_id":"call_001"}}\n\n' +
         'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
     )
     const resp = await new ChatGptCodexProvider('t', 'a').chat(REQ)
     expect(resp.stopReason).toBe('tool_use')
     expect(resp.toolCalls).toHaveLength(1)
-    expect(resp.toolCalls[0]).toMatchObject({ id: 'call_9', name: 'lookup', input: { q: 'x' } })
+    expect(resp.toolCalls[0]).toMatchObject({ id: 'call_001', name: 'lookup', input: { q: 'x' } })
   })
 
   function stubError(status: number): void {

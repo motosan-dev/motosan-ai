@@ -249,6 +249,11 @@ export class ChatGptCodexProvider {
     // which also track a seen-ids set that is write-only — dropped here per plan R1).
     let sawToolCall = false
 
+    // Real wire: output_item.added carries BOTH item.id ("fc_…") and call_id
+    // ("call_…"), but function_call_arguments.delta frames are keyed by item_id
+    // only. Map item.id → call_id so every tool event carries the call_id.
+    const itemIdToCallId = new Map<string, string>()
+
     // Fatal `error` / `response.failed` frames throw a StreamError (Rust/
     // Python parity). Other post-start body errors still end silently (M3).
     try {
@@ -272,6 +277,7 @@ export class ChatGptCodexProvider {
             const item = data.item
             if (item && item.type === 'function_call' && item.call_id) {
               sawToolCall = true
+              if (item.id) itemIdToCallId.set(String(item.id), String(item.call_id))
               yield toolCallStart(String(item.call_id), String(item.name ?? ''))
             }
             break
@@ -280,7 +286,8 @@ export class ChatGptCodexProvider {
             const itemId = data.item_id
             const delta = data.delta
             if (itemId && typeof delta === 'string') {
-              yield toolCallArgsWithId(String(itemId), delta)
+              const callId = itemIdToCallId.get(String(itemId)) ?? String(itemId)
+              yield toolCallArgsWithId(callId, delta)
             }
             break
           }
