@@ -265,24 +265,23 @@ impl ProviderImpl for OllamaProvider {
 
             let status = response.status();
             let retry_after = parse_retry_after(response.headers());
-            let current_payload: Value = response
+
+            if !status.is_success() {
+                if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
+                    attempt += 1;
+                    sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
+                    continue;
+                }
+                let error_payload: Value = response.json().await.unwrap_or_else(|_| json!({}));
+                let message = extract_error_message(&error_payload, "ollama request failed");
+                return Err(map_http_error(status.as_u16(), message));
+            }
+
+            payload = response
                 .json()
                 .await
                 .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
-
-            if status.is_success() {
-                payload = current_payload;
-                break;
-            }
-
-            if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
-                attempt += 1;
-                sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
-                continue;
-            }
-
-            let message = extract_error_message(&current_payload, "ollama request failed");
-            return Err(map_http_error(status.as_u16(), message));
+            break;
         }
 
         let message = payload.get("message");
