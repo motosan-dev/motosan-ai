@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { StreamError } from '../src/error.js'
 import { AnthropicProvider } from '../src/providers/anthropic.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
@@ -451,6 +452,41 @@ describe('AnthropicProvider stream', () => {
     expect(events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content)).toEqual([
       'hi',
     ])
+  })
+
+  it('rejects with a StreamError on a mid-stream error frame (deltas already emitted survive)', async () => {
+    const sse =
+      'event: message_start\n' +
+      'data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-5-sonnet-20241022","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}\n\n' +
+      'event: content_block_start\n' +
+      'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n' +
+      'event: content_block_delta\n' +
+      'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}\n\n' +
+      'event: error\n' +
+      'data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+
+    streamFromTranscript(sse)
+
+    const provider = new AnthropicProvider('key', 'claude-3-5-sonnet-20241022')
+    const events: StreamEvent[] = []
+    let error: unknown
+    try {
+      for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+        events.push(event)
+      }
+    } catch (e) {
+      error = e
+    }
+
+    expect(error).toBeInstanceOf(StreamError)
+    expect((error as Error).message).toContain('overloaded_error')
+    expect((error as Error).message).toContain('Overloaded')
+    // The text delta emitted before the error frame was still yielded,
+    // and NO fabricated done event followed the error.
+    expect(
+      events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content),
+    ).toEqual(['partial'])
+    expect(events.some((e) => e.done)).toBe(false)
   })
 })
 

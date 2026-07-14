@@ -3,12 +3,12 @@
  * `https://chatgpt.com/backend-api/codex/responses` using a caller-supplied
  * OAuth `accessToken` + `accountId` (codex CLI headers; no api key). Mirrors the
  * verified Python `chatgpt_codex.py` (a port of authoritative Rust
- * `chatgpt_codex.rs`) in idiomatic TS, with one deliberate divergence: a
- * mid-stream `error` / `response.failed` frame terminates the stream SILENTLY
- * (TS convention — ollama.ts:362-366), instead of the Python mid-stream raise.
+ * `chatgpt_codex.rs`) in idiomatic TS: a mid-stream `error` / `response.failed`
+ * frame throws a `StreamError` (parity with Rust `MotosanError::Stream` and
+ * the Python mid-stream `StreamError` raise).
  */
 
-import { isRetryableNetworkError, isRetryableStatus } from '../error.js'
+import { StreamError, isRetryableNetworkError, isRetryableStatus } from '../error.js'
 import { postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
@@ -38,9 +38,8 @@ export { DEFAULT_CHATGPT_CODEX_MODEL }
 /**
  * Extract the error message from an `error` / `response.failed` Responses frame.
  * First non-empty wins: top-level `message` → `response.error.message` →
- * `error.message` → fallback. Pure; used by tests only. The stream path silently
- * terminates without surfacing this (plan §C), so this is NOT re-exported from
- * `src/index.ts`.
+ * `error.message` → fallback. Used by the stream adapter to build the
+ * `StreamError` for fatal frames. NOT re-exported from `src/index.ts`.
  *
  * @internal
  */
@@ -250,8 +249,13 @@ export class ChatGptCodexProvider {
     // which also track a seen-ids set that is write-only — dropped here per plan R1).
     let sawToolCall = false
 
-    // Mid-stream body errors terminate the stream SILENTLY (TS convention;
-    // ollama.ts:362-366, providers-ollama.test.ts:377). NO mid-stream throw.
+    // Real wire: output_item.added carries BOTH item.id ("fc_…") and call_id
+    // ("call_…"), but function_call_arguments.delta frames are keyed by item_id
+    // only. Map item.id → call_id so every tool event carries the call_id.
+    const itemIdToCallId = new Map<string, string>()
+
+    // Fatal `error` / `response.failed` frames throw a StreamError (Rust/
+    // Python parity). Other post-start body errors still end silently (M3).
     try {
       for await (const evt of parseSse(responseBody)) {
         const data = evt.data
@@ -273,6 +277,7 @@ export class ChatGptCodexProvider {
             const item = data.item
             if (item && item.type === 'function_call' && item.call_id) {
               sawToolCall = true
+              if (item.id) itemIdToCallId.set(String(item.id), String(item.call_id))
               yield toolCallStart(String(item.call_id), String(item.name ?? ''))
             }
             break
@@ -281,7 +286,8 @@ export class ChatGptCodexProvider {
             const itemId = data.item_id
             const delta = data.delta
             if (itemId && typeof delta === 'string') {
-              yield toolCallArgsWithId(String(itemId), delta)
+              const callId = itemIdToCallId.get(String(itemId)) ?? String(itemId)
+              yield toolCallArgsWithId(callId, delta)
             }
             break
           }
@@ -316,16 +322,19 @@ export class ChatGptCodexProvider {
           }
           case 'error':
           case 'response.failed':
-            // Silent terminate (TS convention). The Python `raise StreamError`
-            // path is intentionally NOT ported. See plan §C.
-            return
+            // Fatal stream error frame: surface it (Rust MotosanError::Stream
+            // / Python StreamError parity).
+            throw new StreamError(chatGptCodexErrorMessage(data))
           default:
             break
         }
       }
-    } catch {
-      // Ignore post-start stream-body errors; end without a terminal done
-      // (mirrors ollama.ts:362-366).
+    } catch (error) {
+      if (error instanceof StreamError) {
+        throw error
+      }
+      // Ignore other post-start stream-body errors; end without a terminal
+      // done (mirrors ollama.ts:362-366). Surfacing these is milestone M3.
       return
     }
 

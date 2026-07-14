@@ -4,7 +4,7 @@ import {
   DEFAULT_CHATGPT_CODEX_MODEL,
   chatGptCodexErrorMessage,
 } from '../src/providers/chatgpt_codex.js'
-import { AuthError, NetworkError, ProviderError, RateLimitError } from '../src/error.js'
+import { AuthError, NetworkError, ProviderError, RateLimitError, StreamError } from '../src/error.js'
 import { RetryPolicy } from '../src/retry.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
@@ -290,22 +290,25 @@ describe('ChatGptCodexProvider SSE adapter', () => {
   })
 
   it('runs the function_call lifecycle and ends with tool_use', async () => {
+    // Distinct ids as on the real wire: item.id "fc_001" keys the argument
+    // deltas; call_id "call_001" keys start/end. Every tool event must carry
+    // the call_id.
     const sse =
-      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_42","name":"get_weather"}}\n\n' +
-      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"{\\"city\\":"}\n\n' +
-      'data: {"type":"response.function_call_arguments.delta","item_id":"call_42","delta":"\\"Paris\\"}"}\n\n' +
-      'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_42"}}\n\n' +
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"get_weather"}}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"{\\"city\\":"}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"\\"Paris\\"}"}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_001","call_id":"call_001"}}\n\n' +
       'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
     const events = await collect(sse)
     const tool = events.filter((e) => e.eventType.startsWith('tool_call'))
     expect(tool[0]).toMatchObject({
       eventType: 'tool_call_start',
-      toolCallId: 'call_42',
+      toolCallId: 'call_001',
       toolCallName: 'get_weather',
     })
-    expect(tool[1]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
-    expect(tool[2]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_42' })
-    expect(tool[3]).toMatchObject({ eventType: 'tool_call_end', toolCallId: 'call_42' })
+    expect(tool[1]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_001' })
+    expect(tool[2]).toMatchObject({ eventType: 'tool_call_args', toolCallId: 'call_001' })
+    expect(tool[3]).toMatchObject({ eventType: 'tool_call_end', toolCallId: 'call_001' })
     const argText = tool
       .filter((e) => e.eventType === 'tool_call_args')
       .map((e) => e.toolCallArgsDelta)
@@ -314,39 +317,55 @@ describe('ChatGptCodexProvider SSE adapter', () => {
     expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'tool_use' })
   })
 
+  it('passes an unmapped item_id through on argument deltas (fallback)', async () => {
+    const sse =
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_orphan","delta":"{}"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    const events = await collect(sse)
+    const args = events.filter((e) => e.eventType === 'tool_call_args')
+    expect(args).toHaveLength(1)
+    expect(args[0]).toMatchObject({ toolCallId: 'fc_orphan', toolCallArgsDelta: '{}' })
+  })
+
   it('maps status:"incomplete" to max_tokens', async () => {
     const sse = 'data: {"type":"response.completed","response":{"status":"incomplete"}}\n\n'
     const events = await collect(sse)
     expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'max_tokens' })
   })
 
-  it('terminates silently (no throw) on a top-level error frame', async () => {
+  it('rejects with a StreamError on a top-level error frame (partial text still emitted)', async () => {
     streamFromTranscript(
       'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' +
         'data: {"type":"error","message":"rate limited"}\n\n',
     )
     const prov = new ChatGptCodexProvider('tok', 'acct')
     const events: StreamEvent[] = []
-    await expect(
-      (async () => {
-        for await (const e of prov.stream(REQ)) events.push(e)
-      })(),
-    ).resolves.toBeUndefined()
-    // the partial text was yielded; NO terminal done; NO throw
+    let error: unknown
+    try {
+      for await (const e of prov.stream(REQ)) events.push(e)
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(StreamError)
+    expect((error as Error).message).toBe('rate limited')
+    // the partial text was yielded before the throw; NO terminal done
     expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])
   })
 
-  it('terminates silently on a response.failed frame', async () => {
+  it('rejects with the helper-formatted message on a response.failed frame', async () => {
     streamFromTranscript(
       'data: {"type":"response.failed","response":{"error":{"message":"boom"}}}\n\n',
     )
     const prov = new ChatGptCodexProvider('tok', 'acct')
     const events: StreamEvent[] = []
-    await expect(
-      (async () => {
-        for await (const e of prov.stream(REQ)) events.push(e)
-      })(),
-    ).resolves.toBeUndefined()
+    let error: unknown
+    try {
+      for await (const e of prov.stream(REQ)) events.push(e)
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(StreamError)
+    expect((error as Error).message).toBe('boom')
     expect(events).toHaveLength(0)
   })
 })
@@ -443,15 +462,15 @@ describe('ChatGptCodexProvider HTTP', () => {
 
   it('chat() yields a tool call from the lifecycle', async () => {
     streamFromTranscript(
-      'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"call_9","name":"lookup"}}\n\n' +
-        'data: {"type":"response.function_call_arguments.delta","item_id":"call_9","delta":"{\\"q\\":\\"x\\"}"}\n\n' +
-        'data: {"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_9"}}\n\n' +
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_001","call_id":"call_001","name":"lookup"}}\n\n' +
+        'data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","delta":"{\\"q\\":\\"x\\"}"}\n\n' +
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"fc_001","call_id":"call_001"}}\n\n' +
         'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
     )
     const resp = await new ChatGptCodexProvider('t', 'a').chat(REQ)
     expect(resp.stopReason).toBe('tool_use')
     expect(resp.toolCalls).toHaveLength(1)
-    expect(resp.toolCalls[0]).toMatchObject({ id: 'call_9', name: 'lookup', input: { q: 'x' } })
+    expect(resp.toolCalls[0]).toMatchObject({ id: 'call_001', name: 'lookup', input: { q: 'x' } })
   })
 
   function stubError(status: number): void {
