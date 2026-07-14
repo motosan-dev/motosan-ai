@@ -7,7 +7,8 @@
 
 #![cfg(feature = "openai")]
 
-use motosan_ai::{ChatRequest, Client, Message, Provider, StopReason};
+use motosan_ai::{ChatRequest, Client, Message, Provider, StopReason, Tool};
+use serde_json::json;
 use std::time::Duration;
 use tokio_stream::StreamExt;
 
@@ -97,6 +98,87 @@ async fn live_openai_collect_stream_records_max_tokens_on_chat_response() {
         "collect_stream should backfill MaxTokens from terminal done event, got: {:?}",
         response.stop_reason
     );
+
+    cooldown().await;
+}
+
+#[tokio::test]
+async fn live_openai_parallel_tool_calls_collect_intact() {
+    let Some(client) = client() else {
+        eprintln!("OPENAI_API_KEY not set, skipping");
+        return;
+    };
+
+    let tools = vec![
+        Tool {
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_weather".to_string(),
+                description: "Get current weather for a city.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "city": {
+                            "type": "string",
+                            "description": "City name"
+                        }
+                    },
+                    "required": ["city"]
+                }),
+            },
+            cache: false,
+        },
+        Tool {
+            schema: motosan_agent_primitives::ToolSchema {
+                name: "get_time".to_string(),
+                description: "Get current local time for a timezone.".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "tz": {
+                            "type": "string",
+                            "description": "IANA timezone name"
+                        }
+                    },
+                    "required": ["tz"]
+                }),
+            },
+            cache: false,
+        },
+    ];
+
+    let request = ChatRequest::builder()
+        .message(Message::user(
+            "Call both tools in this turn: get_weather with city Taipei, and get_time with tz Asia/Tokyo.",
+        ))
+        .tools(tools)
+        .tool_choice(motosan_ai::ToolChoice::Required)
+        .provider_options(json!({"parallel_tool_calls": true}))
+        .build();
+
+    let stream = client.stream_with(request).await.expect("stream failed");
+    let response = motosan_ai::collect_stream(stream).await.unwrap();
+
+    assert!(
+        !response.tool_calls.is_empty(),
+        "expected at least one streamed tool call"
+    );
+    assert!(
+        response
+            .tool_calls
+            .iter()
+            .all(|tool_call| !tool_call.id.is_empty() && !tool_call.name.is_empty()),
+        "tool call ids and names should be non-empty: {:?}",
+        response.tool_calls
+    );
+    assert!(
+        response
+            .tool_calls
+            .iter()
+            .all(|tool_call| tool_call.input.is_object()),
+        "tool call inputs should be JSON objects: {:?}",
+        response.tool_calls
+    );
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
 
     cooldown().await;
 }
