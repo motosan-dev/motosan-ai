@@ -4,7 +4,7 @@ import {
   DEFAULT_CHATGPT_CODEX_MODEL,
   chatGptCodexErrorMessage,
 } from '../src/providers/chatgpt_codex.js'
-import { AuthError, NetworkError, ProviderError, RateLimitError } from '../src/error.js'
+import { AuthError, NetworkError, ProviderError, RateLimitError, StreamError } from '../src/error.js'
 import { RetryPolicy } from '../src/retry.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
@@ -320,33 +320,39 @@ describe('ChatGptCodexProvider SSE adapter', () => {
     expect(events[events.length - 1]).toMatchObject({ done: true, stopReason: 'max_tokens' })
   })
 
-  it('terminates silently (no throw) on a top-level error frame', async () => {
+  it('rejects with a StreamError on a top-level error frame (partial text still emitted)', async () => {
     streamFromTranscript(
       'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' +
         'data: {"type":"error","message":"rate limited"}\n\n',
     )
     const prov = new ChatGptCodexProvider('tok', 'acct')
     const events: StreamEvent[] = []
-    await expect(
-      (async () => {
-        for await (const e of prov.stream(REQ)) events.push(e)
-      })(),
-    ).resolves.toBeUndefined()
-    // the partial text was yielded; NO terminal done; NO throw
+    let error: unknown
+    try {
+      for await (const e of prov.stream(REQ)) events.push(e)
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(StreamError)
+    expect((error as Error).message).toBe('rate limited')
+    // the partial text was yielded before the throw; NO terminal done
     expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])
   })
 
-  it('terminates silently on a response.failed frame', async () => {
+  it('rejects with the helper-formatted message on a response.failed frame', async () => {
     streamFromTranscript(
       'data: {"type":"response.failed","response":{"error":{"message":"boom"}}}\n\n',
     )
     const prov = new ChatGptCodexProvider('tok', 'acct')
     const events: StreamEvent[] = []
-    await expect(
-      (async () => {
-        for await (const e of prov.stream(REQ)) events.push(e)
-      })(),
-    ).resolves.toBeUndefined()
+    let error: unknown
+    try {
+      for await (const e of prov.stream(REQ)) events.push(e)
+    } catch (e) {
+      error = e
+    }
+    expect(error).toBeInstanceOf(StreamError)
+    expect((error as Error).message).toBe('boom')
     expect(events).toHaveLength(0)
   })
 })

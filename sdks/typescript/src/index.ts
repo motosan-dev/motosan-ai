@@ -9,7 +9,7 @@ export * from './providers/minimax.js'
 export * from './providers/ollama.js'
 export * from './providers/gemini.js'
 // chatgpt_codex: exports ChatGptCodexProvider + DEFAULT_CHATGPT_CODEX_MODEL.
-// `chatGptCodexErrorMessage` is @internal (test-only) and NOT re-exported.
+// `chatGptCodexErrorMessage` is @internal and NOT re-exported.
 export { ChatGptCodexProvider, DEFAULT_CHATGPT_CODEX_URL } from './providers/chatgpt_codex.js'
 
 export { RetryPolicy } from './retry.js'
