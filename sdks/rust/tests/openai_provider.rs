@@ -448,6 +448,142 @@ async fn openai_stream_emits_tool_call_events() {
 }
 
 #[tokio::test]
+async fn openai_stream_parallel_tool_calls_interleaved_stay_sequential_per_call() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_A\",\"function\":{\"name\":\"get_weather\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"id\":\"call_B\",\"function\":{\"name\":\"get_time\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"city\\\":\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"{\\\"tz\\\":\\\"Asia/Tokyo\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Taipei\\\"}\"}}]},\"finish_reason\":null}]}\n\n",
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+
+    let mock = server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()));
+    let request = ChatRequest::builder()
+        .message(Message::user("weather in Taipei and time in Tokyo?"))
+        .tools(vec![
+            Tool {
+                schema: motosan_agent_primitives::ToolSchema {
+                    name: "get_weather".to_string(),
+                    description: "Get weather".to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}}
+                    }),
+                },
+                cache: false,
+            },
+            Tool {
+                schema: motosan_agent_primitives::ToolSchema {
+                    name: "get_time".to_string(),
+                    description: "Get local time".to_string(),
+                    input_schema: json!({
+                        "type": "object",
+                        "properties": {"tz": {"type": "string"}}
+                    }),
+                },
+                cache: false,
+            },
+        ])
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut received = Vec::new();
+    while let Some(event_item) = stream.next().await {
+        let event = event_item.expect("stream item should not fail");
+        received.push(event);
+    }
+
+    let tool_sequence: Vec<_> = received
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.event_type,
+                StreamEventType::ToolCallStart
+                    | StreamEventType::ToolCallArgs
+                    | StreamEventType::ToolCallEnd
+            )
+        })
+        .map(|event| {
+            (
+                event.event_type.clone(),
+                event.tool_call_id.as_deref(),
+                event.tool_call_name.as_deref(),
+                event.tool_call_args_delta.as_deref(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        tool_sequence,
+        vec![
+            (
+                StreamEventType::ToolCallStart,
+                Some("call_A"),
+                Some("get_weather"),
+                None
+            ),
+            (
+                StreamEventType::ToolCallArgs,
+                Some("call_A"),
+                None,
+                Some("{\"city\":")
+            ),
+            (
+                StreamEventType::ToolCallArgs,
+                Some("call_A"),
+                None,
+                Some("\"Taipei\"}")
+            ),
+            (StreamEventType::ToolCallEnd, Some("call_A"), None, None),
+            (
+                StreamEventType::ToolCallStart,
+                Some("call_B"),
+                Some("get_time"),
+                None
+            ),
+            (
+                StreamEventType::ToolCallArgs,
+                Some("call_B"),
+                None,
+                Some("{\"tz\":\"Asia/Tokyo\"}")
+            ),
+            (StreamEventType::ToolCallEnd, Some("call_B"), None, None),
+        ]
+    );
+
+    let collected_stream = Box::pin(tokio_stream::iter(
+        received.into_iter().map(Ok::<_, MotosanError>),
+    ));
+    let response = motosan_ai::collect_stream(collected_stream)
+        .await
+        .expect("collect stream");
+
+    assert_eq!(response.tool_calls.len(), 2);
+    assert_eq!(response.tool_calls[0].id, "call_A");
+    assert_eq!(response.tool_calls[0].name, "get_weather");
+    assert_eq!(response.tool_calls[0].input, json!({"city": "Taipei"}));
+    assert_eq!(response.tool_calls[1].id, "call_B");
+    assert_eq!(response.tool_calls[1].name, "get_time");
+    assert_eq!(response.tool_calls[1].input, json!({"tz": "Asia/Tokyo"}));
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
+
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn openai_stream_propagates_finish_reason_max_tokens() {
     let mut server = mockito::Server::new_async().await;
     let sse_body = concat!(

@@ -16,6 +16,7 @@ use eventsource_stream::Eventsource;
 use futures_core::Stream;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
 
@@ -636,8 +637,9 @@ impl ProviderImpl for OpenAIProvider {
         let raw_stream = response.bytes_stream().eventsource();
         let adapter = OpenAIStreamAdapter {
             inner: Box::pin(raw_stream),
-            pending: std::collections::VecDeque::new(),
-            seen_tool_ids: Vec::new(),
+            pending: VecDeque::new(),
+            tool_buffers: BTreeMap::new(),
+            open_tool_index: None,
             pending_stop_reason: None,
             done_emitted: false,
         };
@@ -658,8 +660,9 @@ struct OpenAIStreamAdapter {
                 > + Send,
         >,
     >,
-    pending: std::collections::VecDeque<StreamEvent>,
-    seen_tool_ids: Vec<String>,
+    pending: VecDeque<StreamEvent>,
+    tool_buffers: BTreeMap<u64, ToolBuf>,
+    open_tool_index: Option<u64>,
     /// Captured from the last chunk's `choices[0].finish_reason`. Stashed
     /// rather than emitted immediately so we can attach it to a single
     /// terminal `done` event when the `[DONE]` sentinel arrives — this
@@ -671,9 +674,17 @@ struct OpenAIStreamAdapter {
     done_emitted: bool,
 }
 
+#[derive(Debug, Default)]
+struct ToolBuf {
+    id: String,
+    name: String,
+    args: String,
+}
+
 impl OpenAIStreamAdapter {
     fn parse_event(&mut self, data: &str) -> bool {
         if data.trim() == "[DONE]" {
+            self.flush_tool_calls();
             // Emit a single terminal done event, attaching any stop_reason
             // captured from the previous chunk's finish_reason field.
             let done = match self.pending_stop_reason.take() {
@@ -722,23 +733,44 @@ impl OpenAIStreamAdapter {
             // Tool calls in delta
             if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
                 for tc in tool_calls {
-                    let tc_id = tc.get("id").and_then(Value::as_str);
+                    let index = tc.get("index").and_then(Value::as_u64).unwrap_or(0);
+                    let tc_id = tc
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty());
                     let function = tc.get("function");
-                    let tc_name = function.and_then(|f| f.get("name")).and_then(Value::as_str);
+                    let tc_name = function
+                        .and_then(|f| f.get("name"))
+                        .and_then(Value::as_str)
+                        .filter(|name| !name.is_empty());
                     let tc_args = function
                         .and_then(|f| f.get("arguments"))
                         .and_then(Value::as_str);
 
                     if let (Some(id), Some(name)) = (tc_id, tc_name) {
-                        self.seen_tool_ids.push(id.to_string());
-                        self.pending
-                            .push_back(StreamEvent::tool_call_start(id, name));
+                        let buf = self.tool_buffers.entry(index).or_default();
+                        buf.id = id.to_string();
+                        buf.name = name.to_string();
+
+                        if self.open_tool_index.is_none() {
+                            self.open_tool_index = Some(index);
+                            self.pending
+                                .push_back(StreamEvent::tool_call_start(id, name));
+                        }
                     }
+
                     if let Some(args) = tc_args {
                         if !args.is_empty() {
-                            let id = tc_id.unwrap_or("");
-                            self.pending
-                                .push_back(StreamEvent::tool_call_args_with_id(id, args));
+                            let Some(buf) = self.tool_buffers.get_mut(&index) else {
+                                continue;
+                            };
+
+                            if self.open_tool_index == Some(index) {
+                                self.pending
+                                    .push_back(StreamEvent::tool_call_args_with_id(&buf.id, args));
+                            } else {
+                                buf.args.push_str(args);
+                            }
                         }
                     }
                 }
@@ -750,16 +782,39 @@ impl OpenAIStreamAdapter {
         let finish_reason = choice.get("finish_reason").and_then(Value::as_str);
         if let Some(reason) = finish_reason {
             if reason == "tool_calls" {
-                let ids: Vec<String> = self.seen_tool_ids.drain(..).collect();
-                for id in &ids {
-                    self.pending
-                        .push_back(StreamEvent::tool_call_end_with_id(id));
-                }
+                self.flush_tool_calls();
             }
             self.pending_stop_reason = Some(map_finish_reason(reason));
         }
 
         false
+    }
+
+    fn flush_tool_calls(&mut self) {
+        if let Some(index) = self.open_tool_index.take() {
+            if let Some(buf) = self.tool_buffers.remove(&index) {
+                if !buf.id.is_empty() {
+                    self.pending
+                        .push_back(StreamEvent::tool_call_end_with_id(buf.id));
+                }
+            }
+        }
+
+        let buffers = std::mem::take(&mut self.tool_buffers);
+        for (_, buf) in buffers {
+            if buf.id.is_empty() || buf.name.is_empty() {
+                continue;
+            }
+
+            self.pending
+                .push_back(StreamEvent::tool_call_start(&buf.id, &buf.name));
+            if !buf.args.is_empty() {
+                self.pending
+                    .push_back(StreamEvent::tool_call_args_with_id(&buf.id, &buf.args));
+            }
+            self.pending
+                .push_back(StreamEvent::tool_call_end_with_id(buf.id));
+        }
     }
 }
 
@@ -844,8 +899,9 @@ mod tests {
         let inner = tokio_stream::iter(vec![Err(EventStreamError::Utf8(utf8))]);
         let mut adapter = OpenAIStreamAdapter {
             inner: Box::pin(inner),
-            pending: std::collections::VecDeque::new(),
-            seen_tool_ids: Vec::new(),
+            pending: VecDeque::new(),
+            tool_buffers: BTreeMap::new(),
+            open_tool_index: None,
             pending_stop_reason: None,
             done_emitted: false,
         };

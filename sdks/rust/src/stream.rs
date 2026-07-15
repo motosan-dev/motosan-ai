@@ -73,13 +73,21 @@ pub async fn collect_stream(
             }
             StreamEventType::Usage => {
                 if let Some(ref usage) = event.usage {
-                    input_tokens += usage.input_tokens;
-                    output_tokens += usage.output_tokens;
+                    // Mirror Python collection semantics: Anthropic emits
+                    // cumulative usage, so token counts are last-writer-wins
+                    // and later zero values do not erase earlier non-zero
+                    // counts. Cache fields replace whenever reported.
+                    if usage.input_tokens != 0 {
+                        input_tokens = usage.input_tokens;
+                    }
+                    if usage.output_tokens != 0 {
+                        output_tokens = usage.output_tokens;
+                    }
                     if let Some(v) = usage.cache_creation_input_tokens {
-                        *cache_creation_input_tokens.get_or_insert(0) += v;
+                        cache_creation_input_tokens = Some(v);
                     }
                     if let Some(v) = usage.cache_read_input_tokens {
-                        *cache_read_input_tokens.get_or_insert(0) += v;
+                        cache_read_input_tokens = Some(v);
                     }
                 }
             }

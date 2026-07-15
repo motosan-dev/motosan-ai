@@ -426,3 +426,76 @@ async fn anthropic_stream_emits_max_tokens_stop_reason() {
 
     mock.assert_async().await;
 }
+
+// ---------------------------------------------------------------------------
+// Usage merge semantics: last-writer-wins per field, never summed
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn collect_stream_usage_is_last_writer_wins_not_summed() {
+    let events = vec![
+        StreamEvent::usage(motosan_ai::Usage {
+            input_tokens: 100,
+            output_tokens: 5,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        }),
+        StreamEvent::text("hi"),
+        StreamEvent::usage(motosan_ai::Usage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: None,
+        }),
+        StreamEvent::done(),
+    ];
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
+
+    assert_eq!(response.usage.input_tokens, 100);
+    assert_eq!(response.usage.output_tokens, 50);
+}
+
+#[tokio::test]
+async fn collect_stream_usage_single_event_unchanged() {
+    let events = vec![
+        StreamEvent::text("done"),
+        StreamEvent::usage(motosan_ai::Usage {
+            input_tokens: 20,
+            output_tokens: 9,
+            cache_creation_input_tokens: Some(3),
+            cache_read_input_tokens: Some(4),
+        }),
+        StreamEvent::done(),
+    ];
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
+
+    assert_eq!(response.usage.input_tokens, 20);
+    assert_eq!(response.usage.output_tokens, 9);
+    assert_eq!(response.usage.cache_creation_input_tokens, Some(3));
+    assert_eq!(response.usage.cache_read_input_tokens, Some(4));
+}
+
+#[tokio::test]
+async fn collect_stream_usage_zero_does_not_clobber_and_cache_replaces() {
+    let events = vec![
+        StreamEvent::usage(motosan_ai::Usage {
+            input_tokens: 100,
+            output_tokens: 1,
+            cache_creation_input_tokens: Some(7),
+            cache_read_input_tokens: Some(11),
+        }),
+        StreamEvent::usage(motosan_ai::Usage {
+            input_tokens: 0,
+            output_tokens: 50,
+            cache_creation_input_tokens: Some(7),
+            cache_read_input_tokens: Some(11),
+        }),
+        StreamEvent::done(),
+    ];
+    let response = collect_stream(boxed_stream(events)).await.unwrap();
+
+    assert_eq!(response.usage.input_tokens, 100);
+    assert_eq!(response.usage.output_tokens, 50);
+    assert_eq!(response.usage.cache_creation_input_tokens, Some(7));
+    assert_eq!(response.usage.cache_read_input_tokens, Some(11));
+}
