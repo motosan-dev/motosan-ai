@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.14.0 · TypeScript 0.11.0 · Rust 0.21.1
+- Python 0.15.0 · TypeScript 0.12.0 · Rust 0.22.0
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - Python 0.14.0 / TypeScript 0.11.0: **chatgpt-codex** provider — native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python `Client.chatgpt_codex(...)`, TypeScript `Client.builder().chatgptCodex(...)`.
 - GitHub: https://github.com/motosan-dev/motosan-ai
@@ -21,7 +21,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.20.0", features = ["anthropic"] }
+motosan-ai = { version = "0.22.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -920,7 +920,7 @@ Python, Rust, and TypeScript SDKs are versioned and released **independently**.
 |--------------|-----------------------|-----------------------|
 | Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
 | Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
-| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.11.0`          |
+| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.12.0`          |
 | motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | `motosan-ai-oauth-v0.2.0` |
 | codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
 | anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |

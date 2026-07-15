@@ -4,6 +4,17 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-07-15
+
+### Fixed
+- Retry: 5xx responses with non-JSON bodies are classified by HTTP status and retried instead of aborting the retry loop.
+- Streaming: mid-stream `error` frames surface as stream errors instead of being dropped.
+- Claude Code: error-subtype terminal events surface as errors instead of being dropped.
+- CLI providers (`claude-code` / `codex-cli` / `gemini-cli`): child-process death mid-run surfaces as an error instead of a truncated success.
+- OpenAI streaming: parallel tool calls are buffered per `tool_calls[].index` and flushed whole, so interleaved argument deltas no longer corrupt one another.
+- chatgpt-codex: function-call events are correlated by `item_id` and emitted with the correct `call_id`.
+- Streaming usage: later usage frames replace earlier fields instead of double-counting.
+
 ## 0.21.1 — 2026-06-13
 
 ### Added

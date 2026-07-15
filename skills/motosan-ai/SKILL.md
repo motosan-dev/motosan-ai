@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.14.0 / Rust 0.20.0 / TypeScript 0.11.0
+Multi-provider LLM SDK — Python 0.15.0 / Rust 0.22.0 / TypeScript 0.12.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI, ChatGPT Codex (Responses API)
 
@@ -22,7 +22,7 @@ pip install "motosan-ai[anthropic,openai,gemini]"   # multiple providers
 
 ```toml
 # Rust (Cargo.toml)
-motosan-ai = { version = "0.20.0", features = ["anthropic"] }
+motosan-ai = { version = "0.22.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli

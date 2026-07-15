@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.22.0 / python-0.15.0 / ts-0.12.0] — 2026-07-15
+
+M1 reliability release — cross-SDK bug-fix pass. No new features, no public API changes.
+
+### Fixed
+
+- **Retry on non-JSON 5xx** (Rust · Python): a 5xx response whose body is not valid JSON no longer breaks the retry loop — classification falls back to the HTTP status code, so transient server errors are retried again. (TypeScript already classified by status at baseline.)
+- **Mid-stream error frames surfaced** (Rust · Python · TypeScript): Anthropic provider `error` events and TypeScript chatgpt-codex `error` / `response.failed` frames arriving mid-stream now surface as stream errors instead of being dropped and letting the stream end as if the turn had completed.
+- **CLI failures surfaced** (Rust · Python): a `claude` / `codex` / `gemini` child process dying mid-run, and Claude Code terminal error results, now produce explicit errors instead of a silently truncated, seemingly successful response.
+- **Parallel tool-call index handling** (Rust · Python): OpenAI-style streamed tool calls are keyed by `tool_calls[].index`, so parallel calls are no longer dropped or merged. Rust additionally buffers argument deltas per index and flushes calls whole; TypeScript already keyed by index at baseline.
+- **chatgpt-codex `item_id` → `call_id`** (Rust · Python · TypeScript): function-call events are correlated by `item_id` and emitted with the correct `call_id`, fixing tool-call round-trips when the two ids differ.
+- **Streamed tool-call stop reason** (Python): streamed turns that emit tool calls now finish with the tool-use stop reason instead of a generic end-of-turn.
+- **Usage replace-merge** (Rust · TypeScript): later usage frames replace previously seen fields instead of accumulating into double-counted totals.
+- **Stream cancel + CRLF SSE** (TypeScript): aborting a stream now cancels the underlying `ReadableStream` reader (releasing the HTTP connection), and the SSE parser accepts `\r\n` line terminators.
+
+Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/python/CHANGELOG.md`](sdks/python/CHANGELOG.md), [`sdks/typescript/CHANGELOG.md`](sdks/typescript/CHANGELOG.md).
+
 ## [rust-0.18.0] — 2026-05-29
 
 ### Breaking (Rust only)

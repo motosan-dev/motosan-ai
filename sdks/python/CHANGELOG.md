@@ -2,6 +2,17 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.15.0] - 2026-07-15
+
+### Fixed
+- Retry: 5xx responses with non-JSON bodies are classified by HTTP status and retried instead of aborting the retry loop.
+- Streaming: mid-stream `error` frames raise `StreamError` instead of being dropped.
+- Claude Code: `is_error` terminal results raise `StreamError` instead of being dropped.
+- CLI providers (`claude_code` / `codex_cli` / `gemini_cli`): child-process death mid-run surfaces as an error instead of a truncated success.
+- OpenAI streaming: parallel tool calls are keyed by `tool_calls[].index` (ports the TypeScript adapter), so parallel calls are no longer dropped or merged.
+- chatgpt-codex: function-call events are correlated by `item_id` and emitted with the correct `call_id`.
+- Streaming: turns that emit tool calls now finish with the tool-use stop reason instead of a generic end-of-turn.
+
 ## [0.14.0] - 2026-06-23
 
 ### Added
