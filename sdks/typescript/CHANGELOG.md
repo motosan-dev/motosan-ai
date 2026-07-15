@@ -4,6 +4,16 @@ All notable changes to `@motosan-ai/sdk` TypeScript SDK are documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.12.0] - 2026-07-15
+
+### Fixed
+- Streaming: mid-stream `error` frames surface as stream errors instead of being dropped.
+- chatgpt-codex: `error` / `response.failed` frames now reject the stream instead of ending it silently.
+- Streaming: aborting a stream cancels the underlying `ReadableStream` reader, releasing the HTTP connection.
+- SSE parser accepts `\r\n` (CRLF) line terminators and strips at most one leading space after `data:` per the SSE spec.
+- chatgpt-codex: function-call events are correlated by `item_id` and emitted with the correct `call_id`.
+- Usage: later usage frames replace earlier fields instead of double-counting.
+
 ## [0.11.0] - 2026-06-23
 
 ### Added
