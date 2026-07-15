@@ -127,15 +127,18 @@ export async function collectStream(stream: BoxStream): Promise<ChatResponse> {
 
       case 'usage':
         if (event.usage) {
-          inputTokens += event.usage.inputTokens
-          outputTokens += event.usage.outputTokens
+          // Replace-with-fallback, mirroring Python _stream_collect.py:
+          // Anthropic message_delta usage is CUMULATIVE, so summing would
+          // double-count output tokens. A zero field keeps the previous
+          // value (message_delta carries no input_tokens, mapped to 0);
+          // an absent cache field keeps the previous cache value.
+          inputTokens = event.usage.inputTokens || inputTokens
+          outputTokens = event.usage.outputTokens || outputTokens
           if (event.usage.cacheCreationInputTokens !== undefined) {
-            cacheCreationInputTokens =
-              (cacheCreationInputTokens ?? 0) + event.usage.cacheCreationInputTokens
+            cacheCreationInputTokens = event.usage.cacheCreationInputTokens
           }
           if (event.usage.cacheReadInputTokens !== undefined) {
-            cacheReadInputTokens =
-              (cacheReadInputTokens ?? 0) + event.usage.cacheReadInputTokens
+            cacheReadInputTokens = event.usage.cacheReadInputTokens
           }
         }
         break

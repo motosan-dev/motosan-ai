@@ -179,7 +179,7 @@ describe('stream.ts', () => {
       expect(toolResponse.stopReason).toBe('tool_use')
     })
 
-    it('sums cache tokens with lazy initialization', async () => {
+    it('keeps last-provided cache tokens (replace-with-fallback, not summed)', async () => {
       const events: StreamEvent[] = [
         usageEvent({
           inputTokens: 10,
@@ -204,10 +204,54 @@ describe('stream.ts', () => {
 
       const response = await collectStream(stream)
 
-      expect(response.usage.inputTokens).toBe(17)
-      expect(response.usage.outputTokens).toBe(9)
-      expect(response.usage.cacheCreationInputTokens).toBe(120)
+      expect(response.usage.inputTokens).toBe(2)
+      expect(response.usage.outputTokens).toBe(1)
+      expect(response.usage.cacheCreationInputTokens).toBe(20)
       expect(response.usage.cacheReadInputTokens).toBe(50)
+    })
+
+    it('replaces usage instead of summing (Anthropic cumulative message_delta)', async () => {
+      // Anthropic emits usage on message_start (input tokens + a few output
+      // tokens) and again on message_delta with CUMULATIVE output tokens.
+      // Summing would report 200 input / 55 output.
+      const events: StreamEvent[] = [
+        usageEvent({ inputTokens: 100, outputTokens: 5 }),
+        usageEvent({ inputTokens: 100, outputTokens: 50 }),
+        doneEvent(),
+      ]
+      const stream = (async function* () {
+        for (const ev of events) yield ev
+      })() as BoxStream
+
+      const response = await collectStream(stream)
+
+      expect(response.usage.inputTokens).toBe(100)
+      expect(response.usage.outputTokens).toBe(50)
+    })
+
+    it('zero fields fall back to previous values; absent cache fields are kept', async () => {
+      // message_delta usage carries no input_tokens (adapter maps it to 0)
+      // and no cache fields — neither may clobber message_start values.
+      const events: StreamEvent[] = [
+        usageEvent({
+          inputTokens: 100,
+          outputTokens: 5,
+          cacheCreationInputTokens: 30,
+          cacheReadInputTokens: 70,
+        }),
+        usageEvent({ inputTokens: 0, outputTokens: 50 }),
+        doneEvent(),
+      ]
+      const stream = (async function* () {
+        for (const ev of events) yield ev
+      })() as BoxStream
+
+      const response = await collectStream(stream)
+
+      expect(response.usage.inputTokens).toBe(100)
+      expect(response.usage.outputTokens).toBe(50)
+      expect(response.usage.cacheCreationInputTokens).toBe(30)
+      expect(response.usage.cacheReadInputTokens).toBe(70)
     })
   })
 
