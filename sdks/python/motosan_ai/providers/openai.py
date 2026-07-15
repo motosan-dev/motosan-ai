@@ -25,6 +25,12 @@ from motosan_ai.types import (
 
 _DEFAULT_BASE_URL = "https://api.openai.com"
 
+_FINISH_REASON_TO_STOP = {
+    "stop": StopReason.stop,
+    "length": StopReason.max_tokens,
+    "tool_calls": StopReason.tool_use,
+}
+
 
 class OpenAIProvider:
     capabilities: ProviderCapabilities = ProviderCapabilities.with_image()
@@ -191,11 +197,7 @@ class OpenAIProvider:
             )
 
         finish_reason = choice.get("finish_reason")
-        stop_reason = {
-            "stop": StopReason.stop,
-            "length": StopReason.max_tokens,
-            "tool_calls": StopReason.tool_use,
-        }.get(finish_reason, StopReason.other)
+        stop_reason = _FINISH_REASON_TO_STOP.get(finish_reason, StopReason.other)
 
         usage = payload.get("usage") or {}
         return ChatResponse(
@@ -226,12 +228,25 @@ class OpenAIProvider:
                 )
                 raise self._map_http_error(resp.status_code, message)
 
+            # Per-index tool-call tracking (mirrors TS providers/openai.ts):
+            # index -> (id, name); only one tool call is open at a time.
+            tool_buffer: dict[int, tuple[str, str]] = {}
+            open_tool_index: int | None = None
+
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
                 data = line[6:].strip()
                 if not data or data == "[DONE]":
                     if data == "[DONE]":
+                        if open_tool_index is not None:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_id=tool_buffer[open_tool_index][0],
+                                event_type="tool_call_end",
+                            )
+                            open_tool_index = None
                         yield StreamEvent(content="", done=True)
                         return
                     continue
@@ -247,11 +262,25 @@ class OpenAIProvider:
                         yield StreamEvent(content=text, done=False)
 
                     for tc in delta.get("tool_calls") or []:
+                        tc_index = tc.get("index")
+                        if tc_index is None:
+                            continue
                         fn = tc.get("function") or {}
                         tc_id = tc.get("id")
                         tc_name = fn.get("name")
                         tc_args = fn.get("arguments")
                         if tc_id and tc_name:
+                            # First fragment for this index: close any open
+                            # tool call from a different index, then open this one.
+                            if open_tool_index is not None and open_tool_index != tc_index:
+                                yield StreamEvent(
+                                    content="",
+                                    done=False,
+                                    tool_call_id=tool_buffer[open_tool_index][0],
+                                    event_type="tool_call_end",
+                                )
+                            tool_buffer[tc_index] = (tc_id, tc_name)
+                            open_tool_index = tc_index
                             yield StreamEvent(
                                 content="",
                                 done=False,
@@ -259,18 +288,30 @@ class OpenAIProvider:
                                 tool_call_name=tc_name,
                                 event_type="tool_call_start",
                             )
-                        if tc_args:
+                        if tc_args and tc_index in tool_buffer:
                             yield StreamEvent(
                                 content="",
                                 done=False,
+                                tool_call_id=tool_buffer[tc_index][0],
                                 tool_call_args_delta=tc_args,
                                 event_type="tool_call_args",
                             )
 
-                    if choice.get("finish_reason"):
-                        if choice.get("finish_reason") == "tool_calls":
-                            yield StreamEvent(content="", done=False, event_type="tool_call_end")
-                        yield StreamEvent(content="", done=True)
+                    finish_reason = choice.get("finish_reason")
+                    if finish_reason:
+                        if finish_reason == "tool_calls" and open_tool_index is not None:
+                            yield StreamEvent(
+                                content="",
+                                done=False,
+                                tool_call_id=tool_buffer[open_tool_index][0],
+                                event_type="tool_call_end",
+                            )
+                            open_tool_index = None
+                        yield StreamEvent(
+                            content="",
+                            done=True,
+                            stop_reason=_FINISH_REASON_TO_STOP.get(finish_reason, StopReason.other),
+                        )
                         return
         except StreamError:
             raise

@@ -22,7 +22,7 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     thinking = ""
     tool_calls: list[ToolCall] = []
     usage = Usage(0, 0)
-    stop_reason = StopReason.end_turn
+    stop_reason: StopReason | None = None
 
     current_tc_id = ""
     current_tc_name = ""
@@ -73,6 +73,9 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
 
         if event.done and event.stop_reason is not None:
             stop_reason = event.stop_reason
+
+    if stop_reason is None:
+        stop_reason = StopReason.tool_use if tool_calls else StopReason.end_turn
 
     return ChatResponse(
         content=content,

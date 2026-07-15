@@ -4,6 +4,7 @@ import httpx
 import pytest
 import respx
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import StreamError
 from motosan_ai.providers.openai import OpenAIProvider
 from motosan_ai.types import ChatRequest, Message, StopReason, Tool
@@ -262,3 +263,73 @@ async def test_openai_5xx_message_has_status_and_retry_after(provider):
     msg = str(exc_info.value)
     assert "HTTP 503: overloaded" in msg
     assert "Retry-After: 7" in msg
+
+
+# ---------------------------------------------------------------------------
+# stream: parallel tool calls
+# ---------------------------------------------------------------------------
+
+
+def _tool_chunk(index: int, tc_id=None, name=None, args=None) -> dict:
+    fn = {}
+    if name is not None:
+        fn["name"] = name
+    if args is not None:
+        fn["arguments"] = args
+    tc = {"index": index, "function": fn}
+    if tc_id is not None:
+        tc["id"] = tc_id
+    return {"choices": [{"delta": {"tool_calls": [tc]}, "finish_reason": None}]}
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_openai_stream_parallel_tool_calls(provider):
+    # OpenAI streams parallel tool calls sequentially by index: all fragments
+    # for index 0, then all fragments for index 1, then finish_reason.
+    sse = _sse_lines(
+        _tool_chunk(0, tc_id="call_1", name="get_weather", args=""),
+        _tool_chunk(0, args='{"city":'),
+        _tool_chunk(0, args='"Taipei"}'),
+        _tool_chunk(1, tc_id="call_2", name="get_time", args=""),
+        _tool_chunk(1, args='{"tz":"UTC"}'),
+        {"choices": [{"delta": {}, "finish_reason": "tool_calls"}]},
+    )
+    respx.post("https://mock.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, text=sse, headers={"content-type": "text/event-stream"})
+    )
+
+    events = [e async for e in provider.stream(ChatRequest(messages=[Message.user("hi")]))]
+
+    starts = [e for e in events if e.event_type == "tool_call_start"]
+    assert [(e.tool_call_id, e.tool_call_name) for e in starts] == [
+        ("call_1", "get_weather"),
+        ("call_2", "get_time"),
+    ]
+
+    ends = [e for e in events if e.event_type == "tool_call_end"]
+    assert [e.tool_call_id for e in ends] == ["call_1", "call_2"]
+
+    # call_1 must be closed before call_2 opens (close-on-index-switch).
+    assert events.index(ends[0]) < events.index(starts[1])
+
+    args_events = [e for e in events if e.event_type == "tool_call_args"]
+    assert [(e.tool_call_id, e.tool_call_args_delta) for e in args_events] == [
+        ("call_1", '{"city":'),
+        ("call_1", '"Taipei"}'),
+        ("call_2", '{"tz":"UTC"}'),
+    ]
+
+    assert events[-1].done is True
+    assert events[-1].stop_reason == StopReason.tool_use
+
+    # Collected end-to-end (fresh stream; the respx mock replays the response):
+    # both calls survive with assembled inputs and stop_reason tool_use.
+    resp = await collect_stream(provider.stream(ChatRequest(messages=[Message.user("hi")])))
+    assert [(tc.id, tc.name) for tc in resp.tool_calls] == [
+        ("call_1", "get_weather"),
+        ("call_2", "get_time"),
+    ]
+    assert resp.tool_calls[0].input == {"city": "Taipei"}
+    assert resp.tool_calls[1].input == {"tz": "UTC"}
+    assert resp.stop_reason == StopReason.tool_use

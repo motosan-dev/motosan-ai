@@ -118,16 +118,35 @@ async def test_chat_surfaces_thinking():
 @respx.mock
 @pytest.mark.asyncio
 async def test_chat_tool_call_lifecycle_yields_tool_call():
+    # Distinct item id ("fc_...") vs call_id ("call_..."), matching the real wire.
     sse = _sse_text(
         {
             "type": "response.output_item.added",
-            "item": {"type": "function_call", "call_id": "c1", "name": "get_weather"},
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_001",
+                "name": "get_weather",
+            },
         },
-        {"type": "response.function_call_arguments.delta", "item_id": "c1", "delta": '{"city":'},
-        {"type": "response.function_call_arguments.delta", "item_id": "c1", "delta": '"Paris"}'},
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_001",
+            "delta": '{"city":',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "fc_001",
+            "delta": '"Paris"}',
+        },
         {
             "type": "response.output_item.done",
-            "item": {"type": "function_call", "call_id": "c1", "name": "get_weather"},
+            "item": {
+                "type": "function_call",
+                "id": "fc_001",
+                "call_id": "call_001",
+                "name": "get_weather",
+            },
         },
         {"type": "response.completed", "response": {"status": "completed"}},
     )
@@ -139,7 +158,7 @@ async def test_chat_tool_call_lifecycle_yields_tool_call():
     )
     assert resp.stop_reason == StopReason.tool_use
     assert len(resp.tool_calls) == 1
-    assert resp.tool_calls[0].id == "c1"
+    assert resp.tool_calls[0].id == "call_001"
     assert resp.tool_calls[0].name == "get_weather"
     assert resp.tool_calls[0].input == {"city": "Paris"}
 
