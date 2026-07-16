@@ -1,7 +1,7 @@
 use crate::error::MotosanError;
 use crate::providers::{
-    extract_error_message, extract_request_id, is_retryable_network_error, is_retryable_status,
-    map_http_error, parse_retry_after, sleep_before_retry, ProviderImpl,
+    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
+    ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::{collect_stream, BoxStream};
@@ -256,55 +256,35 @@ impl ProviderImpl for ChatGptCodexProvider {
         let url = self.url();
         let body = self.build_responses_body(&req);
 
-        let mut attempt = 0u32;
-        loop {
-            let result = self
-                .apply_auth(
-                    self.http
-                        .post(&url)
-                        .header("content-type", "application/json"),
-                )
-                .json(&body)
-                .send()
-                .await;
+        let response = send_with_retry(&self.retry_policy, || {
+            self.apply_auth(
+                self.http
+                    .post(&url)
+                    .header("content-type", "application/json"),
+            )
+            .json(&body)
+        })
+        .await?;
 
-            match result {
-                Err(e)
-                    if is_retryable_network_error(&e)
-                        && attempt < self.retry_policy.max_retries =>
-                {
-                    attempt += 1;
-                    sleep_before_retry(&self.retry_policy, attempt, None).await;
-                    continue;
-                }
-                Err(e) => return Err(MotosanError::Network(e.to_string())),
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    if status != 200 {
-                        let retry_after = parse_retry_after(resp.headers());
-                        let request_id = extract_request_id(resp.headers());
-                        let payload: Value = resp.json().await.unwrap_or(json!({}));
-                        let msg = extract_error_message(&payload, "ChatGPT-backend error");
-                        if is_retryable_status(status) && attempt < self.retry_policy.max_retries {
-                            attempt += 1;
-                            sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
-                            continue;
-                        }
-                        return Err(map_http_error(status, msg, retry_after, request_id));
-                    }
-                    let sse = resp.bytes_stream().eventsource();
-                    let adapter = ChatGptCodexStreamAdapter {
-                        inner: Box::pin(sse),
-                        pending: VecDeque::new(),
-                        item_to_call_id: HashMap::new(),
-                        seen_tool_ids: HashSet::new(),
-                        saw_tool_call: false,
-                        error: None,
-                    };
-                    return Ok(Box::pin(adapter));
-                }
-            }
+        let status = response.status().as_u16();
+        if status != 200 {
+            let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
+            let payload: Value = response.json().await.unwrap_or(json!({}));
+            let msg = extract_error_message(&payload, "ChatGPT-backend error");
+            return Err(map_http_error(status, msg, retry_after, request_id));
         }
+
+        let sse = response.bytes_stream().eventsource();
+        let adapter = ChatGptCodexStreamAdapter {
+            inner: Box::pin(sse),
+            pending: VecDeque::new(),
+            item_to_call_id: HashMap::new(),
+            seen_tool_ids: HashSet::new(),
+            saw_tool_call: false,
+            error: None,
+        };
+        Ok(Box::pin(adapter))
     }
 }
 

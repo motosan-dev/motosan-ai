@@ -394,30 +394,6 @@ pub(crate) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
     feature = "gemini-code-assist",
     feature = "chatgpt-codex",
 ))]
-pub(crate) async fn sleep_before_retry(
-    policy: &RetryPolicy,
-    attempt: u32,
-    retry_after: Option<Duration>,
-) {
-    // retry_after arrives pre-capped to RETRY_AFTER_CAP by parse_retry_after.
-    let delay = if policy.respect_retry_after {
-        retry_after.unwrap_or_else(|| policy.delay_for_attempt(attempt))
-    } else {
-        policy.delay_for_attempt(attempt)
-    };
-
-    tokio::time::sleep(delay).await;
-}
-
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
 async fn observe_and_sleep(
     policy: &RetryPolicy,
     attempt: u32,

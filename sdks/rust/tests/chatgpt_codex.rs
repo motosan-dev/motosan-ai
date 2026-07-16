@@ -177,3 +177,62 @@ async fn stream_401_returns_auth_error() {
     };
     assert!(matches!(err, MotosanError::Auth { .. }), "got {err:?}");
 }
+
+#[tokio::test]
+async fn stream_fires_on_retry_via_shared_engine() {
+    use motosan_ai::retry::RetryCause;
+    use std::sync::{Arc, Mutex};
+
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", Matcher::Any)
+        .with_status(503)
+        .with_body(r#"{"error":{"message":"overloaded"}}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FIXTURE)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let seen: Arc<Mutex<Vec<(u32, u16)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let mut policy = RetryPolicy::new()
+        .max_retries(1)
+        .base_delay_ms(0)
+        .max_delay_ms(0)
+        .jitter(false);
+    policy.on_retry = Some(Arc::new(move |evt| {
+        let status = match evt.cause {
+            RetryCause::Status(code) => code,
+            RetryCause::Network(_) => 0,
+        };
+        sink.lock().unwrap().push((evt.attempt, status));
+    }));
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()))
+            .with_retry_policy(policy);
+    let mut stream = provider
+        .stream(
+            ChatRequest::builder()
+                .messages(vec![Message::user("hi")])
+                .build(),
+        )
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while let Some(item) = stream.next().await {
+        let ev = item.expect("stream item should not fail");
+        if ev.event_type == StreamEventType::Text {
+            text.push_str(&ev.content);
+        }
+    }
+    assert_eq!(text, EXPECTED_TEXT);
+    assert_eq!(*seen.lock().unwrap(), vec![(1, 503)]);
+}

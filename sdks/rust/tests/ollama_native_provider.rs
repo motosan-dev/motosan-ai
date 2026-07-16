@@ -520,3 +520,59 @@ async fn ollama_native_chat_retries_non_json_5xx_then_succeeds() {
     error_mock.assert_async().await;
     success_mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn ollama_native_chat_fires_on_retry_via_shared_engine() {
+    use motosan_ai::retry::RetryCause;
+    use std::sync::{Arc, Mutex};
+
+    let mut server = mockito::Server::new_async().await;
+    let error_mock = server
+        .mock("POST", "/api/chat")
+        .with_status(503)
+        .with_body(r#"{"error":{"message":"overloaded"}}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    let success_mock = server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+                "model": "llama3.2",
+                "message": {"role": "assistant", "content": "recovered"},
+                "done": true
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let seen: Arc<Mutex<Vec<(u32, u16)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let mut policy = RetryPolicy::new()
+        .max_retries(1)
+        .base_delay_ms(0)
+        .max_delay_ms(0)
+        .jitter(false);
+    policy.on_retry = Some(Arc::new(move |evt| {
+        let status = match evt.cause {
+            RetryCause::Status(code) => code,
+            RetryCause::Network(_) => 0,
+        };
+        sink.lock().unwrap().push((evt.attempt, status));
+    }));
+
+    let provider = build_provider(server.url()).with_retry_policy(policy);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let response = provider.chat(request).await.expect("retry then succeed");
+    assert_eq!(response.content, "recovered");
+    assert_eq!(*seen.lock().unwrap(), vec![(1, 503)]);
+    error_mock.assert_async().await;
+    success_mock.assert_async().await;
+}
