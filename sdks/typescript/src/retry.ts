@@ -1,3 +1,5 @@
+import { isRetryableNetworkError, isRetryableStatus } from './error.js'
+
 /** Fired via RetryPolicy.onRetry before each retry sleep (D7). */
 export interface RetryEvent {
   attempt: number
@@ -132,4 +134,29 @@ export async function withRetry<T>(
       throw error
     }
   }
+}
+
+/**
+ * Shared retry classification for every provider request path (chat and the
+ * pre-first-event stream fetch). Replaces the four per-provider
+ * classifyHttpError copies. Accepts a thrown value (usually a mapHttpError
+ * Error carrying `.status` / `.retryAfterMs`) or a bare numeric HTTP status.
+ * Pure — never throws; withRetry rethrows the original error on
+ * `{ retryable: false }`.
+ */
+export function classifyForRetry(errOrStatus: unknown): RetryClassification {
+  if (typeof errOrStatus === 'number') {
+    return { retryable: isRetryableStatus(errOrStatus) }
+  }
+  if (errOrStatus instanceof Error) {
+    const error = errOrStatus as { status?: number; retryAfterMs?: number }
+    const status = error.status
+    if (
+      (status !== undefined && isRetryableStatus(status)) ||
+      isRetryableNetworkError(errOrStatus)
+    ) {
+      return { retryable: true, retryAfterMs: error.retryAfterMs }
+    }
+  }
+  return { retryable: false }
 }

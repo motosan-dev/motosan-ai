@@ -250,17 +250,44 @@ describe('OpenAI Responses-API fallback', () => {
     expect(String(mockFetch.mock.calls[1][0])).toBe('https://custom.openai.test/responses')
   })
 
-  it('does not retry the single Responses fallback call', async () => {
+  it('retries the Responses fallback call on a retryable 5xx then succeeds (shared path)', async () => {
     provider
       .withRetryPolicy(new RetryPolicy({ maxRetries: 3, baseDelayMs: 1, jitter: false }))
       .withResponsesFallback(true)
     mockFetch
       .mockResolvedValueOnce(jsonResponse(404, {}))
       .mockResolvedValueOnce(jsonResponse(500, { error: { message: 'Responses unavailable' } }))
+      .mockResolvedValueOnce(
+        jsonResponse(200, {
+          output_text: 'recovered',
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }),
+      )
+
+    const response = await provider.chat({ messages: [{ role: 'user', content: 'test' }] })
+
+    expect(response.content).toBe('recovered')
+    // 3 total fetches: the triggering 404 on chat/completions, then the
+    // Responses call's 500 -> 200 retry through the shared withRetry engine
+    // (the two Responses-endpoint fetches are the retried pair).
+    expect(mockFetch).toHaveBeenCalledTimes(3)
+    expect(String(mockFetch.mock.calls[1][0])).toBe(DEFAULT_OPENAI_RESPONSES_URL)
+    expect(String(mockFetch.mock.calls[2][0])).toBe(DEFAULT_OPENAI_RESPONSES_URL)
+  })
+
+  it('does not retry a non-retryable 404 in the Responses fallback path', async () => {
+    provider
+      .withRetryPolicy(new RetryPolicy({ maxRetries: 3, baseDelayMs: 1, jitter: false }))
+      .withResponsesFallback(true)
+    mockFetch
+      .mockResolvedValueOnce(jsonResponse(404, {}))
+      .mockResolvedValueOnce(jsonResponse(404, { error: { message: 'Responses not found' } }))
 
     await expect(provider.chat({ messages: [{ role: 'user', content: 'test' }] })).rejects.toThrow(
-      'Responses unavailable',
+      'Responses not found',
     )
+    // 2 total fetches: chat/completions 404 triggers the fallback, and the
+    // Responses 404 is non-retryable so withRetry rethrows without a retry.
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isRetryableNetworkError, isRetryableStatus, parseRetryAfter } from '../src/error.js'
-import { RetryPolicy, withRetry, type RetryEvent } from '../src/retry.js'
+import { classifyForRetry, RetryPolicy, withRetry, type RetryEvent } from '../src/retry.js'
 
 function retryableByStatusOrNetwork(err: unknown) {
   const status = (err as { status?: number })?.status
@@ -365,5 +365,35 @@ describe('withRetry onRetry', () => {
 
     await expect(withRetry(policy, op, () => ({ retryable: false }))).rejects.toThrow('fatal')
     expect(events).toEqual([])
+  })
+})
+
+describe('classifyForRetry', () => {
+  it('classifies retryable-status errors and carries retryAfterMs', () => {
+    const err = new Error('rate limited') as Error & { status?: number; retryAfterMs?: number }
+    err.status = 429
+    err.retryAfterMs = 1500
+    expect(classifyForRetry(err)).toEqual({ retryable: true, retryAfterMs: 1500 })
+  })
+
+  it('returns retryable:false for non-retryable statuses without throwing', () => {
+    const err = new Error('bad request') as Error & { status?: number }
+    err.status = 400
+    expect(classifyForRetry(err)).toEqual({ retryable: false })
+  })
+
+  it('classifies retryable network errors', () => {
+    const err = new Error('refused') as Error & { code?: string }
+    err.code = 'ECONNREFUSED'
+    expect(classifyForRetry(err).retryable).toBe(true)
+  })
+
+  it('accepts a bare numeric status', () => {
+    expect(classifyForRetry(503)).toEqual({ retryable: true })
+    expect(classifyForRetry(404)).toEqual({ retryable: false })
+  })
+
+  it('treats non-Error, non-number values as not retryable', () => {
+    expect(classifyForRetry('boom')).toEqual({ retryable: false })
   })
 })

@@ -1,9 +1,8 @@
-import { isRetryableNetworkError, isRetryableStatus } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseNdjson } from '../http/ndjson.js'
 import { DEFAULT_OLLAMA_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
+import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   doneEvent,
   textEvent,
@@ -14,21 +13,6 @@ import {
 } from '../stream.js'
 import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
 
-/** Same classify shape as providers/openai.ts:38-51 / providers/minimax.ts. */
-function classifyHttpError(result: unknown): RetryClassification {
-  if (result instanceof Error) {
-    const error = result as { status?: number; retryAfterMs?: number }
-    const status = error.status
-    if (
-      (status !== undefined && isRetryableStatus(status)) ||
-      isRetryableNetworkError(result)
-    ) {
-      return { retryable: true, retryAfterMs: error.retryAfterMs }
-    }
-    throw result
-  }
-  return { retryable: false }
-}
 
 /**
  * A native-API tool call before id-defaulting. Mirrors Rust ToolCall but
@@ -239,7 +223,7 @@ export class OllamaProvider {
     const payload = await withRetry(
       this.retryPolicy,
       async () => postJson<any>(this.endpoint(), {}, body),
-      classifyHttpError,
+      classifyForRetry,
     )
 
     const message = payload?.message
@@ -296,29 +280,12 @@ export class OllamaProvider {
   private async *streamImpl(req: ChatRequest) {
     const body = this.buildRequestBody(req, true)
 
-    // Retry ONLY the initial postStream fetch (mirrors openai.ts:326-351).
-    let attempt = 0
-    let responseBody: ReadableStream<Uint8Array>
-    while (true) {
-      try {
-        responseBody = await postStream(this.endpoint(), {}, body)
-        break
-      } catch (error) {
-        const status = (error as { status?: number }).status
-        const retryable =
-          (status !== undefined && isRetryableStatus(status)) ||
-          isRetryableNetworkError(error)
-        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
-          throw error
-        }
-        attempt += 1
-        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
-        const delay = this.retryPolicy.respectRetryAfter
-          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
-          : this.retryPolicy.delayForAttempt(attempt)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    }
+    // Retry ONLY the initial postStream fetch via the shared engine.
+    const responseBody = await withRetry(
+      this.retryPolicy,
+      async () => postStream(this.endpoint(), {}, body),
+      classifyForRetry,
+    )
 
     // Adapter over parseNdjson: decide termination on done:true.
     try {

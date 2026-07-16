@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { InvalidRequestError, mapHttpError } from '../src/error.js'
 import { AnthropicProvider } from '../src/providers/anthropic.js'
+import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
 import { MinimaxProvider } from '../src/providers/minimax.js'
 import { OpenAIProvider } from '../src/providers/openai.js'
 import { RetryPolicy } from '../src/retry.js'
@@ -349,6 +350,31 @@ describe('retry provider integration', () => {
     for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
       events.push(event)
     }
+    expect(calls).toBe(2)
+    expect(events.filter((e) => !e.done).map((e) => e.content)).toContain('stream ok')
+  })
+
+  it('ChatGPT-Codex stream retries a 503 then succeeds before the first event (shared path)', async () => {
+    let calls = 0
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"stream ok"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        calls += 1
+        return calls === 1
+          ? new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 503 })
+          : new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+      }),
+    )
+
+    const provider = new ChatGptCodexProvider('tok', 'acct').withRetryPolicy(immediateRetryPolicy())
+    const events: StreamEvent[] = []
+    for await (const event of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+      events.push(event)
+    }
+
     expect(calls).toBe(2)
     expect(events.filter((e) => !e.done).map((e) => e.content)).toContain('stream ok')
   })
