@@ -13,6 +13,7 @@ export * from './providers/gemini.js'
 export { ChatGptCodexProvider, DEFAULT_CHATGPT_CODEX_URL } from './providers/chatgpt_codex.js'
 
 export { RetryPolicy } from './retry.js'
+export type { RetryPolicyOptions, RetryEvent } from './retry.js'
 export { ThinkStripper, stripThink } from './think_stripper.js'
 export {
   DEFAULT_ANTHROPIC_MODEL,
