@@ -13,6 +13,8 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import TypeVar
 
 from motosan_ai.error import NetworkError, ProviderError, RateLimitError
@@ -24,9 +26,36 @@ T = TypeVar("T")
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_INITIAL_BACKOFF = 0.1  # seconds (aligned with Rust: 100ms)
 DEFAULT_MAX_BACKOFF = 2.0  # seconds (aligned with Rust: 2000ms)
+RETRY_AFTER_CAP_SECS = 60.0
 
 # 5xx status codes in error messages
 _STATUS_5XX_RE = re.compile(r"\b5\d{2}\b")
+
+
+def parse_retry_after_header(value: str | None) -> float | None:
+    """Parse a Retry-After header as capped seconds."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
+    try:
+        seconds = float(stripped)
+    except ValueError:
+        pass
+    else:
+        if seconds < 0:
+            return None
+        return min(seconds, RETRY_AFTER_CAP_SECS)
+
+    try:
+        retry_at = parsedate_to_datetime(stripped)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if retry_at.tzinfo is None:
+        retry_at = retry_at.replace(tzinfo=UTC)
+    seconds = (retry_at - datetime.now(UTC)).total_seconds()
+    return min(max(seconds, 0.0), RETRY_AFTER_CAP_SECS)
 
 
 def _parse_retry_after(error_message: str) -> float | None:

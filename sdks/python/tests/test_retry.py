@@ -1,3 +1,6 @@
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
+
 import pytest
 
 from motosan_ai.error import (
@@ -6,7 +9,13 @@ from motosan_ai.error import (
     ProviderError,
     RateLimitError,
 )
-from motosan_ai.retry import _is_retryable, _parse_retry_after, with_retry
+from motosan_ai.retry import (
+    RETRY_AFTER_CAP_SECS,
+    _is_retryable,
+    _parse_retry_after,
+    parse_retry_after_header,
+    with_retry,
+)
 
 
 class TestParseRetryAfter:
@@ -21,6 +30,37 @@ class TestParseRetryAfter:
 
     def test_retry_after_dash_variant(self):
         assert _parse_retry_after("Retry-After 10") == 10.0
+
+
+class TestParseRetryAfterHeader:
+    def test_integer_seconds(self):
+        assert parse_retry_after_header("5") == 5.0
+
+    def test_decimal_seconds(self):
+        assert parse_retry_after_header("1.5") == 1.5
+
+    def test_caps_seconds(self):
+        assert parse_retry_after_header("120") == RETRY_AFTER_CAP_SECS
+
+    def test_negative_seconds_returns_none(self):
+        assert parse_retry_after_header("-1") is None
+
+    def test_future_http_date(self):
+        retry_at = datetime.now(timezone.utc) + timedelta(seconds=25)
+
+        parsed = parse_retry_after_header(format_datetime(retry_at, usegmt=True))
+
+        assert parsed is not None
+        assert 20.0 <= parsed <= 30.0
+
+    def test_past_http_date(self):
+        retry_at = datetime.now(timezone.utc) - timedelta(seconds=25)
+
+        assert parse_retry_after_header(format_datetime(retry_at, usegmt=True)) == 0.0
+
+    @pytest.mark.parametrize("value", [None, "", "not a date"])
+    def test_none_empty_and_garbage_return_none(self, value):
+        assert parse_retry_after_header(value) is None
 
 
 class TestIsRetryable:

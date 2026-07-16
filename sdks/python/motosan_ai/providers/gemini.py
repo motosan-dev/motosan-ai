@@ -9,6 +9,7 @@ import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
+from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -26,6 +27,15 @@ from motosan_ai.types import (
 _DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _DEFAULT_MODEL = "gemini-2.5-flash"
 _DEFAULT_MAX_TOKENS = 8192
+
+
+def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, Any]:
+    retry_after = None
+    request_id = None
+    if headers is not None:
+        retry_after = parse_retry_after_header(headers.get("retry-after"))
+        request_id = headers.get("request-id") or headers.get("x-request-id")
+    return {"status_code": status, "retry_after": retry_after, "request_id": request_id}
 
 
 def _gen_tool_call_id() -> str:
@@ -202,12 +212,15 @@ class GeminiProvider(BaseProvider):
         return message
 
     @staticmethod
-    def _map_http_error(status: int, message: str) -> Exception:
+    def _map_http_error(
+        status: int, message: str, headers: httpx.Headers | None = None
+    ) -> Exception:
+        metadata = _http_error_kwargs(status, headers)
         if status == 401:
-            return AuthError(message)
+            return AuthError(message, **metadata)
         if status == 429:
-            return RateLimitError(message)
-        return ProviderError(message)
+            return RateLimitError(message, **metadata)
+        return ProviderError(message, **metadata)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         self.validate_request(request)
@@ -219,7 +232,7 @@ class GeminiProvider(BaseProvider):
             raise NetworkError(str(exc)) from exc
         if not resp.is_success:
             message = self._response_error_message(resp.status_code, resp.headers, resp.text)
-            raise self._map_http_error(resp.status_code, message)
+            raise self._map_http_error(resp.status_code, message, resp.headers)
         return self._parse_response(resp.json(), request)
 
     def _parse_response(self, payload: dict[str, Any], request: ChatRequest) -> ChatResponse:
@@ -270,7 +283,7 @@ class GeminiProvider(BaseProvider):
             message = self._response_error_message(
                 resp.status_code, resp.headers, error_body.decode()
             )
-            raise self._map_http_error(resp.status_code, message)
+            raise self._map_http_error(resp.status_code, message, resp.headers)
 
         try:
             async for line in resp.aiter_lines():

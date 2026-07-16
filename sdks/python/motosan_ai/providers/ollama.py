@@ -9,6 +9,7 @@ import httpx
 
 from motosan_ai.error import NetworkError, ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
+from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -19,6 +20,15 @@ from motosan_ai.types import (
     ToolCall,
     Usage,
 )
+
+
+def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, Any]:
+    retry_after = None
+    request_id = None
+    if headers is not None:
+        retry_after = parse_retry_after_header(headers.get("retry-after"))
+        request_id = headers.get("request-id") or headers.get("x-request-id")
+    return {"status_code": status, "retry_after": retry_after, "request_id": request_id}
 
 
 class OllamaProvider:
@@ -109,7 +119,10 @@ class OllamaProvider:
             raise NetworkError(str(exc)) from exc
 
         if resp.status_code >= 400:
-            raise ProviderError(f"Ollama error {resp.status_code}: {resp.text}")
+            raise ProviderError(
+                f"Ollama error {resp.status_code}: {resp.text}",
+                **_http_error_kwargs(resp.status_code, resp.headers),
+            )
 
         data = resp.json()
         msg = data.get("message") or {}
@@ -159,7 +172,8 @@ class OllamaProvider:
                 if resp.status_code >= 400:
                     text = await resp.aread()
                     raise ProviderError(
-                        f"Ollama error {resp.status_code}: {text.decode('utf-8', errors='ignore')}"
+                        f"Ollama error {resp.status_code}: {text.decode('utf-8', errors='ignore')}",
+                        **_http_error_kwargs(resp.status_code, resp.headers),
                     )
 
                 async for line in resp.aiter_lines():
