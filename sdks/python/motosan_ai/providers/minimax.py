@@ -15,6 +15,7 @@ from motosan_ai.error import (
     StreamError,
 )
 from motosan_ai.provider_base import ProviderCapabilities
+from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -25,6 +26,15 @@ from motosan_ai.types import (
     ToolCall,
     Usage,
 )
+
+
+def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, Any]:
+    retry_after = None
+    request_id = None
+    if headers is not None:
+        retry_after = parse_retry_after_header(headers.get("retry-after"))
+        request_id = headers.get("request-id") or headers.get("x-request-id")
+    return {"status_code": status, "retry_after": retry_after, "request_id": request_id}
 
 
 class MinimaxProvider:
@@ -97,14 +107,17 @@ class MinimaxProvider:
             body["tool_choice"] = {"type": "function", "function": {"name": choice.name}}
 
     @staticmethod
-    def _raise_for_status(status_code: int, message: str) -> None:
+    def _raise_for_status(
+        status_code: int, message: str, headers: httpx.Headers | None = None
+    ) -> None:
+        metadata = _http_error_kwargs(status_code, headers)
         if status_code == 401:
-            raise AuthError(message)
+            raise AuthError(message, **metadata)
         if status_code == 429:
-            raise RateLimitError(message)
+            raise RateLimitError(message, **metadata)
         if status_code == 400:
-            raise InvalidRequestError(message)
-        raise ProviderError(message)
+            raise InvalidRequestError(message, **metadata)
+        raise ProviderError(message, **metadata)
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         body: dict[str, Any] = {
@@ -152,7 +165,7 @@ class MinimaxProvider:
             retry_after = response.headers.get("retry-after")
             if retry_after:
                 message = f"Retry-After: {retry_after}\n{message}"
-            self._raise_for_status(response.status_code, message)
+            self._raise_for_status(response.status_code, message, response.headers)
 
         payload = response.json() if response.content else {}
 
@@ -226,7 +239,7 @@ class MinimaxProvider:
                     retry_after = response.headers.get("retry-after")
                     if retry_after:
                         message = f"Retry-After: {retry_after}\n{message}"
-                    self._raise_for_status(response.status_code, message)
+                    self._raise_for_status(response.status_code, message, response.headers)
 
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):

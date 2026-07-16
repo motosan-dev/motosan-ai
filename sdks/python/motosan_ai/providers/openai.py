@@ -8,6 +8,7 @@ import httpx
 
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
+from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
@@ -30,6 +31,15 @@ _FINISH_REASON_TO_STOP = {
     "length": StopReason.max_tokens,
     "tool_calls": StopReason.tool_use,
 }
+
+
+def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, Any]:
+    retry_after = None
+    request_id = None
+    if headers is not None:
+        retry_after = parse_retry_after_header(headers.get("retry-after"))
+        request_id = headers.get("request-id") or headers.get("x-request-id")
+    return {"status_code": status, "retry_after": retry_after, "request_id": request_id}
 
 
 class OpenAIProvider:
@@ -154,12 +164,15 @@ class OpenAIProvider:
         return body
 
     @staticmethod
-    def _map_http_error(status: int, message: str) -> Exception:
+    def _map_http_error(
+        status: int, message: str, headers: httpx.Headers | None = None
+    ) -> Exception:
+        metadata = _http_error_kwargs(status, headers)
         if status == 401:
-            return AuthError(message)
+            return AuthError(message, **metadata)
         if status == 429:
-            return RateLimitError(message)
-        return ProviderError(message)
+            return RateLimitError(message, **metadata)
+        return ProviderError(message, **metadata)
 
     @staticmethod
     def _response_error_message(status: int, headers: httpx.Headers, text: str) -> str:
@@ -178,7 +191,7 @@ class OpenAIProvider:
 
         if not resp.is_success:
             message = self._response_error_message(resp.status_code, resp.headers, resp.text)
-            raise self._map_http_error(resp.status_code, message)
+            raise self._map_http_error(resp.status_code, message, resp.headers)
 
         payload = resp.json()
         choice = (payload.get("choices") or [{}])[0]
@@ -226,7 +239,7 @@ class OpenAIProvider:
                 message = self._response_error_message(
                     resp.status_code, resp.headers, error_body.decode()
                 )
-                raise self._map_http_error(resp.status_code, message)
+                raise self._map_http_error(resp.status_code, message, resp.headers)
 
             # Per-index tool-call tracking (mirrors TS providers/openai.ts):
             # index -> (id, name); only one tool call is open at a time.

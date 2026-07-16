@@ -13,6 +13,7 @@ from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers.gemini import build_gemini_body
+from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import ChatRequest, ChatResponse, StopReason, StreamEvent, Usage
 
 _DEFAULT_BASE_URL = "https://cloudcode-pa.googleapis.com"
@@ -24,6 +25,15 @@ _CLIENT_METADATA = (
 )
 _REQUEST_COUNTER = count()
 _TOOL_CALL_COUNTER = count()
+
+
+def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, Any]:
+    retry_after = None
+    request_id = None
+    if headers is not None:
+        retry_after = parse_retry_after_header(headers.get("retry-after"))
+        request_id = headers.get("request-id") or headers.get("x-request-id")
+    return {"status_code": status, "retry_after": retry_after, "request_id": request_id}
 
 
 def _gen_request_id() -> str:
@@ -186,12 +196,15 @@ class GeminiCodeAssistProvider(BaseProvider):
         }
 
     @staticmethod
-    def _map_http_error(status: int, message: str) -> Exception:
+    def _map_http_error(
+        status: int, message: str, headers: httpx.Headers | None = None
+    ) -> Exception:
+        metadata = _http_error_kwargs(status, headers)
         if status == 401:
-            return AuthError(message)
+            return AuthError(message, **metadata)
         if status == 429:
-            return RateLimitError(message)
-        return ProviderError(message)
+            return RateLimitError(message, **metadata)
+        return ProviderError(message, **metadata)
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         self.validate_request(request)
@@ -209,7 +222,7 @@ class GeminiCodeAssistProvider(BaseProvider):
         try:
             if not resp.is_success:
                 error_body = await resp.aread()
-                raise self._map_http_error(resp.status_code, error_body.decode())
+                raise self._map_http_error(resp.status_code, error_body.decode(), resp.headers)
 
             state = _CodeAssistAdapterState()
             try:

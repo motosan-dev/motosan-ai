@@ -113,7 +113,7 @@ async def test_stream_with_does_not_retry_provider_error_after_yield(monkeypatch
 
     async def gen():
         yield StreamEvent(content="partial", done=False)
-        raise ProviderError("503 server error")  # retryable BY CLASS, but mid-stream
+        raise ProviderError("HTTP 503: server error", status_code=503)  # retryable, but mid-stream
 
     client = Client(provider=Provider.anthropic, max_retries=3)
     provider = _CountingProvider(gen)

@@ -4,7 +4,6 @@ import respx
 
 from motosan_ai.error import AuthError, ProviderError, RateLimitError
 from motosan_ai.providers.gemini import GeminiProvider
-from motosan_ai.retry import _parse_retry_after
 from motosan_ai.types import ChatRequest, Message
 
 
@@ -61,7 +60,7 @@ async def test_retry_after_header_is_preserved_in_error_message(provider):
     )
     with pytest.raises(RateLimitError) as exc:
         await provider.chat(ChatRequest(messages=[Message.user("hi")]))
-    assert _parse_retry_after(str(exc.value)) == 1.5
+    assert exc.value.retry_after == 1.5
 
 
 @respx.mock
