@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { isRetryableNetworkError, isRetryableStatus, parseRetryAfter } from '../src/error.js'
-import { RetryPolicy, withRetry } from '../src/retry.js'
+import { classifyForRetry, RetryPolicy, withRetry, type RetryEvent } from '../src/retry.js'
 
 function retryableByStatusOrNetwork(err: unknown) {
   const status = (err as { status?: number })?.status
@@ -67,39 +67,45 @@ describe('RetryPolicy.delayForAttempt', () => {
   })
 })
 
-describe('RetryPolicy jitter (deterministic)', () => {
-  it('uses attempt-derived deterministic jitter by default', () => {
+describe('RetryPolicy full jitter', () => {
+  it('uses injectable random: delay = random() * expDelay', () => {
+    const policy = new RetryPolicy({ random: () => 0.5 })
+
+    expect(policy.delayForAttempt(1)).toBe(50)
+    expect(policy.delayForAttempt(2)).toBe(100)
+    expect(policy.delayForAttempt(3)).toBe(200)
+    expect(policy.delayForAttempt(6)).toBe(1000)
+  })
+
+  it('random extremes map to 0 and the full exponential delay', () => {
+    const floor = new RetryPolicy({ random: () => 0 })
+    const ceil = new RetryPolicy({ random: () => 1 })
+
+    expect(floor.delayForAttempt(3)).toBe(0)
+    expect(ceil.delayForAttempt(3)).toBe(400)
+    expect(ceil.delayForAttempt(6)).toBe(2000)
+  })
+
+  it('defaults random to Math.random and stays within [0, expDelay]', () => {
     const policy = RetryPolicy.default()
 
-    expect(policy.delayForAttempt(1)).toBe(190)
-    expect(policy.delayForAttempt(2)).toBe(270)
-    expect(policy.delayForAttempt(3)).toBe(720)
+    expect(policy.random).toBe(Math.random)
+    for (let i = 0; i < 200; i += 1) {
+      const first = policy.delayForAttempt(1)
+      expect(first).toBeGreaterThanOrEqual(0)
+      expect(first).toBeLessThanOrEqual(100)
+
+      const capped = policy.delayForAttempt(6)
+      expect(capped).toBeGreaterThanOrEqual(0)
+      expect(capped).toBeLessThanOrEqual(2000)
+    }
   })
 
-  it('same attempt always produces the same jittered delay', () => {
-    const policy = RetryPolicy.default()
-
-    expect(policy.delayForAttempt(2)).toBe(policy.delayForAttempt(2))
-  })
-
-  it('uses integer millisecond jitter like Rust for odd base delays', () => {
-    const policy = new RetryPolicy({ baseDelayMs: 101, maxDelayMs: 10_000 })
-
-    expect(policy.delayForAttempt(1)).toBe(191)
-    expect(policy.delayForAttempt(2)).toBe(272)
-  })
-
-  it('jitter can be disabled', () => {
-    const policy = new RetryPolicy({ jitter: false })
+  it('jitter=false returns the exact exponential delay and ignores random', () => {
+    const policy = new RetryPolicy({ jitter: false, random: () => 0.123 })
 
     expect(policy.delayForAttempt(1)).toBe(100)
     expect(policy.delayForAttempt(2)).toBe(200)
-  })
-
-  it('jittered delay respects maxDelayMs cap', () => {
-    const policy = RetryPolicy.default()
-
-    expect(policy.delayForAttempt(5)).toBeLessThanOrEqual(2000)
     expect(policy.delayForAttempt(6)).toBe(2000)
   })
 })
@@ -292,5 +298,102 @@ describe('withRetry with error.ts classification', () => {
 
     await expect(promise).resolves.toBe('success')
     expect(op).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('withRetry onRetry', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  })
+
+  it('fires before each sleep with attempt, delayMs, cause', async () => {
+    vi.useFakeTimers()
+    const events: RetryEvent[] = []
+    const policy = new RetryPolicy({
+      maxRetries: 3,
+      jitter: false,
+      onRetry: (evt) => events.push(evt),
+    })
+    const op = vi.fn(async (attempt: number) => {
+      if (attempt < 3) {
+        const err = new Error(`boom-${attempt}`) as Error & { status?: number }
+        err.status = 503
+        throw err
+      }
+      return 'ok'
+    })
+    const classify = (err: unknown) => ({
+      retryable: (err as { status?: number }).status === 503,
+    })
+
+    const promise = withRetry(policy, op, classify)
+    await vi.runAllTimersAsync()
+
+    await expect(promise).resolves.toBe('ok')
+    expect(events).toEqual([
+      { attempt: 1, delayMs: 100, cause: 'boom-1' },
+      { attempt: 2, delayMs: 200, cause: 'boom-2' },
+    ])
+  })
+
+  it('reports verbatim retryAfterMs as delayMs even with jitter enabled', async () => {
+    vi.useFakeTimers()
+    const events: RetryEvent[] = []
+    const policy = new RetryPolicy({ onRetry: (evt) => events.push(evt) })
+    const op = vi.fn(async (attempt: number) => {
+      if (attempt === 1) {
+        throw new Error('throttled')
+      }
+      return 'ok'
+    })
+    const classify = () => ({ retryable: true, retryAfterMs: 500 })
+
+    const promise = withRetry(policy, op, classify)
+    await vi.runAllTimersAsync()
+
+    await expect(promise).resolves.toBe('ok')
+    expect(events).toEqual([{ attempt: 1, delayMs: 500, cause: 'throttled' }])
+  })
+
+  it('does not fire for non-retryable errors', async () => {
+    const events: RetryEvent[] = []
+    const policy = new RetryPolicy({ onRetry: (evt) => events.push(evt) })
+    const op = vi.fn(async () => {
+      throw new Error('fatal')
+    })
+
+    await expect(withRetry(policy, op, () => ({ retryable: false }))).rejects.toThrow('fatal')
+    expect(events).toEqual([])
+  })
+})
+
+describe('classifyForRetry', () => {
+  it('classifies retryable-status errors and carries retryAfterMs', () => {
+    const err = new Error('rate limited') as Error & { status?: number; retryAfterMs?: number }
+    err.status = 429
+    err.retryAfterMs = 1500
+    expect(classifyForRetry(err)).toEqual({ retryable: true, retryAfterMs: 1500 })
+  })
+
+  it('returns retryable:false for non-retryable statuses without throwing', () => {
+    const err = new Error('bad request') as Error & { status?: number }
+    err.status = 400
+    expect(classifyForRetry(err)).toEqual({ retryable: false })
+  })
+
+  it('classifies retryable network errors', () => {
+    const err = new Error('refused') as Error & { code?: string }
+    err.code = 'ECONNREFUSED'
+    expect(classifyForRetry(err).retryable).toBe(true)
+  })
+
+  it('accepts a bare numeric status', () => {
+    expect(classifyForRetry(503)).toEqual({ retryable: true })
+    expect(classifyForRetry(404)).toEqual({ retryable: false })
+  })
+
+  it('treats non-Error, non-number values as not retryable', () => {
+    expect(classifyForRetry('boom')).toEqual({ retryable: false })
   })
 })

@@ -8,12 +8,12 @@
  * the Python mid-stream `StreamError` raise).
  */
 
-import { StreamError, isRetryableNetworkError, isRetryableStatus } from '../error.js'
+import { StreamError } from '../error.js'
 import { postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
 import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { RetryPolicy } from '../retry.js'
+import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   collectStream,
   doneEvent,
@@ -222,28 +222,13 @@ export class ChatGptCodexProvider {
     const body = this.buildResponsesBody(request, model)
     const headers = this.headers()
 
-    // Retry ONLY the initial fetch (mirrors anthropic.ts:259-288 / ollama.ts:300-321).
-    let attempt = 0
-    let responseBody: ReadableStream<Uint8Array>
-    while (true) {
-      try {
-        responseBody = await postStream(this.baseUrl, headers, body)
-        break
-      } catch (error) {
-        const status = (error as { status?: number }).status
-        const retryable =
-          (status !== undefined && isRetryableStatus(status)) || isRetryableNetworkError(error)
-        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
-          throw error
-        }
-        attempt += 1
-        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
-        const delay = this.retryPolicy.respectRetryAfter
-          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
-          : this.retryPolicy.delayForAttempt(attempt)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    }
+    // Retry ONLY the initial fetch via the shared engine (same guard as the
+    // other providers: nothing is retried after the first emitted event).
+    const responseBody = await withRetry(
+      this.retryPolicy,
+      async () => postStream(this.baseUrl, headers, body),
+      classifyForRetry,
+    )
 
     // Only `sawToolCall` drives the terminal stop_reason (parity with Rust/Python,
     // which also track a seen-ids set that is write-only — dropped here per plan R1).

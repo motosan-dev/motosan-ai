@@ -1,14 +1,9 @@
-import {
-  isRetryableNetworkError,
-  isRetryableStatus,
-  ProviderError,
-  StreamError,
-} from '../error.js'
+import { ProviderError, StreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
 import { fullCaps, type ProviderCapabilities } from '../provider.js'
-import { RetryPolicy, withRetry, type RetryClassification } from '../retry.js'
+import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
@@ -142,21 +137,6 @@ interface StreamState {
   stopReason?: StopReason
 }
 
-function classifyHttpError(result: unknown): RetryClassification {
-  if (result instanceof Error) {
-    const error = result as { status?: number; retryAfterMs?: number }
-    const status = error.status
-    if (
-      (status !== undefined && isRetryableStatus(status)) ||
-      isRetryableNetworkError(result)
-    ) {
-      return { retryable: true, retryAfterMs: error.retryAfterMs }
-    }
-    throw result
-  }
-  return { retryable: false }
-}
-
 export class AnthropicProvider {
   private readonly model: string
   private readonly baseUrl: string
@@ -218,7 +198,7 @@ export class AnthropicProvider {
     const payload = await withRetry(
       this.retryPolicy,
       async () => postJson<any>(`${this.baseUrl}/v1/messages`, headers, body),
-      classifyHttpError,
+      classifyForRetry,
     )
 
     const blocks: any[] = Array.isArray(payload?.content) ? payload.content : []
@@ -265,28 +245,15 @@ export class AnthropicProvider {
     }
     const body = isSetupToken(this.apiKey) ? withOAuthSystemIdentity(serialized) : serialized
     const headers = this.requestHeaders(request, body)
-    let attempt = 0
-    let responseBody: ReadableStream<Uint8Array>
-    while (true) {
-      try {
-        responseBody = await postStream(`${this.baseUrl}/v1/messages`, headers, body)
-        break
-      } catch (error) {
-        const status = (error as { status?: number }).status
-        const retryable =
-          (status !== undefined && isRetryableStatus(status)) ||
-          isRetryableNetworkError(error)
-        if (!retryable || attempt >= this.retryPolicy.maxRetries) {
-          throw error
-        }
-        attempt += 1
-        const retryAfterMs = (error as { retryAfterMs?: number }).retryAfterMs
-        const delay = this.retryPolicy.respectRetryAfter
-          ? retryAfterMs ?? this.retryPolicy.delayForAttempt(attempt)
-          : this.retryPolicy.delayForAttempt(attempt)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
-    }
+    // Retry ONLY the initial fetch. parseSse below runs outside withRetry, so
+    // nothing is retried after the first emitted event (pinned by
+    // tests/retry-integration.test.ts "does not retry after the response body
+    // has been returned").
+    const responseBody = await withRetry(
+      this.retryPolicy,
+      async () => postStream(`${this.baseUrl}/v1/messages`, headers, body),
+      classifyForRetry,
+    )
 
     const state: StreamState = {}
 

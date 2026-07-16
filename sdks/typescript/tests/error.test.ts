@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   StreamReadTimeoutError,
   UnsupportedFeatureError,
@@ -6,6 +6,8 @@ import {
   isRetryableNetworkError,
   parseRetryAfter,
   extractErrorMessage,
+  mapHttpError,
+  RETRY_AFTER_CAP_MS,
 } from '../src/error.js'
 
 describe('StreamReadTimeoutError', () => {
@@ -40,7 +42,12 @@ describe('isRetryableStatus', () => {
     expect(isRetryableStatus(599)).toBe(true)
   })
 
-  it('returns false for 401, 400, 404, 4xx (except 429)', () => {
+  it('returns true for 408 (request timeout) and 409 (conflict)', () => {
+    expect(isRetryableStatus(408)).toBe(true)
+    expect(isRetryableStatus(409)).toBe(true)
+  })
+
+  it('returns false for 401, 400, 404, 4xx (except 408/409/429)', () => {
     expect(isRetryableStatus(401)).toBe(false)
     expect(isRetryableStatus(400)).toBe(false)
     expect(isRetryableStatus(404)).toBe(false)
@@ -126,9 +133,58 @@ describe('parseRetryAfter', () => {
     expect(result).toBe(0)
   })
 
-  it('handles large numbers', () => {
+  it('caps integer seconds above 60 at RETRY_AFTER_CAP_MS', () => {
     const result = parseRetryAfter('3600')
-    expect(result).toBe(3600000) // 1 hour in milliseconds
+    expect(result).toBe(RETRY_AFTER_CAP_MS) // 1 hour requested, capped to 60s
+  })
+})
+
+describe('parseRetryAfter HTTP-date form (RFC 7231)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('parses a future HTTP-date into a millisecond delay', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const future = new Date(Date.now() + 30_000).toUTCString() // Wed, 15 Jul 2026 12:00:30 GMT
+    expect(parseRetryAfter(future)).toBe(30_000)
+  })
+
+  it('clamps a past HTTP-date to 0', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const past = new Date(Date.now() - 45_000).toUTCString()
+    expect(parseRetryAfter(past)).toBe(0)
+  })
+
+  it('caps an HTTP-date more than 60s ahead at RETRY_AFTER_CAP_MS', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-15T12:00:00Z'))
+    const farFuture = new Date(Date.now() + 120_000).toUTCString()
+    expect(parseRetryAfter(farFuture)).toBe(RETRY_AFTER_CAP_MS)
+  })
+
+  it('exports RETRY_AFTER_CAP_MS as 60000', () => {
+    expect(RETRY_AFTER_CAP_MS).toBe(60_000)
+  })
+
+  it('returns undefined for strings that are neither integer nor date', () => {
+    expect(parseRetryAfter('not-a-date')).toBeUndefined()
+  })
+})
+
+describe('mapHttpError requestId', () => {
+  it('populates requestId when provided', () => {
+    const error = mapHttpError(429, 'rate limited', '2', 'req_abc123')
+    expect(error.requestId).toBe('req_abc123')
+    expect(error.status).toBe(429)
+    expect(error.retryAfterMs).toBe(2000)
+  })
+
+  it('leaves requestId undefined when absent or null', () => {
+    expect(mapHttpError(500, 'server error').requestId).toBeUndefined()
+    expect(mapHttpError(500, 'server error', null, null).requestId).toBeUndefined()
   })
 })
 

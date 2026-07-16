@@ -1,6 +1,7 @@
 export class MotosanError extends Error {
   status?: number
   retryAfterMs?: number
+  requestId?: string
 }
 export class AuthError extends MotosanError {}
 export class RateLimitError extends MotosanError {}
@@ -39,6 +40,7 @@ export function mapHttpError(
   status: number,
   message: string,
   retryAfter?: string | null,
+  requestId?: string | null,
 ): MotosanError {
   const error =
     status === 401
@@ -53,17 +55,21 @@ export function mapHttpError(
   if (retryAfterMs !== undefined) {
     error.retryAfterMs = retryAfterMs
   }
+  if (requestId) {
+    error.requestId = requestId
+  }
   return error
 }
 
 /**
  * Determine if an HTTP status code is retryable.
- * Retryable statuses: 429 (rate limit) or >= 500 (server error).
+ * Retryable statuses: 408 (request timeout), 409 (conflict),
+ * 429 (rate limit), or >= 500 (server error).
  *
- * Mirrors Rust `is_retryable_status`.
+ * Mirrors Rust `is_retryable_status`. See specs/retry.md.
  */
 export function isRetryableStatus(status: number): boolean {
-  return status === 429 || status >= 500
+  return status === 408 || status === 409 || status === 429 || status >= 500
 }
 
 /**
@@ -101,11 +107,18 @@ export function isRetryableNetworkError(error: unknown): boolean {
   return false
 }
 
+/** Cap applied to any parsed Retry-After value (specs/retry.md: RETRY_AFTER_CAP_SECS = 60). */
+export const RETRY_AFTER_CAP_MS = 60_000
+
 /**
- * Parse the Retry-After header value (integer seconds) into milliseconds.
+ * Parse the Retry-After header value into milliseconds.
  *
- * Returns undefined if the header is null, empty, or contains a non-integer value.
- * Mirrors Rust `parse_retry_after`: trim, parse as u64 seconds, convert to ms.
+ * Accepts both RFC 7231 forms:
+ * - delay-seconds (e.g. "30") -> seconds * 1000
+ * - HTTP-date (e.g. "Wed, 15 Jul 2026 12:00:30 GMT") -> date minus now
+ *
+ * The result is clamped to [0, RETRY_AFTER_CAP_MS]. Returns undefined if the
+ * header is null, empty, or unparseable. Mirrors Rust `parse_retry_after`.
  */
 export function parseRetryAfter(headerValue: string | null): number | undefined {
   if (headerValue === null) {
@@ -113,11 +126,24 @@ export function parseRetryAfter(headerValue: string | null): number | undefined 
   }
 
   const trimmed = headerValue.trim()
-  if (!/^\d+$/.test(trimmed)) {
-    return undefined
+
+  // delay-seconds form
+  if (/^\d+$/.test(trimmed)) {
+    return Math.min(Number(trimmed) * 1000, RETRY_AFTER_CAP_MS)
   }
 
-  return Number(trimmed) * 1000
+  // HTTP-date form. Every RFC 7231 date contains letters (month name, "GMT");
+  // requiring one keeps numeric junk like "-5" or "30.5" out of Date.parse,
+  // which would otherwise interpret them as calendar dates (Node parses
+  // "-5" as a valid date). Matches Rust rfc2822 / Python parsedate behavior.
+  if (!/[A-Za-z]/.test(trimmed)) {
+    return undefined
+  }
+  const parsedMs = Date.parse(trimmed)
+  if (Number.isNaN(parsedMs)) {
+    return undefined
+  }
+  return Math.max(0, Math.min(parsedMs - Date.now(), RETRY_AFTER_CAP_MS))
 }
 
 /**
