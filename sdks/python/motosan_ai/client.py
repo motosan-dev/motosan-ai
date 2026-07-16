@@ -8,7 +8,7 @@ from dataclasses import replace
 from enum import StrEnum
 from typing import Any
 
-from motosan_ai.error import ConfigError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderError, RateLimitError
 from motosan_ai.providers import (
     AnthropicProvider,
     ChatGptCodexProvider,
@@ -19,6 +19,7 @@ from motosan_ai.providers import (
     MinimaxProvider,
     OpenAIProvider,
 )
+from motosan_ai.retry import RetryPolicy
 from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
@@ -72,11 +73,15 @@ class Client:
         ollama_keep_alive: str | None = None,
         ollama_num_ctx: int | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> None:
         provider_value = Provider(provider)
         self.provider = provider_value
         self.model = model
-        self._max_retries = max_retries
+        self._retry_policy = (
+            retry_policy if retry_policy is not None else RetryPolicy(max_retries=max_retries)
+        )
+        self._max_retries = self._retry_policy.max_retries
 
         if provider_value == Provider.gemini_code_assist:
             if not access_token:
@@ -152,9 +157,14 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
-            provider=Provider.anthropic, api_key=api_key, model=model, max_retries=max_retries
+            provider=Provider.anthropic,
+            api_key=api_key,
+            model=model,
+            max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -163,8 +173,15 @@ class Client:
         api_key: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
-        return cls(provider=Provider.openai, api_key=api_key, model=model, max_retries=max_retries)
+        return cls(
+            provider=Provider.openai,
+            api_key=api_key,
+            model=model,
+            max_retries=max_retries,
+            retry_policy=retry_policy,
+        )
 
     @classmethod
     def gemini(
@@ -173,6 +190,7 @@ class Client:
         model: str | None = None,
         base_url: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.gemini,
@@ -180,6 +198,7 @@ class Client:
             model=model,
             base_url=base_url,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -190,6 +209,7 @@ class Client:
         model: str | None = None,
         base_url: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.gemini_code_assist,
@@ -198,6 +218,7 @@ class Client:
             model=model,
             base_url=base_url,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -209,6 +230,7 @@ class Client:
         base_url: str | None = None,
         reasoning_effort: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.openai_chatgpt,
@@ -218,6 +240,7 @@ class Client:
             base_url=base_url,
             reasoning_effort=reasoning_effort,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -227,6 +250,7 @@ class Client:
         model: str | None = None,
         base_url: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.minimax,
@@ -234,6 +258,7 @@ class Client:
             model=model,
             base_url=base_url,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -242,12 +267,14 @@ class Client:
         binary_path: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.codex_cli,
             binary_path=binary_path,
             model=model,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -256,12 +283,14 @@ class Client:
         binary_path: str | None = None,
         model: str | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.gemini_cli,
             binary_path=binary_path,
             model=model,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @classmethod
@@ -275,6 +304,7 @@ class Client:
         keep_alive: str | None = None,
         num_ctx: int | None = None,
         max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
     ) -> Client:
         return cls(
             provider=Provider.ollama,
@@ -285,6 +315,7 @@ class Client:
             ollama_keep_alive=keep_alive,
             ollama_num_ctx=num_ctx,
             max_retries=max_retries,
+            retry_policy=retry_policy,
         )
 
     @staticmethod
@@ -328,12 +359,12 @@ class Client:
         if request.model is None and self.model is not None:
             request = replace(request, model=self.model)
 
-        if self._max_retries > 0:
+        if self._retry_policy.max_retries > 0:
             from motosan_ai.retry import with_retry
 
             return await with_retry(
                 lambda: self._provider.chat(request),
-                max_retries=self._max_retries,
+                policy=self._retry_policy,
             )
         return await self._provider.chat(request)
 
@@ -366,8 +397,9 @@ class Client:
         if request.model is None and self.model is not None:
             request = replace(request, model=self.model)
 
-        last_error: RateLimitError | None = None
-        max_attempts = self._max_retries + 1 if self._max_retries > 0 else 1
+        policy = self._retry_policy
+        last_error: MotosanError | None = None
+        max_attempts = policy.max_retries + 1 if policy.max_retries > 0 else 1
         for attempt in range(max_attempts):
             yielded = False
             try:
@@ -388,7 +420,12 @@ class Client:
                         yield event
                 return
             except (RateLimitError, NetworkError, ProviderError) as e:
-                from motosan_ai.retry import RetryPolicy, _is_retryable, compute_delay
+                from motosan_ai.retry import (
+                    RetryEvent,
+                    _is_retryable,
+                    compute_delay,
+                    retry_cause,
+                )
 
                 # F1: once the stream has emitted any event, a mid-stream error
                 # must propagate verbatim — retrying would replay a partially
@@ -397,17 +434,17 @@ class Client:
                 if yielded or not _is_retryable(e):
                     raise
                 last_error = e
-                if attempt >= self._max_retries:
+                if attempt >= policy.max_retries:
                     break
-                wait = compute_delay(
-                    RetryPolicy(max_retries=self._max_retries),
-                    attempt + 1,
-                    e.retry_after,
-                )
+                wait = compute_delay(policy, attempt + 1, e.retry_after)
+                if policy.on_retry is not None:
+                    policy.on_retry(
+                        RetryEvent(attempt=attempt + 1, delay=wait, cause=retry_cause(e))
+                    )
                 logger.warning(
                     "Retryable stream error (attempt %d/%d), retrying in %.1fs: %s",
                     attempt + 1,
-                    self._max_retries,
+                    policy.max_retries,
                     wait,
                     type(e).__name__,
                 )
