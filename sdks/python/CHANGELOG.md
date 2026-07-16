@@ -2,6 +2,19 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [0.16.0] - 2026-07-16
+
+### Added
+- `MotosanError` gains keyword-only `status_code`, `retry_after`, `request_id` attributes (default `None`); subclasses inherit them, providers populate them at raise sites, and `request_id` comes from the `request-id` / `x-request-id` response headers. Additive — the M1 `"HTTP {status}: ..."` message prefixes remain.
+- `RetryPolicy` dataclass in `motosan_ai.retry` (`max_retries=3`, `base_delay=0.1`, `max_delay=2.0`, `jitter=True`, `respect_retry_after=True`, `on_retry=None`); `with_retry(fn, policy=...)` accepts it and the old kwargs keep working. `Client` threads a policy through both chat and stream paths; the stream path's hand-rolled backoff now uses the shared policy math.
+- `on_retry` observer: `RetryEvent(attempt, delay, cause)` fired before each retry sleep.
+- Cross-SDK `specs/retry.md` conformance suite: `tests/test_retry_conformance.py`.
+
+### Changed
+- Retry classification is attribute-based: `RateLimitError` / `NetworkError` always retryable; `ProviderError` retryable when `status_code` is 408, 409, or ≥500. The `\b5\d{2}\b` message regex and message-scraped `Retry-After` parsing are removed — the delay now comes from `error.retry_after`.
+- `Retry-After` accepts integer-seconds and HTTP-date forms (`email.utils.parsedate_to_datetime`), clamped to [0, 60 s], used verbatim (no jitter).
+- Full jitter from an injectable `rng` callable (default `random.random`) replaces the deterministic LCG jitter.
+
 ## [0.15.0] - 2026-07-15
 
 ### Fixed

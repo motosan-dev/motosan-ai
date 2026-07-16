@@ -4,6 +4,20 @@ All notable changes to `@motosan-ai/sdk` TypeScript SDK are documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.13.0] - 2026-07-16
+
+### Added
+- `MotosanError.requestId?: string`, populated by `mapHttpError` from the `request-id` / `x-request-id` response headers.
+- `RetryPolicyOptions.onRetry?: (evt: RetryEvent) => void` with `RetryEvent { attempt: number; delayMs: number; cause: string }` — fires before each retry sleep.
+- `RetryPolicyOptions.random?: () => number` — injectable RNG for jitter (default `Math.random`).
+- Cross-SDK `specs/retry.md` conformance suite: `tests/retry-conformance.test.ts`.
+
+### Changed
+- Retry classification adds 408 and 409: retry on 408 / 409 / 429 / ≥500 plus fetch transport errors (`AbortError` / `TypeError` / `ECONNREFUSED` / `ENOTFOUND` / `ETIMEDOUT`); never on other 4xx.
+- `Retry-After` accepts HTTP-date alongside integer-seconds, clamped to [0, 60 s], used verbatim (no jitter).
+- Full jitter from the injectable RNG replaces the deterministic LCG in `delayForAttempt`.
+- Provider chat/stream retry loops collapsed onto the shared retry helper.
+
 ## [0.12.0] - 2026-07-15
 
 ### Fixed
