@@ -13,10 +13,13 @@ async function throwMappedError(response: Response): Promise<never> {
     payload = text
   }
   const message = extractErrorMessage(payload, `HTTP ${response.status}`)
+  const requestId =
+    response.headers?.get('request-id') ?? response.headers?.get('x-request-id') ?? null
   throw mapHttpError(
     response.status,
     message,
     response.headers?.get('retry-after') ?? null,
+    requestId,
   )
 }
 

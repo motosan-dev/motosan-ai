@@ -84,6 +84,34 @@ describe('http/fetch', () => {
       ).rejects.toThrow(ProviderError)
     })
 
+    it('attaches requestId from the request-id response header', async () => {
+      const mockResponse = {
+        ok: false,
+        status: 429,
+        text: vi.fn().mockResolvedValue(JSON.stringify({ error: { message: 'rate limited' } })),
+        headers: new Headers({ 'request-id': 'req_primary', 'x-request-id': 'req_fallback' }),
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse))
+
+      await expect(
+        postJson('https://api.test.com/v1/messages', {}, { test: true }),
+      ).rejects.toMatchObject({ requestId: 'req_primary' })
+    })
+
+    it('falls back to the x-request-id header when request-id is absent', async () => {
+      const mockResponse = {
+        ok: false,
+        status: 500,
+        text: vi.fn().mockResolvedValue('oops'),
+        headers: new Headers({ 'x-request-id': 'req_fallback' }),
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(mockResponse))
+
+      await expect(
+        postJson('https://api.test.com/v1/messages', {}, { test: true }),
+      ).rejects.toMatchObject({ requestId: 'req_fallback' })
+    })
+
     it('falls back to "HTTP <status>" when the body has no error message', async () => {
       const mockResponse = {
         ok: false,
