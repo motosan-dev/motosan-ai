@@ -30,7 +30,7 @@ pub use models::{
 };
 pub use motosan_agent_primitives::ToolSchema;
 pub use providers::Provider;
-pub use retry::RetryPolicy;
+pub use retry::{RetryCause, RetryEvent, RetryPolicy};
 #[cfg(any(
     feature = "anthropic",
     feature = "openai",

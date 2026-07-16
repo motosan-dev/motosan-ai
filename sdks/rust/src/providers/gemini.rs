@@ -1138,6 +1138,7 @@ mod tests {
                 max_delay_ms: 10,
                 jitter: false,
                 respect_retry_after: false,
+                on_retry: None,
             };
             let provider =
                 GeminiProvider::new("fake-key", None, Some(server.url())).with_retry_policy(policy);
