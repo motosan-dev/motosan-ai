@@ -388,12 +388,7 @@ class Client:
                         yield event
                 return
             except (RateLimitError, NetworkError, ProviderError) as e:
-                from motosan_ai.retry import (
-                    DEFAULT_INITIAL_BACKOFF,
-                    DEFAULT_MAX_BACKOFF,
-                    _is_retryable,
-                    _parse_retry_after,
-                )
+                from motosan_ai.retry import RetryPolicy, _is_retryable, compute_delay
 
                 # F1: once the stream has emitted any event, a mid-stream error
                 # must propagate verbatim — retrying would replay a partially
@@ -404,12 +399,10 @@ class Client:
                 last_error = e
                 if attempt >= self._max_retries:
                     break
-                retry_after = _parse_retry_after(str(e))
-                wait = min(
-                    retry_after
-                    if retry_after is not None
-                    else DEFAULT_INITIAL_BACKOFF * (2**attempt),
-                    DEFAULT_MAX_BACKOFF,
+                wait = compute_delay(
+                    RetryPolicy(max_retries=self._max_retries),
+                    attempt + 1,
+                    e.retry_after,
                 )
                 logger.warning(
                     "Retryable stream error (attempt %d/%d), retrying in %.1fs: %s",

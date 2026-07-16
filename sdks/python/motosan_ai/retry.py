@@ -1,23 +1,23 @@
-"""Retry logic with exponential backoff for transient errors.
+"""Retry engine with full-jitter exponential backoff.
 
-Aligned with Rust SDK behavior:
-- Retries on RateLimitError (429) and ProviderError (5xx)
-- Retries on NetworkError (timeout, connection)
-- Exponential backoff: 100ms, 200ms, 400ms... capped at 2s
-- Respects Retry-After header
+- Classification is attribute-based: RateLimitError, NetworkError, and
+  ProviderError with status 408/409/5xx retry.
+- Backoff is full jitter: uniform(0, min(base_delay * 2**(attempt-1), max_delay)).
+- error.retry_after is used verbatim with no jitter and a 60s hard cap.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import re
+import random
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import TypeVar
 
-from motosan_ai.error import NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import MotosanError, NetworkError, ProviderError, RateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +27,6 @@ DEFAULT_MAX_RETRIES = 3
 DEFAULT_INITIAL_BACKOFF = 0.1  # seconds (aligned with Rust: 100ms)
 DEFAULT_MAX_BACKOFF = 2.0  # seconds (aligned with Rust: 2000ms)
 RETRY_AFTER_CAP_SECS = 60.0
-
-# 5xx status codes in error messages
-_STATUS_5XX_RE = re.compile(r"\b5\d{2}\b")
 
 
 def parse_retry_after_header(value: str | None) -> float | None:
@@ -58,26 +55,60 @@ def parse_retry_after_header(value: str | None) -> float | None:
     return min(max(seconds, 0.0), RETRY_AFTER_CAP_SECS)
 
 
-def _parse_retry_after(error_message: str) -> float | None:
-    """Try to extract Retry-After seconds from error message."""
-    match = re.search(r"[Rr]etry[- ][Aa]fter[:\s]+(\d+\.?\d*)", error_message)
-    if match:
-        return float(match.group(1))
-    return None
+@dataclass
+class RetryEvent:
+    """Passed to RetryPolicy.on_retry before each retry sleep."""
+
+    attempt: int
+    delay: float
+    cause: str
+
+
+@dataclass
+class RetryPolicy:
+    """Cross-SDK retry policy."""
+
+    max_retries: int = DEFAULT_MAX_RETRIES
+    base_delay: float = DEFAULT_INITIAL_BACKOFF
+    max_delay: float = DEFAULT_MAX_BACKOFF
+    jitter: bool = True
+    respect_retry_after: bool = True
+    on_retry: Callable[[RetryEvent], None] | None = None
 
 
 def _is_retryable(error: Exception) -> bool:
-    """Check if an error is retryable (aligned with Rust is_retryable_status + is_retryable_network_error)."""
+    """Check whether an error is retryable using structured metadata."""
     if isinstance(error, RateLimitError):
         return True
     if isinstance(error, NetworkError):
         return True
     if isinstance(error, ProviderError):
-        # Retry on 5xx errors (server errors)
-        msg = str(error)
-        if _STATUS_5XX_RE.search(msg):
-            return True
+        status_code = error.status_code or 0
+        return error.status_code in {408, 409} or status_code >= 500
     return False
+
+
+def retry_cause(error: Exception) -> str:
+    """Render a stable RetryEvent cause tag."""
+    if isinstance(error, NetworkError):
+        return f"network:{error}"
+    status_code = getattr(error, "status_code", None)
+    if status_code is not None:
+        return f"status:{status_code}"
+    return type(error).__name__
+
+
+def compute_delay(
+    policy: RetryPolicy,
+    attempt: int,
+    retry_after: float | None = None,
+    rng: Callable[[], float] = random.random,
+) -> float:
+    """Compute seconds to sleep before retry number attempt, which is 1-based."""
+    if policy.respect_retry_after and retry_after is not None:
+        return min(retry_after, RETRY_AFTER_CAP_SECS)
+    exp_delay = min(policy.base_delay * (2 ** (attempt - 1)), policy.max_delay)
+    return rng() * exp_delay if policy.jitter else exp_delay
 
 
 async def with_retry(
@@ -85,32 +116,41 @@ async def with_retry(
     max_retries: int = DEFAULT_MAX_RETRIES,
     initial_backoff: float = DEFAULT_INITIAL_BACKOFF,
     max_backoff: float = DEFAULT_MAX_BACKOFF,
+    *,
+    policy: RetryPolicy | None = None,
+    rng: Callable[[], float] = random.random,
 ) -> T:
     """Execute fn with retry on transient errors.
 
-    Retries on: RateLimitError (429), NetworkError, ProviderError (5xx).
-    Backoff: initial_backoff * 2^attempt capped at max_backoff.
-    Uses Retry-After header value if present in the error message.
+    The legacy positional params remain in their original order. When policy is
+    provided, policy values take precedence over the legacy params.
     """
+    if policy is None:
+        policy = RetryPolicy(
+            max_retries=max_retries,
+            base_delay=initial_backoff,
+            max_delay=max_backoff,
+        )
+
     last_error: Exception | None = None
-    for attempt in range(max_retries + 1):
+    for attempt in range(policy.max_retries + 1):
         try:
             return await fn()
         except Exception as e:
             if not _is_retryable(e):
                 raise
             last_error = e
-            if attempt >= max_retries:
+            if attempt >= policy.max_retries:
                 break
-            retry_after = _parse_retry_after(str(e))
-            if retry_after is not None:
-                wait = min(retry_after, max_backoff)
-            else:
-                wait = min(initial_backoff * (2**attempt), max_backoff)
+            retry_number = attempt + 1
+            retry_after = e.retry_after if isinstance(e, MotosanError) else None
+            wait = compute_delay(policy, retry_number, retry_after, rng)
+            if policy.on_retry is not None:
+                policy.on_retry(RetryEvent(attempt=retry_number, delay=wait, cause=retry_cause(e)))
             logger.warning(
-                "Retryable error (attempt %d/%d), retrying in %.1fs: %s",
-                attempt + 1,
-                max_retries,
+                "Retryable error (attempt %d/%d), retrying in %.2fs: %s",
+                retry_number,
+                policy.max_retries,
                 wait,
                 type(e).__name__,
             )
