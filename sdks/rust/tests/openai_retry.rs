@@ -326,10 +326,12 @@ async fn openai_chat_fires_on_retry_observer_on_503_then_200() {
         .expect("should retry once and succeed");
 
     assert_eq!(response.content, "ok");
-    let events = events.lock().unwrap();
-    assert_eq!(events.len(), 1, "on_retry must fire exactly once");
-    assert_eq!(events[0].attempt, 1);
-    assert!(matches!(events[0].cause, RetryCause::Status(503)));
+    // Drain the recorded events into a local before any `.await` so the
+    // MutexGuard is not held across an await point (clippy::await_holding_lock).
+    let recorded: Vec<RetryEvent> = std::mem::take(&mut *events.lock().unwrap());
+    assert_eq!(recorded.len(), 1, "on_retry must fire exactly once");
+    assert_eq!(recorded[0].attempt, 1);
+    assert!(matches!(recorded[0].cause, RetryCause::Status(503)));
     unavailable.assert_async().await;
     success.assert_async().await;
 }
