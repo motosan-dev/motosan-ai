@@ -33,13 +33,15 @@ async fn anthropic_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("401 should fail");
-    assert!(matches!(err, MotosanError::Auth(_)));
+    assert!(matches!(err, MotosanError::Auth { .. }));
     unauthorized.assert_async().await;
 
     server.reset();
     let rate_limited = server
         .mock("POST", "/v1/messages")
         .with_status(429)
+        .with_header("retry-after", "7")
+        .with_header("request-id", "req_abc")
         .with_body(json!({"error": {"message": "too many"}}).to_string())
         .create_async()
         .await;
@@ -47,7 +49,11 @@ async fn anthropic_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("429 should fail");
-    assert!(matches!(err, MotosanError::RateLimit(_)));
+    assert!(matches!(err, MotosanError::RateLimit { .. }));
+    assert_eq!(err.status_code(), Some(429));
+    assert_eq!(err.retry_after(), Some(std::time::Duration::from_secs(7)));
+    assert_eq!(err.request_id(), Some("req_abc"));
+    assert_eq!(err.to_string(), "rate limit error: too many");
     rate_limited.assert_async().await;
 
     server.reset();
@@ -61,7 +67,7 @@ async fn anthropic_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("500 should fail");
-    assert!(matches!(err, MotosanError::ProviderError(_)));
+    assert!(matches!(err, MotosanError::ProviderError { .. }));
     provider_error.assert_async().await;
 }
 
@@ -83,7 +89,7 @@ async fn openai_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("401 should fail");
-    assert!(matches!(err, MotosanError::Auth(_)));
+    assert!(matches!(err, MotosanError::Auth { .. }));
     unauthorized.assert_async().await;
 
     server.reset();
@@ -97,7 +103,7 @@ async fn openai_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("429 should fail");
-    assert!(matches!(err, MotosanError::RateLimit(_)));
+    assert!(matches!(err, MotosanError::RateLimit { .. }));
     rate_limited.assert_async().await;
 
     server.reset();
@@ -111,7 +117,7 @@ async fn openai_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("500 should fail");
-    assert!(matches!(err, MotosanError::ProviderError(_)));
+    assert!(matches!(err, MotosanError::ProviderError { .. }));
     provider_error.assert_async().await;
 }
 
@@ -137,7 +143,7 @@ async fn minimax_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("401 should fail");
-    assert!(matches!(err, MotosanError::Auth(_)));
+    assert!(matches!(err, MotosanError::Auth { .. }));
     unauthorized.assert_async().await;
 
     server.reset();
@@ -151,7 +157,7 @@ async fn minimax_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("429 should fail");
-    assert!(matches!(err, MotosanError::RateLimit(_)));
+    assert!(matches!(err, MotosanError::RateLimit { .. }));
     rate_limited.assert_async().await;
 
     server.reset();
@@ -165,6 +171,6 @@ async fn minimax_maps_401_429_500() {
         .chat(sample_request())
         .await
         .expect_err("500 should fail");
-    assert!(matches!(err, MotosanError::ProviderError(_)));
+    assert!(matches!(err, MotosanError::ProviderError { .. }));
     provider_error.assert_async().await;
 }

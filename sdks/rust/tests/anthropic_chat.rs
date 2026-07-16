@@ -158,7 +158,7 @@ async fn anthropic_setup_token_401_includes_actionable_hint() {
         .build();
     let err = provider.chat(request).await.expect_err("should fail");
 
-    assert!(matches!(err, MotosanError::Auth(_)));
+    assert!(matches!(err, MotosanError::Auth { .. }));
     assert!(format!("{err}").contains("oauth-2025-04-20"));
     mock.assert_async().await;
 }

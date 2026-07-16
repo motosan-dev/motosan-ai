@@ -299,7 +299,7 @@ async fn openai_stream_maps_structured_error_payload() {
         .build();
 
     let result = provider.stream(request).await;
-    assert!(matches!(result, Err(MotosanError::Auth(_))));
+    assert!(matches!(result, Err(MotosanError::Auth { .. })));
     mock.assert_async().await;
 }
 
@@ -371,6 +371,50 @@ async fn openai_chat_can_fallback_to_responses_api_on_404() {
     assert_eq!(response.content, "fallback response");
     assert_eq!(response.usage.input_tokens, 5);
     assert_eq!(response.usage.output_tokens, 3);
+    responses_mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_responses_fallback_non_json_error_preserves_http_metadata() {
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", "/v1/chat/completions")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(404)
+        .with_body(json!({"error": {"message": "not found"}}).to_string())
+        .create_async()
+        .await;
+
+    let responses_mock = server
+        .mock("POST", "/v1/responses")
+        .match_header("authorization", "Bearer test-key")
+        .with_status(503)
+        .with_header("retry-after", "7")
+        .with_header("request-id", "resp_req")
+        .with_body("upstream unavailable")
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_responses_url(format!("{}/v1/responses", server.url()))
+        .with_responses_fallback(true);
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let err = provider
+        .chat(request)
+        .await
+        .expect_err("non-JSON Responses API 503 should fail");
+    assert!(matches!(err, MotosanError::ProviderError { .. }));
+    assert_eq!(err.status_code(), Some(503));
+    assert_eq!(err.retry_after(), Some(std::time::Duration::from_secs(7)));
+    assert_eq!(err.request_id(), Some("resp_req"));
+    assert_eq!(
+        err.to_string(),
+        "provider error: openai responses request failed"
+    );
     responses_mock.assert_async().await;
 }
 

@@ -1,8 +1,8 @@
 use crate::error::MotosanError;
 use crate::models::DEFAULT_OLLAMA_MODEL;
 use crate::providers::{
-    extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
-    parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
+    extract_error_message, extract_request_id, is_retryable_network_error, is_retryable_status,
+    map_http_error, parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -265,6 +265,7 @@ impl ProviderImpl for OllamaProvider {
 
             let status = response.status();
             let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
 
             if !status.is_success() {
                 if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
@@ -274,13 +275,23 @@ impl ProviderImpl for OllamaProvider {
                 }
                 let error_payload: Value = response.json().await.unwrap_or_else(|_| json!({}));
                 let message = extract_error_message(&error_payload, "ollama request failed");
-                return Err(map_http_error(status.as_u16(), message));
+                return Err(map_http_error(
+                    status.as_u16(),
+                    message,
+                    retry_after,
+                    request_id,
+                ));
             }
 
             payload = response
                 .json()
                 .await
-                .map_err(|error| MotosanError::ProviderError(error.to_string()))?;
+                .map_err(|error| MotosanError::ProviderError {
+                    message: error.to_string(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })?;
             break;
         }
 
@@ -371,6 +382,7 @@ impl ProviderImpl for OllamaProvider {
             }
 
             let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
             if attempt < self.retry_policy.max_retries && is_retryable_status(status.as_u16()) {
                 attempt += 1;
                 sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
@@ -383,7 +395,12 @@ impl ProviderImpl for OllamaProvider {
                 .and_then(|bytes| serde_json::from_slice::<Value>(bytes).ok())
             {
                 let message = extract_error_message(&payload, "ollama stream request failed");
-                return Err(map_http_error(status.as_u16(), message));
+                return Err(map_http_error(
+                    status.as_u16(),
+                    message,
+                    retry_after,
+                    request_id.clone(),
+                ));
             }
 
             let message = body_bytes
@@ -391,7 +408,12 @@ impl ProviderImpl for OllamaProvider {
                 .map(|bytes| String::from_utf8_lossy(bytes).trim().to_string())
                 .filter(|message| !message.is_empty())
                 .unwrap_or_else(|| "ollama stream request failed".to_string());
-            return Err(map_http_error(status.as_u16(), message));
+            return Err(map_http_error(
+                status.as_u16(),
+                message,
+                retry_after,
+                request_id,
+            ));
         };
 
         // NDJSON parsing: each line is a separate JSON object

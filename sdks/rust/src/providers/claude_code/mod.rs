@@ -505,24 +505,44 @@ impl ClaudeCodeProvider {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| MotosanError::ProviderError(format!("failed to spawn claude CLI: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
+            message: format!("failed to spawn claude CLI: {e}"),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        })?;
 
         // Write prompt to stdin then close it.
         {
-            let mut stdin = child.stdin.take().ok_or_else(|| {
-                MotosanError::ProviderError("failed to open claude CLI stdin".to_string())
-            })?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| MotosanError::ProviderError {
+                    message: "failed to open claude CLI stdin".to_string(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })?;
             stdin.write_all(user_prompt.as_bytes()).await.map_err(|e| {
-                MotosanError::ProviderError(format!("failed to write to claude stdin: {e}"))
+                MotosanError::ProviderError {
+                    message: format!("failed to write to claude stdin: {e}"),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                }
             })?;
             // stdin dropped here, sending EOF
         }
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            MotosanError::ProviderError("failed to open claude CLI stdout".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| MotosanError::ProviderError {
+                message: "failed to open claude CLI stdout".to_string(),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?;
 
         let reader = BufReader::new(stdout);
 
@@ -599,7 +619,12 @@ where
                     }
                     stream_json::NdjsonAction::Error(msg) => {
                         reap_child(&mut child, true).await;
-                        yield Err(MotosanError::ProviderError(msg));
+                        yield Err(MotosanError::ProviderError {
+                            message: msg,
+                            status_code: None,
+                            retry_after: None,
+                            request_id: None,
+                        });
                         break;
                     }
                 }
@@ -951,7 +976,7 @@ mod tests {
         assert!(
             matches!(
                 last,
-                Some(Err(crate::error::MotosanError::ProviderError(_)))
+                Some(Err(crate::error::MotosanError::ProviderError { .. }))
             ),
             "a provider-error line must surface as a terminal Err item, got {last:?}"
         );
@@ -970,7 +995,7 @@ mod tests {
             None,
         );
         match s.next().await {
-            Some(Err(crate::error::MotosanError::ProviderError(msg))) => {
+            Some(Err(crate::error::MotosanError::ProviderError { message: msg, .. })) => {
                 assert!(msg.contains("error_max_turns"), "got: {msg}");
             }
             other => panic!("expected ProviderError, got {other:?}"),
@@ -1016,7 +1041,7 @@ mod tests {
         );
         assert!(matches!(
             s.next().await,
-            Some(Err(crate::error::MotosanError::ProviderError(_)))
+            Some(Err(crate::error::MotosanError::ProviderError { .. }))
         ));
         // BEFORE drop: the reap must already have killed the otherwise-alive child.
         assert!(

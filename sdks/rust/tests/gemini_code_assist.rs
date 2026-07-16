@@ -207,7 +207,7 @@ async fn chat_401_returns_auth_error() {
         .unwrap_err();
 
     assert!(
-        matches!(err, MotosanError::Auth(_)),
+        matches!(err, MotosanError::Auth { .. }),
         "expected Auth, got {err:?}"
     );
 }
@@ -452,5 +452,5 @@ async fn stream_401_returns_auth_error() {
         Err(e) => e,
         Ok(_) => panic!("expected error"),
     };
-    assert!(matches!(err, MotosanError::Auth(_)));
+    assert!(matches!(err, MotosanError::Auth { .. }));
 }

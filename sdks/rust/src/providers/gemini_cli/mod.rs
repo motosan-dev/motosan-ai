@@ -285,25 +285,43 @@ impl GeminiCliProvider {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| MotosanError::ProviderError(format!("failed to spawn gemini CLI: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
+            message: format!("failed to spawn gemini CLI: {e}"),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        })?;
 
         {
-            let mut stdin = child.stdin.take().ok_or_else(|| {
-                MotosanError::ProviderError("failed to open gemini CLI stdin".to_string())
-            })?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| MotosanError::ProviderError {
+                    message: "failed to open gemini CLI stdin".to_string(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })?;
             stdin
                 .write_all(stdin_payload.as_bytes())
                 .await
-                .map_err(|e| {
-                    MotosanError::ProviderError(format!("failed to write to gemini stdin: {e}"))
+                .map_err(|e| MotosanError::ProviderError {
+                    message: format!("failed to write to gemini stdin: {e}"),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
                 })?;
         }
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            MotosanError::ProviderError("failed to open gemini CLI stdout".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| MotosanError::ProviderError {
+                message: "failed to open gemini CLI stdout".to_string(),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?;
 
         let reader = BufReader::new(stdout);
 
@@ -378,7 +396,12 @@ where
                 }
                 Some(stream_json::NdjsonAction::Error(msg)) => {
                     reap_child(&mut child, true).await;
-                    yield Err(MotosanError::ProviderError(msg));
+                    yield Err(MotosanError::ProviderError {
+                        message: msg,
+                        status_code: None,
+                        retry_after: None,
+                        request_id: None,
+                    });
                     break;
                 }
                 None => {}
@@ -674,7 +697,7 @@ mod tests {
         assert!(
             matches!(
                 last,
-                Some(Err(crate::error::MotosanError::ProviderError(_)))
+                Some(Err(crate::error::MotosanError::ProviderError { .. }))
             ),
             "a provider-error line must surface as a terminal Err item, got {last:?}"
         );

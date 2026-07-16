@@ -234,12 +234,37 @@ pub(crate) fn extract_error_message(payload: &Value, fallback: &str) -> String {
     feature = "gemini-code-assist",
     feature = "chatgpt-codex",
 ))]
-pub(crate) fn map_http_error(status_code: u16, message: String) -> MotosanError {
+pub(crate) fn map_http_error(
+    status_code: u16,
+    message: String,
+    retry_after: Option<Duration>,
+    request_id: Option<String>,
+) -> MotosanError {
     match status_code {
-        401 => MotosanError::Auth(message),
-        429 => MotosanError::RateLimit(message),
-        400 => MotosanError::InvalidRequest(message),
-        _ => MotosanError::ProviderError(message),
+        401 => MotosanError::Auth {
+            message,
+            status_code: Some(status_code),
+            retry_after,
+            request_id,
+        },
+        429 => MotosanError::RateLimit {
+            message,
+            status_code: Some(status_code),
+            retry_after,
+            request_id,
+        },
+        400 => MotosanError::InvalidRequest {
+            message,
+            status_code: Some(status_code),
+            retry_after,
+            request_id,
+        },
+        _ => MotosanError::ProviderError {
+            message,
+            status_code: Some(status_code),
+            retry_after,
+            request_id,
+        },
     }
 }
 
@@ -319,6 +344,24 @@ pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
     let seconds = raw.parse::<u64>().ok()?;
     Some(Duration::from_secs(seconds))
+}
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+pub(crate) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
+    ["request-id", "x-request-id"].iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+    })
 }
 
 #[cfg(any(
@@ -452,5 +495,80 @@ mod validate_tests {
     fn any_provider_accepts_plain_text() {
         let p = TextOnlyProvider;
         assert!(p.validate_request(&req_text_only()).is_ok());
+    }
+}
+
+#[cfg(test)]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+mod http_error_metadata_tests {
+    use super::*;
+    use reqwest::header::{HeaderMap, HeaderName};
+
+    fn headers(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut map = HeaderMap::new();
+        for (name, value) in pairs {
+            map.insert(
+                HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+                value.parse().expect("header value"),
+            );
+        }
+        map
+    }
+
+    #[test]
+    fn extract_request_id_prefers_request_id_then_x_request_id() {
+        let both = headers(&[("x-request-id", "xrid"), ("request-id", "rid")]);
+        assert_eq!(extract_request_id(&both).as_deref(), Some("rid"));
+        let fallback = headers(&[("x-request-id", "xrid")]);
+        assert_eq!(extract_request_id(&fallback).as_deref(), Some("xrid"));
+        assert_eq!(extract_request_id(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn map_http_error_populates_metadata_from_headers() {
+        let map = headers(&[("retry-after", "7"), ("request-id", "req_123")]);
+        let err = map_http_error(
+            429,
+            "too many".to_string(),
+            parse_retry_after(&map),
+            extract_request_id(&map),
+        );
+        assert!(matches!(err, MotosanError::RateLimit { .. }));
+        assert_eq!(err.status_code(), Some(429));
+        assert_eq!(err.retry_after(), Some(Duration::from_secs(7)));
+        assert_eq!(err.request_id(), Some("req_123"));
+        assert_eq!(err.to_string(), "rate limit error: too many");
+    }
+
+    #[test]
+    fn map_http_error_maps_status_to_variant() {
+        assert!(matches!(
+            map_http_error(401, "m".into(), None, None),
+            MotosanError::Auth { .. }
+        ));
+        assert!(matches!(
+            map_http_error(400, "m".into(), None, None),
+            MotosanError::InvalidRequest { .. }
+        ));
+        assert!(matches!(
+            map_http_error(429, "m".into(), None, None),
+            MotosanError::RateLimit { .. }
+        ));
+        assert!(matches!(
+            map_http_error(500, "m".into(), None, None),
+            MotosanError::ProviderError { .. }
+        ));
+        assert_eq!(
+            map_http_error(500, "m".into(), None, None).status_code(),
+            Some(500)
+        );
     }
 }
