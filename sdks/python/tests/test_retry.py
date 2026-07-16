@@ -56,6 +56,7 @@ class TestIsRetryable:
         assert _is_retryable(ProviderError("HTTP 500: boom", status_code=500)) is True
         assert _is_retryable(ProviderError("HTTP 408: timeout", status_code=408)) is True
         assert _is_retryable(ProviderError("HTTP 409: conflict", status_code=409)) is True
+        assert _is_retryable(ProviderError("HTTP 429: slow down", status_code=429)) is True
 
     def test_not_retryable(self):
         assert _is_retryable(ProviderError("HTTP 400: bad request", status_code=400)) is False

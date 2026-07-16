@@ -84,7 +84,7 @@ def _is_retryable(error: Exception) -> bool:
         return True
     if isinstance(error, ProviderError):
         status_code = error.status_code or 0
-        return error.status_code in {408, 409} or status_code >= 500
+        return error.status_code in {408, 409, 429} or status_code >= 500
     return False
 
 
