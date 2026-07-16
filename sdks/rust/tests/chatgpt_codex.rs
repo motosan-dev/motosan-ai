@@ -175,5 +175,5 @@ async fn stream_401_returns_auth_error() {
         Err(e) => e,
         Ok(_) => panic!("expected error"),
     };
-    assert!(matches!(err, MotosanError::Auth(_)), "got {err:?}");
+    assert!(matches!(err, MotosanError::Auth { .. }), "got {err:?}");
 }

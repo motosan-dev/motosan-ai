@@ -127,7 +127,7 @@ async fn openai_chat_does_not_retry_on_400() {
         )
         .await;
 
-    assert!(matches!(result, Err(MotosanError::InvalidRequest(_))));
+    assert!(matches!(result, Err(MotosanError::InvalidRequest { .. })));
     bad_request.assert_async().await;
 }
 

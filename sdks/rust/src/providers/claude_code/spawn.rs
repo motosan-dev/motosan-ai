@@ -392,40 +392,64 @@ pub async fn invoke_cli(
 ) -> Result<(String, Usage, Option<String>), MotosanError> {
     let mut cmd = build_command(config);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| MotosanError::ProviderError(format!("failed to spawn claude CLI: {e}")))?;
+    let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
+        message: format!("failed to spawn claude CLI: {e}"),
+        status_code: None,
+        retry_after: None,
+        request_id: None,
+    })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-            MotosanError::ProviderError(format!("failed to write to claude stdin: {e}"))
-        })?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("failed to write to claude stdin: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?;
         // Drop stdin to close it so the child reads EOF.
     }
 
     let result = match config.timeout {
         Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
             .await
-            .map_err(|_| {
-                MotosanError::ProviderError(format!(
-                    "claude CLI timed out after {} seconds",
-                    dur.as_secs()
-                ))
+            .map_err(|_| MotosanError::ProviderError {
+                message: format!("claude CLI timed out after {} seconds", dur.as_secs()),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
             })?
-            .map_err(|e| MotosanError::ProviderError(format!("claude CLI process error: {e}")))?,
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("claude CLI process error: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?,
         None => child
             .wait_with_output()
             .await
-            .map_err(|e| MotosanError::ProviderError(format!("claude CLI process error: {e}")))?,
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("claude CLI process error: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?,
     };
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
-        return Err(MotosanError::ProviderError(format!(
-            "claude CLI exited with {}: {}",
-            result.status,
-            stderr.trim()
-        )));
+        return Err(MotosanError::ProviderError {
+            message: format!(
+                "claude CLI exited with {}: {}",
+                result.status,
+                stderr.trim()
+            ),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        });
     }
 
     let stdout = String::from_utf8_lossy(&result.stdout).to_string();
@@ -448,9 +472,13 @@ pub async fn invoke_cli(
 
 /// Parse the JSON output from agent mode, extracting `result`, `usage`, and `session_id`.
 fn parse_agent_json(raw: &str) -> Result<(String, Usage, Option<String>), MotosanError> {
-    let v: serde_json::Value = serde_json::from_str(raw).map_err(|e| {
-        MotosanError::ProviderError(format!("failed to parse claude JSON output: {e}"))
-    })?;
+    let v: serde_json::Value =
+        serde_json::from_str(raw).map_err(|e| MotosanError::ProviderError {
+            message: format!("failed to parse claude JSON output: {e}"),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        })?;
 
     let subtype = v.get("subtype").and_then(|subtype| subtype.as_str());
     let is_error = v
@@ -465,9 +493,12 @@ fn parse_agent_json(raw: &str) -> Result<(String, Usage, Option<String>), Motosa
             .and_then(|result| result.as_str())
             .filter(|result| !result.is_empty())
             .unwrap_or("no result message");
-        return Err(MotosanError::ProviderError(format!(
-            "claude_code terminal error ({subtype}): {detail}"
-        )));
+        return Err(MotosanError::ProviderError {
+            message: format!("claude_code terminal error ({subtype}): {detail}"),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        });
     }
 
     let text = v
@@ -1027,7 +1058,7 @@ mod tests {
     fn agent_json_error_subtype_without_result_is_err() {
         let raw = r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#;
         match parse_agent_json(raw) {
-            Err(MotosanError::ProviderError(msg)) => {
+            Err(MotosanError::ProviderError { message: msg, .. }) => {
                 assert!(msg.contains("error_max_turns"), "got: {msg}");
             }
             other => panic!("expected ProviderError, got {other:?}"),
@@ -1038,7 +1069,7 @@ mod tests {
     fn agent_json_is_error_with_result_surfaces_message() {
         let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}"#;
         match parse_agent_json(raw) {
-            Err(MotosanError::ProviderError(msg)) => {
+            Err(MotosanError::ProviderError { message: msg, .. }) => {
                 assert!(msg.contains("error_during_execution"), "got: {msg}");
                 assert!(msg.contains("boom"), "got: {msg}");
             }

@@ -253,7 +253,7 @@ async fn chat_401_returns_auth_error() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, MotosanError::Auth(_)),
+        matches!(err, MotosanError::Auth { .. }),
         "expected Auth, got {err:?}"
     );
 }
@@ -279,7 +279,7 @@ async fn chat_400_returns_invalid_request() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, MotosanError::InvalidRequest(_)),
+        matches!(err, MotosanError::InvalidRequest { .. }),
         "expected InvalidRequest, got {err:?}"
     );
 }
@@ -305,7 +305,7 @@ async fn chat_500_returns_provider_error() {
         .await
         .unwrap_err();
     assert!(
-        matches!(err, MotosanError::ProviderError(_)),
+        matches!(err, MotosanError::ProviderError { .. }),
         "expected ProviderError, got {err:?}"
     );
 }
@@ -400,7 +400,7 @@ async fn chat_exhausts_retries_on_persistent_500() {
         )
         .await
         .unwrap_err();
-    assert!(matches!(err, MotosanError::ProviderError(_)));
+    assert!(matches!(err, MotosanError::ProviderError { .. }));
 }
 
 // ---------------------------------------------------------------------------
@@ -627,7 +627,7 @@ async fn stream_401_returns_auth_error() {
         Ok(_) => panic!("expected Auth error, got Ok"),
     };
     assert!(
-        matches!(err, MotosanError::Auth(_)),
+        matches!(err, MotosanError::Auth { .. }),
         "expected Auth, got {err:?}"
     );
 }

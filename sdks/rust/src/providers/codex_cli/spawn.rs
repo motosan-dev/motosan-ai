@@ -277,39 +277,59 @@ pub async fn invoke_cli(
 ) -> Result<(String, Option<String>, Usage, Option<String>), MotosanError> {
     let mut cmd = build_command(config);
 
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| MotosanError::ProviderError(format!("failed to spawn codex CLI: {e}")))?;
+    let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
+        message: format!("failed to spawn codex CLI: {e}"),
+        status_code: None,
+        retry_after: None,
+        request_id: None,
+    })?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        stdin.write_all(prompt.as_bytes()).await.map_err(|e| {
-            MotosanError::ProviderError(format!("failed to write to codex stdin: {e}"))
-        })?;
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("failed to write to codex stdin: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?;
     }
 
     let result = match config.timeout {
         Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
             .await
-            .map_err(|_| {
-                MotosanError::ProviderError(format!(
-                    "codex CLI timed out after {} seconds",
-                    dur.as_secs()
-                ))
+            .map_err(|_| MotosanError::ProviderError {
+                message: format!("codex CLI timed out after {} seconds", dur.as_secs()),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
             })?
-            .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?,
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("codex CLI process error: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?,
         None => child
             .wait_with_output()
             .await
-            .map_err(|e| MotosanError::ProviderError(format!("codex CLI process error: {e}")))?,
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("codex CLI process error: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?,
     };
 
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
-        return Err(MotosanError::ProviderError(format!(
-            "codex CLI exited with {}: {}",
-            result.status,
-            stderr.trim()
-        )));
+        return Err(MotosanError::ProviderError {
+            message: format!("codex CLI exited with {}: {}", result.status, stderr.trim()),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        });
     }
 
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -355,7 +375,12 @@ fn parse_collected_stream(
             }
             Some(NdjsonAction::Done { usage: None, .. }) => {}
             Some(NdjsonAction::Error(msg)) => {
-                return Err(MotosanError::ProviderError(format!("codex CLI: {msg}")));
+                return Err(MotosanError::ProviderError {
+                    message: format!("codex CLI: {msg}"),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                });
             }
             None => {}
         }
@@ -802,7 +827,7 @@ mod tests {
     fn parse_collected_stream_surfaces_error() {
         let raw = r#"{"type":"error","message":"nope"}"#;
         let err = parse_collected_stream(raw).unwrap_err();
-        let MotosanError::ProviderError(msg) = err else {
+        let MotosanError::ProviderError { message: msg, .. } = err else {
             panic!("expected ProviderError");
         };
         assert!(msg.contains("nope"));

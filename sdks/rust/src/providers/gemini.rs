@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::MotosanError;
 use crate::models::DEFAULT_GEMINI_MODEL;
 use crate::providers::{
-    extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
-    parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
+    extract_error_message, extract_request_id, is_retryable_network_error, is_retryable_status,
+    map_http_error, parse_retry_after, sleep_before_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -347,6 +347,7 @@ impl ProviderImpl for GeminiProvider {
                     let status = resp.status().as_u16();
                     if status != 200 {
                         let retry_after = parse_retry_after(resp.headers());
+                        let request_id = extract_request_id(resp.headers());
                         let payload: Value = resp.json().await.unwrap_or(json!({}));
                         let msg = extract_error_message(&payload, "Gemini API error");
                         if is_retryable_status(status) && attempt < self.retry_policy.max_retries {
@@ -354,11 +355,15 @@ impl ProviderImpl for GeminiProvider {
                             sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
                             continue;
                         }
-                        return Err(map_http_error(status, msg));
+                        return Err(map_http_error(status, msg, retry_after, request_id));
                     }
-                    let payload: Value = resp.json().await.map_err(|e| {
-                        MotosanError::ProviderError(format!("failed to parse Gemini response: {e}"))
-                    })?;
+                    let payload: Value =
+                        resp.json().await.map_err(|e| MotosanError::ProviderError {
+                            message: format!("failed to parse Gemini response: {e}"),
+                            status_code: None,
+                            retry_after: None,
+                            request_id: None,
+                        })?;
                     return Ok(Self::parse_response(&payload, &model));
                 }
             }
@@ -395,6 +400,7 @@ impl ProviderImpl for GeminiProvider {
                     let status = resp.status().as_u16();
                     if status != 200 {
                         let retry_after = parse_retry_after(resp.headers());
+                        let request_id = extract_request_id(resp.headers());
                         let payload: Value = resp.json().await.unwrap_or(json!({}));
                         let msg = extract_error_message(&payload, "Gemini stream error");
                         if is_retryable_status(status) && attempt < self.retry_policy.max_retries {
@@ -402,7 +408,7 @@ impl ProviderImpl for GeminiProvider {
                             sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
                             continue;
                         }
-                        return Err(map_http_error(status, msg));
+                        return Err(map_http_error(status, msg, retry_after, request_id));
                     }
                     let sse = resp.bytes_stream().eventsource();
                     let adapter = GeminiStreamAdapter {
@@ -1132,6 +1138,7 @@ mod tests {
                 max_delay_ms: 10,
                 jitter: false,
                 respect_retry_after: false,
+                on_retry: None,
             };
             let provider =
                 GeminiProvider::new("fake-key", None, Some(server.url())).with_retry_policy(policy);

@@ -489,22 +489,42 @@ impl CodexCliProvider {
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| MotosanError::ProviderError(format!("failed to spawn codex CLI: {e}")))?;
+        let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
+            message: format!("failed to spawn codex CLI: {e}"),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        })?;
 
         {
-            let mut stdin = child.stdin.take().ok_or_else(|| {
-                MotosanError::ProviderError("failed to open codex CLI stdin".to_string())
-            })?;
+            let mut stdin = child
+                .stdin
+                .take()
+                .ok_or_else(|| MotosanError::ProviderError {
+                    message: "failed to open codex CLI stdin".to_string(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })?;
             stdin.write_all(composed.as_bytes()).await.map_err(|e| {
-                MotosanError::ProviderError(format!("failed to write to codex stdin: {e}"))
+                MotosanError::ProviderError {
+                    message: format!("failed to write to codex stdin: {e}"),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                }
             })?;
         }
 
-        let stdout = child.stdout.take().ok_or_else(|| {
-            MotosanError::ProviderError("failed to open codex CLI stdout".to_string())
-        })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| MotosanError::ProviderError {
+                message: "failed to open codex CLI stdout".to_string(),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
+            })?;
 
         let reader = BufReader::new(stdout);
 
@@ -580,7 +600,12 @@ where
                     }
                     stream_json::NdjsonAction::Error(msg) => {
                         reap_child(&mut child, true).await;
-                        yield Err(MotosanError::ProviderError(msg));
+                        yield Err(MotosanError::ProviderError {
+                            message: msg,
+                            status_code: None,
+                            retry_after: None,
+                            request_id: None,
+                        });
                         break;
                     }
                 }
@@ -880,7 +905,7 @@ mod tests {
         assert!(
             matches!(
                 last,
-                Some(Err(crate::error::MotosanError::ProviderError(_)))
+                Some(Err(crate::error::MotosanError::ProviderError { .. }))
             ),
             "a provider-error line must surface as a terminal Err item, got {last:?}"
         );

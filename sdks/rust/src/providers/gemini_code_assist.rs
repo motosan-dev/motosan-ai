@@ -4,8 +4,8 @@ use crate::error::MotosanError;
 use crate::models::{DEFAULT_GEMINI_CODE_ASSIST_MODEL, GEMINI_CODE_ASSIST_BASE_URL};
 use crate::providers::gemini::GeminiProvider;
 use crate::providers::{
-    extract_error_message, is_retryable_network_error, is_retryable_status, map_http_error,
-    parse_retry_after, sleep_before_retry, ProviderImpl,
+    extract_error_message, extract_request_id, is_retryable_network_error, is_retryable_status,
+    map_http_error, parse_retry_after, sleep_before_retry, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::{collect_stream, BoxStream};
@@ -148,6 +148,7 @@ impl ProviderImpl for GeminiCodeAssistProvider {
                     let status = resp.status().as_u16();
                     if status != 200 {
                         let retry_after = parse_retry_after(resp.headers());
+                        let request_id = extract_request_id(resp.headers());
                         let payload: Value = resp.json().await.unwrap_or(json!({}));
                         let msg = extract_error_message(&payload, "Gemini Code Assist error");
                         if is_retryable_status(status) && attempt < self.retry_policy.max_retries {
@@ -155,7 +156,7 @@ impl ProviderImpl for GeminiCodeAssistProvider {
                             sleep_before_retry(&self.retry_policy, attempt, retry_after).await;
                             continue;
                         }
-                        return Err(map_http_error(status, msg));
+                        return Err(map_http_error(status, msg, retry_after, request_id));
                     }
                     let sse = resp.bytes_stream().eventsource();
                     let adapter = CodeAssistStreamAdapter {
