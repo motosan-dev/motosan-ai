@@ -752,3 +752,143 @@ mod http_error_metadata_tests {
         );
     }
 }
+
+// Mirrors specs/retry.md — update BOTH or neither.
+// Cross-SDK siblings assert the SAME tables:
+//   sdks/python/tests/test_retry_conformance.py
+//   sdks/typescript/tests/retry-conformance.test.ts
+// A failure means the implementation drifted from specs/retry.md — fix the
+// implementation (or the spec plus all three suites), never this file alone.
+// In-crate unit test (NOT tests/): is_retryable_status / parse_retry_after are
+// pub(crate) in this module and feature-gated, so an integration test could not
+// import them. Gated behind the same 7-feature cfg (default = []).
+#[cfg(test)]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+mod retry_conformance {
+    use super::{is_retryable_status, parse_retry_after};
+    use crate::retry::RetryPolicy;
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use std::time::Duration;
+
+    const RETRYABLE: [u16; 8] = [408, 409, 429, 500, 502, 503, 529, 599];
+    const NON_RETRYABLE: [u16; 8] = [200, 301, 400, 401, 403, 404, 422, 499];
+
+    /// parse_retry_after takes a &HeaderMap, so wrap the raw value in one.
+    fn retry_after(value: &str) -> Option<Duration> {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_str(value).unwrap());
+        parse_retry_after(&headers)
+    }
+
+    #[test]
+    fn classification_retryable_statuses() {
+        for status in RETRYABLE {
+            assert!(
+                is_retryable_status(status),
+                "specs/retry.md: {status} must be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn classification_non_retryable_statuses() {
+        for status in NON_RETRYABLE {
+            assert!(
+                !is_retryable_status(status),
+                "specs/retry.md: {status} must NOT be retryable"
+            );
+        }
+    }
+
+    #[test]
+    fn retry_after_integer_seconds() {
+        assert_eq!(retry_after("5"), Some(Duration::from_secs(5)));
+        assert_eq!(retry_after("0"), Some(Duration::ZERO));
+        assert_eq!(retry_after(" 7 "), Some(Duration::from_secs(7)));
+    }
+
+    #[test]
+    fn retry_after_capped_at_60s() {
+        assert_eq!(retry_after("61"), Some(Duration::from_secs(60)));
+        assert_eq!(retry_after("86400"), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn retry_after_http_date_clamped() {
+        // Deterministic: past date clamps to 0; far-future date clamps to the 60s cap.
+        assert_eq!(
+            retry_after("Wed, 21 Oct 2015 07:28:00 GMT"),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(
+            retry_after("Fri, 31 Dec 2100 23:59:59 GMT"),
+            Some(Duration::from_secs(60))
+        );
+    }
+
+    #[test]
+    fn retry_after_garbage_is_none() {
+        // A negative integer is invalid, NOT clamp-to-0 (only past HTTP-dates clamp).
+        assert_eq!(retry_after(""), None);
+        assert_eq!(retry_after("soon"), None);
+        assert_eq!(retry_after("-5"), None);
+    }
+
+    #[test]
+    fn full_jitter_bounded_by_capped_exponential() {
+        // specs/retry.md § backoff: full jitter — uniform in
+        // [0, min(base * 2^(attempt-1), max_delay)]. The Rust RNG is &mut
+        // fastrand::Rng (no fractional-scale injection), so assert the ceiling
+        // over a seeded run instead of an exact scaled value.
+        let policy = RetryPolicy::default(); // base 100ms, max 2000ms, jitter on
+        let mut rng = fastrand::Rng::with_seed(42);
+        // ceilings for attempts 1..=7 (attempt 6+ capped at max_delay = 2000ms)
+        let ceilings_ms = [100u64, 200, 400, 800, 1600, 2000, 2000];
+        for (idx, &ceiling) in ceilings_ms.iter().enumerate() {
+            let attempt = (idx + 1) as u32;
+            for _ in 0..200 {
+                let delay = policy.delay_for_attempt_with_rng(attempt, &mut rng);
+                assert!(
+                    delay <= Duration::from_millis(ceiling),
+                    "specs/retry.md: attempt {attempt} delay {delay:?} exceeds {ceiling}ms ceiling"
+                );
+            }
+        }
+        // Full jitter must spread draws, not pin to the ceiling (seed-deterministic).
+        let mut rng = fastrand::Rng::with_seed(42);
+        let draws: Vec<Duration> = (0..64)
+            .map(|_| policy.delay_for_attempt_with_rng(3, &mut rng))
+            .collect();
+        assert!(
+            draws.iter().any(|d| d != &draws[0]),
+            "specs/retry.md: full jitter must vary across draws: {draws:?}"
+        );
+    }
+
+    #[test]
+    fn jitter_disabled_is_pure_exponential() {
+        let policy = RetryPolicy::default().jitter(false);
+        assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(100));
+        assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(200));
+        assert_eq!(policy.delay_for_attempt(5), Duration::from_millis(1600));
+        assert_eq!(policy.delay_for_attempt(6), Duration::from_millis(2000));
+    }
+
+    #[test]
+    fn defaults_match_spec() {
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.max_retries, 3);
+        assert_eq!(policy.base_delay_ms, 100);
+        assert_eq!(policy.max_delay_ms, 2000);
+        assert!(policy.jitter);
+        assert!(policy.respect_retry_after);
+    }
+}
