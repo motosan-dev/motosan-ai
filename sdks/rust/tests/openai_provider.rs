@@ -4,7 +4,8 @@ use mockito::Matcher;
 use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 use motosan_ai::providers::ProviderImpl;
 use motosan_ai::{
-    ChatRequest, Message, MotosanError, StopReason, StreamEventType, Tool, DEFAULT_OPENAI_MODEL,
+    ChatRequest, Message, MotosanError, RetryPolicy, StopReason, StreamEventType, Tool,
+    DEFAULT_OPENAI_MODEL,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
@@ -398,6 +399,7 @@ async fn openai_responses_fallback_non_json_error_preserves_http_metadata() {
     let provider = OpenAIProvider::new("test-key", None)
         .with_chat_url(format!("{}/v1/chat/completions", server.url()))
         .with_responses_url(format!("{}/v1/responses", server.url()))
+        .with_retry_policy(RetryPolicy::new().max_retries(0))
         .with_responses_fallback(true);
     let request = ChatRequest::builder()
         .message(Message::user("hello"))

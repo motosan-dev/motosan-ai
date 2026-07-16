@@ -665,3 +665,49 @@ async fn stream_retries_500_then_succeeds() {
     let resp = motosan_ai::stream::collect_stream(stream).await.unwrap();
     assert_eq!(resp.content, "Hi!");
 }
+
+#[tokio::test]
+async fn chat_fires_on_retry_via_shared_engine() {
+    use motosan_ai::retry::RetryCause;
+    use std::sync::{Arc, Mutex};
+
+    let mut server = mockito::Server::new_async().await;
+    server
+        .mock("POST", Matcher::Regex("generateContent".into()))
+        .with_status(503)
+        .with_body(r#"{"error":{"message":"overloaded"}}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    server
+        .mock("POST", Matcher::Regex("generateContent".into()))
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(ok_body("recovered"))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let seen: Arc<Mutex<Vec<(u32, u16)>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&seen);
+    let mut policy = fast_retry();
+    policy.on_retry = Some(Arc::new(move |evt| {
+        let status = match evt.cause {
+            RetryCause::Status(code) => code,
+            RetryCause::Network(_) => 0,
+        };
+        sink.lock().unwrap().push((evt.attempt, status));
+    }));
+
+    let provider = GeminiProvider::new("key", None, Some(server.url())).with_retry_policy(policy);
+    let resp = provider
+        .chat(
+            ChatRequest::builder()
+                .messages(vec![Message::user("hi")])
+                .build(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.content, "recovered");
+    assert_eq!(*seen.lock().unwrap(), vec![(1, 503)]);
+}

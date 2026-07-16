@@ -8,7 +8,7 @@ use crate::error::MotosanError;
     feature = "gemini-code-assist",
     feature = "chatgpt-codex",
 ))]
-use crate::retry::RetryPolicy;
+use crate::retry::{RetryCause, RetryEvent, RetryPolicy};
 use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, ContentBlock, ProviderCapabilities};
 #[cfg(any(
@@ -394,19 +394,74 @@ pub(crate) fn extract_request_id(headers: &HeaderMap) -> Option<String> {
     feature = "gemini-code-assist",
     feature = "chatgpt-codex",
 ))]
-pub(crate) async fn sleep_before_retry(
+async fn observe_and_sleep(
     policy: &RetryPolicy,
     attempt: u32,
     retry_after: Option<Duration>,
+    cause: RetryCause,
 ) {
-    // retry_after arrives pre-capped to RETRY_AFTER_CAP by parse_retry_after.
+    // Compute once so the observer sees the exact delay that is slept.
     let delay = if policy.respect_retry_after {
         retry_after.unwrap_or_else(|| policy.delay_for_attempt(attempt))
     } else {
         policy.delay_for_attempt(attempt)
     };
-
+    if let Some(on_retry) = policy.on_retry.as_deref() {
+        on_retry(RetryEvent {
+            attempt,
+            delay,
+            cause,
+        });
+    }
     tokio::time::sleep(delay).await;
+}
+
+/// One retry engine for every HTTP provider (normative contract: specs/retry.md).
+///
+/// Returns success and terminal non-success responses with the body untouched,
+/// leaving caller-side parsing and provider-specific error shaping intact.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+pub(crate) async fn send_with_retry(
+    policy: &RetryPolicy,
+    build: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, MotosanError> {
+    let mut attempt: u32 = 0;
+    loop {
+        let response = match build().send().await {
+            Ok(response) => response,
+            Err(error) => {
+                if attempt < policy.max_retries && is_retryable_network_error(&error) {
+                    attempt += 1;
+                    let cause = RetryCause::Network(error.to_string());
+                    observe_and_sleep(policy, attempt, None, cause).await;
+                    continue;
+                }
+                return Err(MotosanError::Network(error.to_string()));
+            }
+        };
+
+        let status = response.status();
+        if !status.is_success()
+            && attempt < policy.max_retries
+            && is_retryable_status(status.as_u16())
+        {
+            let retry_after = parse_retry_after(response.headers());
+            attempt += 1;
+            let cause = RetryCause::Status(status.as_u16());
+            observe_and_sleep(policy, attempt, retry_after, cause).await;
+            continue;
+        }
+
+        return Ok(response);
+    }
 }
 
 #[cfg(test)]
