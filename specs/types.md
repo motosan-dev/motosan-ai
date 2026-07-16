@@ -128,6 +128,8 @@ Passing unsupported content returns `Err(UnsupportedFeature)` before any network
 
 `Auth` | `RateLimit` | `InvalidRequest` | `Config` | `ProviderError` | `Network` | `Stream` | `StreamReadTimeout(u64)` | `UnsupportedFeature(String)`
 
+Retry classification, backoff, and `Retry-After` handling are specified in [`retry.md`](./retry.md).
+
 ## Default Models
 
 | Provider | Default |
