@@ -315,7 +315,7 @@ mod cli_terminal_tests {
     feature = "chatgpt-codex",
 ))]
 pub(crate) fn is_retryable_status(status_code: u16) -> bool {
-    status_code == 429 || status_code >= 500
+    status_code == 408 || status_code == 409 || status_code == 429 || status_code >= 500
 }
 
 #[cfg(any(
@@ -340,10 +340,31 @@ pub(crate) fn is_retryable_network_error(error: &reqwest::Error) -> bool {
     feature = "gemini-code-assist",
     feature = "chatgpt-codex",
 ))]
+pub(crate) const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
+
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
 pub(crate) fn parse_retry_after(headers: &HeaderMap) -> Option<Duration> {
     let raw = headers.get("retry-after")?.to_str().ok()?.trim();
-    let seconds = raw.parse::<u64>().ok()?;
-    Some(Duration::from_secs(seconds))
+    let uncapped = if let Ok(seconds) = raw.parse::<f64>() {
+        if !seconds.is_finite() || seconds < 0.0 {
+            return None;
+        }
+        Duration::from_secs_f64(seconds.min(RETRY_AFTER_CAP.as_secs_f64()))
+    } else {
+        // RFC 7231 HTTP-date form (e.g. "Fri, 31 Dec 1999 23:59:59 GMT").
+        let when = chrono::DateTime::parse_from_rfc2822(raw).ok()?;
+        let remaining = when.signed_duration_since(chrono::Utc::now());
+        Duration::from_secs(remaining.num_seconds().max(0) as u64)
+    };
+    Some(uncapped.min(RETRY_AFTER_CAP))
 }
 
 #[cfg(any(
@@ -378,6 +399,7 @@ pub(crate) async fn sleep_before_retry(
     attempt: u32,
     retry_after: Option<Duration>,
 ) {
+    // retry_after arrives pre-capped to RETRY_AFTER_CAP by parse_retry_after.
     let delay = if policy.respect_retry_after {
         retry_after.unwrap_or_else(|| policy.delay_for_attempt(attempt))
     } else {
@@ -385,6 +407,109 @@ pub(crate) async fn sleep_before_retry(
     };
 
     tokio::time::sleep(delay).await;
+}
+
+#[cfg(test)]
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+mod retry_after_tests {
+    use super::{is_retryable_status, parse_retry_after, RETRY_AFTER_CAP};
+    use reqwest::header::{HeaderMap, HeaderValue};
+    use std::time::Duration;
+
+    fn headers_with_retry_after(value: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "retry-after",
+            HeaderValue::from_str(value).expect("ascii header value"),
+        );
+        headers
+    }
+
+    #[test]
+    fn integer_seconds_parse() {
+        let headers = headers_with_retry_after("5");
+        assert_eq!(parse_retry_after(&headers), Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn integer_seconds_above_cap_clamp_to_cap() {
+        let headers = headers_with_retry_after("120");
+        assert_eq!(parse_retry_after(&headers), Some(RETRY_AFTER_CAP));
+    }
+
+    #[test]
+    fn decimal_seconds_parse() {
+        let headers = headers_with_retry_after("1.5");
+        assert_eq!(
+            parse_retry_after(&headers),
+            Some(Duration::from_millis(1500))
+        );
+    }
+
+    #[test]
+    fn negative_numeric_value_returns_none() {
+        let headers = headers_with_retry_after("-1");
+        assert_eq!(parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn http_date_near_future_parses_to_remaining_seconds() {
+        // Fixed offset from now via chrono arithmetic - no wall-clock strings.
+        let when = chrono::Utc::now() + chrono::Duration::seconds(30);
+        let headers = headers_with_retry_after(&when.to_rfc2822());
+        let delay = parse_retry_after(&headers).expect("http-date should parse");
+        // signed_duration_since truncates and the test itself takes time,
+        // so allow a small window below 30s.
+        assert!(
+            (28..=30).contains(&delay.as_secs()),
+            "expected ~30s, got {delay:?}"
+        );
+    }
+
+    #[test]
+    fn http_date_in_past_clamps_to_zero() {
+        let when = chrono::Utc::now() - chrono::Duration::seconds(100);
+        let headers = headers_with_retry_after(&when.to_rfc2822());
+        assert_eq!(parse_retry_after(&headers), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn http_date_far_future_clamps_to_cap() {
+        let when = chrono::Utc::now() + chrono::Duration::seconds(300);
+        let headers = headers_with_retry_after(&when.to_rfc2822());
+        assert_eq!(parse_retry_after(&headers), Some(RETRY_AFTER_CAP));
+    }
+
+    #[test]
+    fn garbage_value_returns_none() {
+        let headers = headers_with_retry_after("soon");
+        assert_eq!(parse_retry_after(&headers), None);
+    }
+
+    #[test]
+    fn missing_header_returns_none() {
+        assert_eq!(parse_retry_after(&HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn retryable_status_set_is_408_409_429_and_5xx() {
+        assert!(is_retryable_status(408));
+        assert!(is_retryable_status(409));
+        assert!(is_retryable_status(429));
+        assert!(is_retryable_status(500));
+        assert!(is_retryable_status(503));
+        assert!(!is_retryable_status(400));
+        assert!(!is_retryable_status(404));
+        assert!(!is_retryable_status(200));
+    }
 }
 
 #[cfg(feature = "anthropic")]

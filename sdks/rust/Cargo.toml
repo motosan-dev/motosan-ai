@@ -16,12 +16,14 @@ categories = ["api-bindings", "asynchronous"]
 default = []
 anthropic = [
   "dep:reqwest",
+  "dep:chrono",
   "dep:eventsource-stream",
   "dep:tokio-stream",
   "dep:tokio",
 ]
 openai = [
   "dep:reqwest",
+  "dep:chrono",
   "dep:eventsource-stream",
   "dep:tokio-stream",
   "dep:tokio",
@@ -39,6 +41,7 @@ codex-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 gemini-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
 gemini = [
   "dep:reqwest",
+  "dep:chrono",
   "dep:eventsource-stream",
   "dep:tokio-stream",
   "dep:tokio",
@@ -46,6 +49,7 @@ gemini = [
 gemini-code-assist = [
   "gemini",
   "dep:reqwest",
+  "dep:chrono",
   "dep:eventsource-stream",
   "dep:tokio-stream",
   "dep:tokio",
@@ -55,6 +59,7 @@ gemini-code-assist = [
 # feature itself.
 chatgpt-codex = [
   "dep:reqwest",
+  "dep:chrono",
   "dep:eventsource-stream",
   "dep:tokio-stream",
   "dep:tokio",
@@ -80,6 +85,9 @@ thiserror = "2"
 
 motosan-agent-primitives = "0.4.0"
 bytes = { version = "1", optional = true }
+chrono = { version = "0.4", optional = true, default-features = false, features = [
+  "clock",
+] }
 reqwest = { version = "0.12", optional = true, features = [
   "json",
   "stream",
