@@ -2,8 +2,10 @@
 
 use motosan_ai::providers::openai::OpenAIProvider;
 use motosan_ai::providers::ProviderImpl;
+use motosan_ai::retry::{RetryCause, RetryEvent};
 use motosan_ai::{ChatRequest, Message, MotosanError, RetryPolicy};
 use serde_json::json;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
@@ -272,5 +274,62 @@ async fn openai_chat_retries_502_with_non_json_body() {
 
     assert_eq!(response.content, "recovered");
     bad_gateway.assert_async().await;
+    success.assert_async().await;
+}
+
+#[tokio::test]
+async fn openai_chat_fires_on_retry_observer_on_503_then_200() {
+    let mut server = mockito::Server::new_async().await;
+    let unavailable = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(503)
+        .with_body(json!({"error": {"message": "unavailable"}}).to_string())
+        .expect(1)
+        .create_async()
+        .await;
+    let success = server
+        .mock("POST", "/v1/chat/completions")
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.3-codex",
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+            })
+            .to_string(),
+        )
+        .expect(1)
+        .create_async()
+        .await;
+
+    let events: Arc<Mutex<Vec<RetryEvent>>> = Arc::new(Mutex::new(Vec::new()));
+    let sink = Arc::clone(&events);
+    let mut policy = RetryPolicy::new()
+        .max_retries(1)
+        .base_delay_ms(0)
+        .max_delay_ms(0)
+        .jitter(false);
+    policy.on_retry = Some(Arc::new(move |event: RetryEvent| {
+        sink.lock().unwrap().push(event);
+    }));
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_retry_policy(policy);
+
+    let response = provider
+        .chat(
+            ChatRequest::builder()
+                .message(Message::user("hello"))
+                .build(),
+        )
+        .await
+        .expect("should retry once and succeed");
+
+    assert_eq!(response.content, "ok");
+    let events = events.lock().unwrap();
+    assert_eq!(events.len(), 1, "on_retry must fire exactly once");
+    assert_eq!(events[0].attempt, 1);
+    assert!(matches!(events[0].cause, RetryCause::Status(503)));
+    unavailable.assert_async().await;
     success.assert_async().await;
 }
