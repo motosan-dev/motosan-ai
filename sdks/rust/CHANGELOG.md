@@ -4,6 +4,37 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-07-16
+
+### Breaking
+- `MotosanError::Auth` / `RateLimit` / `InvalidRequest` / `ProviderError` are now struct variants `{ message: String, status_code: Option<u16>, retry_after: Option<Duration>, request_id: Option<String> }`. `Display` output is byte-identical to 0.22 (e.g. `"rate limit error: {message}"`). `Config`, `Network`, `Stream`, `StreamReadTimeout`, `UnsupportedFeature` keep their tuple form. Migration:
+
+  ```rust
+  // 0.22
+  match err {
+      MotosanError::RateLimit(msg) => eprintln!("rate limited: {msg}"),
+      other => return Err(other),
+  }
+  // 0.23
+  match err {
+      MotosanError::RateLimit { message, retry_after, .. } => {
+          eprintln!("rate limited: {message} (retry after {retry_after:?})")
+      }
+      other => return Err(other),
+  }
+  ```
+
+### Added
+- `MotosanError::status_code()` / `retry_after()` / `request_id()` accessors (`None` for non-HTTP variants); `request_id` is read from the `request-id` / `x-request-id` response headers at the `map_http_error` choke point.
+- `RetryPolicy.on_retry: Option<Arc<dyn Fn(RetryEvent) + Send + Sync>>` with `RetryEvent { attempt, delay, cause }` and `RetryCause::Status(u16)` / `RetryCause::Network(String)` — fires before each retry sleep.
+- `send_with_retry` transport helper in `providers/mod.rs` — all HTTP provider chat/stream request loops route through it.
+- Cross-SDK `specs/retry.md` conformance suite: in-crate `#[cfg(test)] mod retry_conformance` in `providers/mod.rs`.
+
+### Changed
+- Retry classification is status-based: retry on 408, 409, 429, ≥500 and reqwest timeout/connect errors; never on other 4xx.
+- `Retry-After` accepts integer-seconds and HTTP-date (RFC 7231) forms, clamped to [0, 60 s], used verbatim (no jitter) when `respect_retry_after` is set.
+- Full jitter from an injectable RNG replaces the deterministic LCG jitter.
+
 ## [0.22.0] - 2026-07-15
 
 ### Fixed

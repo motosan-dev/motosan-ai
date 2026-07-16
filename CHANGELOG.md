@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.23.0 / python-0.16.0 / ts-0.13.0] — 2026-07-16
+
+M2 retry release — structured error metadata, status-based retry classification, one retry engine per SDK, and a normative retry spec. **Breaking for Rust** (`MotosanError` enum shape); additive for Python and TypeScript.
+
+### Breaking (Rust)
+
+- **`MotosanError` HTTP variants are now struct variants** (Rust): `Auth`, `RateLimit`, `InvalidRequest`, `ProviderError` become `{ message, status_code, retry_after, request_id }`. `Display` output is byte-identical to 0.22; only pattern matches and constructions change. See `sdks/rust/CHANGELOG.md` for the migration example.
+
+### Added
+
+- **Structured error metadata** (Rust · Python · TypeScript): errors carry `status_code` / `retry_after` / `request_id`, with `request_id` read from the `request-id` / `x-request-id` response headers. Rust adds `status_code()` / `retry_after()` / `request_id()` accessors; Python `MotosanError` gains keyword-only attributes (additive — the M1 `"HTTP {status}: ..."` message prefixes stay); TypeScript adds `requestId` (it already had `status` / `retryAfterMs`).
+- **`on_retry` observer** (Rust · Python · TypeScript): `RetryPolicy.on_retry` / `onRetry` fires before each retry sleep with `(attempt, delay, cause)`.
+- **Python `RetryPolicy`** (Python): `@dataclass RetryPolicy(max_retries=3, base_delay=0.1, max_delay=2.0, jitter=True, respect_retry_after=True, on_retry=None)`; `with_retry(fn, policy=...)` accepts it while old kwargs keep working; `Client` threads a policy through both chat and stream paths.
+- **`specs/retry.md`** (spec — all SDKs): the normative cross-SDK retry contract — classification table, Retry-After semantics, full-jitter backoff, stream-retry rule (only before the first emitted event), and the explicit no-transport-retry rule for CLI backends.
+
+### Changed
+
+- **Status-based retry classification** (Rust · Python · TypeScript): retry on HTTP 408, 409, 429, ≥500 and transport/connection errors; never on other 4xx. Python no longer scrapes messages (the `\b5\d{2}\b` regex and message-parsed Retry-After are gone); TypeScript adds 408/409.
+- **Retry-After date form + cap** (Rust · Python · TypeScript): integer-seconds AND HTTP-date (RFC 7231) forms honored, clamped to [0, 60 s] independent of `max_delay`, used verbatim (no jitter) when `respect_retry_after` is set.
+- **Full jitter** (Rust · Python · TypeScript): effective delay is `uniform_random(0, min(base·2^(attempt−1), max_delay))` from an injectable RNG, replacing the deterministic LCG.
+- **`send_with_retry` consolidation** (Rust · TypeScript): every hand-rolled provider HTTP chat/stream request loop routes through one shared transport helper per SDK; providers keep only serialization + response handling. (Python's stream path shares the same policy math via `with_retry`/`RetryPolicy`.)
+- **Cross-SDK conformance suites** (Rust · Python · TypeScript): one table-driven suite per SDK mirroring `specs/retry.md`, so drift in any SDK fails loudly.
+
+Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/python/CHANGELOG.md`](sdks/python/CHANGELOG.md), [`sdks/typescript/CHANGELOG.md`](sdks/typescript/CHANGELOG.md).
+
 ## [rust-0.22.0 / python-0.15.0 / ts-0.12.0] — 2026-07-15
 
 M1 reliability release — cross-SDK bug-fix pass. No new features, no public API changes.
