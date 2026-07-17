@@ -40,7 +40,7 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
 
     async for event in events:
         # last-wins on session_id (HTTP providers never set it, so usually None);
-        # CLI readback uses the provider chat()/stream() first-wins path, not this.
+        # CLI providers emit exactly one session event per stream.
         if event.session_id is not None:
             session_id = event.session_id
         if event.event_type == "text" and event.content:

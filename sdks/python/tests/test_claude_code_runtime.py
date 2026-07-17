@@ -3,9 +3,10 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import StreamError
 from motosan_ai.providers.claude_code import ClaudeCodeClient
-from motosan_ai.types import ChatRequest, Message, Role, StopReason
+from motosan_ai.types import ChatRequest, Message, Role, StopReason, ToolCall
 
 
 def _make_proc(stdout: bytes = b'{"type":"result","result":"hi","is_error":false}\n'):
@@ -63,7 +64,7 @@ async def test_chat_env_none_when_empty(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_stream_tool_use_sets_terminal_stop_reason(monkeypatch):
+async def test_stream_tool_use_terminal_is_end_turn(monkeypatch):
     stdout = (
         b'{"type":"assistant","message":{"content":['
         b'{"type":"tool_use","id":"toolu_01","name":"Read","input":{}}]}}\n'
@@ -81,7 +82,9 @@ async def test_stream_tool_use_sets_terminal_stop_reason(monkeypatch):
         )
     ]
     done = [e for e in events if e.done][-1]
-    assert done.stop_reason == StopReason.tool_use
+    # F4: CLI backends execute tools internally; a completed turn is
+    # always end_turn, never a tool_use request.
+    assert done.stop_reason == StopReason.end_turn
 
 
 @pytest.mark.asyncio
@@ -160,3 +163,42 @@ async def test_chat_agent_mode_error_result_raises_stream_error(monkeypatch):
     client = ClaudeCodeClient().agent_mode(True)
     with pytest.raises(StreamError, match="error_during_execution"):
         await client.chat(ChatRequest(messages=[Message(role=Role.user, content="hi")]))
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_parity_tool_turn_is_end_turn(monkeypatch):
+    """F4: chat() == collect_stream(stream()) for a text + tool-call + terminal
+    transcript. Both paths report stop_reason end_turn and surface the
+    executed-tool record; model backfill is the one allowed difference."""
+    stdout = (
+        b'{"type":"assistant","message":{"content":['
+        b'{"type":"text","text":"let me read it"},'
+        b'{"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"/tmp/x"}}]}}\n'
+        b'{"type":"result","result":"done","session_id":"sess_1",'
+        b'"usage":{"input_tokens":7,"output_tokens":3}}\n'
+    )
+    monkeypatch.setattr(
+        "motosan_ai.providers.claude_code.asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=[_make_proc(stdout=stdout), _make_proc(stdout=stdout)]),
+    )
+    client = ClaudeCodeClient()
+    request = ChatRequest(messages=[Message(role=Role.user, content="hi")])
+
+    chat_resp = await client.chat(request)
+    streamed = await collect_stream(client.stream(request))
+
+    expected_tool_calls = [ToolCall(id="toolu_01", name="Read", input={"path": "/tmp/x"})]
+    assert chat_resp.tool_calls == expected_tool_calls
+    assert chat_resp.stop_reason == StopReason.end_turn
+    assert streamed.stop_reason == StopReason.end_turn
+    # Parity, field by field (model exempt: chat backfills it from config).
+    assert chat_resp.content == streamed.content
+    assert chat_resp.thinking == streamed.thinking
+    assert chat_resp.tool_calls == streamed.tool_calls
+    assert chat_resp.stop_reason == streamed.stop_reason
+    assert chat_resp.usage == streamed.usage
+    assert chat_resp.session_id == streamed.session_id
+    assert chat_resp.content == "let me read it"
+    assert chat_resp.usage.input_tokens == 7
+    assert chat_resp.usage.output_tokens == 3
+    assert chat_resp.session_id == "sess_1"
