@@ -83,7 +83,7 @@ These rules exist because motosan-chat and other downstream consumers depend on 
    ```
    — `text_only()` is the safe default; no override needed for text-only providers.
 3. Add a `Provider::<Name>` variant and wire it into `dispatch_chat` / `dispatch_stream_inner` in `client.rs` (same 3-line pattern as existing arms).
-4. Gate with `#[cfg(feature = "<name>")]` and add the feature to `Cargo.toml`.
+4. Gate with `#[cfg(feature = "<name>")]` and add the feature to `Cargo.toml`, routed through an umbrella: HTTP transports declare `<name> = ["_http"]`, CLI backends `<name> = ["_cli"]`. Underscore features are internal-only and NOT semver-covered — never enable them directly. Adding a per-provider `#[cfg(any(...))]` enumeration in shared code (`src/transport/`, `client.rs`, `stream.rs`, `providers/mod.rs`) is review-blocking. Docs teach `ollama-native`; `ollama_native` is a permanent alias.
 5. Add mock tests in `tests/<name>_provider.rs` and vision tests in `tests/vision_<name>.rs` if the provider supports images.
 
 ## Architecture Decisions

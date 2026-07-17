@@ -102,17 +102,33 @@ cargo build -p motosan-ai --all-features
 
 ## Features
 
+All default-off (`default = []`). Public provider features:
+
 - `anthropic`
 - `openai`
-- `minimax`
+- `minimax` (routing alias — Anthropic-compatible endpoint)
 - `ollama` (OpenAI-compatible mode)
-- `ollama_native` (native `/api/chat` endpoint with NDJSON streaming)
+- `ollama-native` (native `/api/chat` endpoint with NDJSON streaming)
+- `ollama_native` (permanent alias for `ollama-native`, kept for backwards compatibility)
 - `gemini` (Google Generative AI HTTP API)
 - `gemini-code-assist` (Google Cloud Code Assist HTTP API; depends on `gemini`)
+- `chatgpt-codex` (ChatGPT-backend Responses HTTP API)
 - `claude-code` (local Claude Code CLI backend)
 - `codex-cli` (local Codex CLI backend)
 - `gemini-cli` (local Gemini CLI backend)
-- `full` (enables HTTP providers: `anthropic`, `openai`, `minimax`, `ollama`, `ollama_native`, `gemini`, `gemini-code-assist`)
+- `full` (every HTTP provider above)
+
+### Feature architecture rules
+
+1. Features whose names start with an underscore (`_http`, `_cli`) are internal
+   aggregation layers: an implementation detail, NOT covered by semver. Never
+   enable or depend on them directly.
+2. New providers MUST route through `_http` (HTTP transports) or `_cli` (local
+   CLI backends) in `[features]`. Shared transport code lives in `src/transport/`
+   behind a single module-level gate — adding a new per-provider
+   `#[cfg(any(...))]` enumeration in shared code is a review-blocking offense.
+3. Docs and examples teach `ollama-native`; `ollama_native` remains a permanent
+   alias with identical semantics.
 
 ## Model Defaults
 
