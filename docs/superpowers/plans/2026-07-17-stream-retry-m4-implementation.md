@@ -408,7 +408,7 @@ Implements `docs/superpowers/specs/2026-07-17-rust-feature-architecture-design.m
 
 - [ ] **Step 8: Replace enumerations in `client.rs` (chunk 3)**
 
-  Failing check first: `grep -c 'cfg(any(' sdks/rust/src/client.rs` → `11`.
+  Failing check first: `grep -c 'cfg(any(' sdks/rust/src/client.rs` → `12` (10 sites converted below + 2 explicitly left untouched).
 
   Apply, matching each old attribute verbatim (pre-Step-4 line refs; locate by the anchor named):
   | Anchor (verified) | Old gate | New |
@@ -2087,10 +2087,11 @@ Branch context: continue on `feat/m4-rust-cli-token` in the PR-R worktree, direc
 
   In `sdks/rust/src/providers/chatgpt_codex.rs`:
 
-  1. Imports (:1-19): in the `crate::providers` import list (:2-5) replace `send_with_retry` with `send_with_retry_async_build`; add two lines:
+  1. Imports (:1-19): in the `crate::providers` import list (:2-5) REMOVE `send_with_retry` (do NOT try to import the new symbol through `crate::providers` — Task 1's re-export list predates it and never re-exports `send_with_retry_async_build`; that would be `error[E0432]`); add three lines:
 
   ```rust
   use crate::auth::{StaticTokenSource, TokenSource};
+  use crate::transport::http::send_with_retry_async_build;
   use std::sync::Arc;
   ```
 
@@ -5281,8 +5282,9 @@ All line numbers verified at `origin/main` @ `b9bcc3e` (pre-Tasks-1–9). Tasks 
   grep -n 'cargo hack check --each-feature' .github/workflows/ci-rust.yml
   # F3 landmark:
   grep -n 'thinking_delta = "thinking_delta"' sdks/python/motosan_ai/types.py
-  # F4 landmark (no CLI backend ever reports ToolUse as its own stop reason):
-  grep -rn 'done_with_stop_reason' sdks/rust/src/providers/claude_code/ | head -3
+  # F4 landmarks — ABSENCE checks (the helper/branches PR-R and PR-P delete; both MUST print 0):
+  grep -rn 'cli_terminal_stop_reason' sdks/rust/src/ | wc -l    # expected: 0 (baseline has 4+ hits; >0 = PR-R not merged)
+  grep -n 'StopReason.tool_use' sdks/python/motosan_ai/providers/claude_code.py sdks/python/motosan_ai/providers/codex_cli.py sdks/python/motosan_ai/providers/gemini_cli.py | wc -l    # expected: 0 (>0 = PR-P not merged)
   # F5 landmarks:
   grep -n 'pub trait TokenSource' sdks/rust/src/auth.rs && grep -n 'chatgpt_codex_token_source' sdks/rust/src/client.rs
   grep -n 'token_source' sdks/python/motosan_ai/providers/chatgpt_codex.py | head -2
@@ -5290,7 +5292,7 @@ All line numbers verified at `origin/main` @ `b9bcc3e` (pre-Tasks-1–9). Tasks 
   # F6 landmark:
   grep -n 'claude_code = "claude_code"' sdks/python/motosan_ai/client.py
   ```
-  Expected: every grep prints at least one match and `F1-OK` appears. **If any grep is empty, STOP — the prerequisite PR is not merged; do not start the release branch.**
+  Expected: every landmark grep prints at least one match and `F1-OK` appears — EXCEPT the two F4 absence checks, which must print `0`. **If any presence-grep is empty, or either F4 absence check prints a nonzero count, STOP — the prerequisite PR is not merged; do not start the release branch.**
   Then:
   ```bash
   git checkout -b chore/m4-release origin/main
@@ -5343,8 +5345,6 @@ All line numbers verified at `origin/main` @ `b9bcc3e` (pre-Tasks-1–9). Tasks 
 
   - **CLI chat/stream contract** (Rust · Python): a successfully completed Claude Code / Codex CLI / Gemini CLI turn now always reports `stop_reason = end_turn` on both `chat()` and `stream()`. CLI backends never report `tool_use` — their tools are executed internally by the CLI, and `tool_use` means "caller must execute tools", which a CLI backend never requests; reporting it made agent loops re-execute already-executed tools. Blocking `chat()` for every CLI backend is now implemented as stream delegation (collect the provider's own `stream()`), so `ChatResponse.tool_calls` carries the **record of tools the CLI already executed** — never a request to execute — and content / thinking / usage / session_id parity with collecting `stream()` holds by construction. One documented parity exception: `chat()` may backfill `ChatResponse.model` from provider config when the collected value is empty. The `chat()` failure surface shifts to the stream-path variants: Rust `chat()` errors now arrive as the M3 stream variants (e.g. `StreamReadTimeout`), Python `chat()` nonzero-exit raises `StreamError` (was `ProviderError`), and the timeout scope becomes per-read stall rather than whole-invoke. Rust `codex_cli` `chat()` no longer splits the preamble into `thinking` (the old split was a post-hoc whole-transcript heuristic, unrepresentable in a stream): content is the concatenation, `thinking` is `None`.
   - **Python typed thinking events** (Python): streams emit `StreamEventType.thinking_delta` / `StreamEventType.thinking_done` (string values `"thinking_delta"` / `"thinking_done"`), replacing the ad-hoc `event_type="thinking"` string previously emitted by the anthropic and chatgpt-codex providers. Anthropic additionally emits `thinking_done` carrying the full concatenated thinking text on `content_block_stop` of a thinking block, mirroring Rust; stream collection prefers the `thinking_done` buffer over the concatenated-delta fallback. Consumers matching the old `"thinking"` string break.
-  - **`StreamEventType` vocabulary pinned** (spec — all SDKs): `specs/types.md` fixes the event-type set to `text | tool_call_start | tool_call_args | tool_call_end | usage | thinking_delta | thinking_done` and documents the real emitters per SDK. `done` is a boolean **field** on `StreamEvent`, never an event type — the spec line that listed it as a member was a bug.
-
   ### Added
 
   - **Per-attempt token sources for chatgpt-codex** (Rust · Python · TypeScript): Rust adds the ungated `motosan_ai::auth::TokenSource` trait (+ `StaticTokenSource`), `ChatGptCodexProvider::with_token_source`, and `ClientBuilder::chatgpt_codex_token_source(Arc<dyn TokenSource>)`; Python adds `token_source: Callable[[], Awaitable[str]] | None = None` on `ChatGptCodexProvider` / `Client.chatgpt_codex()` (constructor validation accepts `access_token` OR `token_source`); TypeScript widens `accessToken` to `string | (() => Promise<string>)`. In all three SDKs the bearer token is resolved at the top of **every retry attempt**, so long-lived agents can rotate expiring ChatGPT OAuth tokens without rebuilding the client. The SDKs stay decoupled from the workspace oauth crates — a refreshing `TokenSource` over `codex-oauth` ships as an `#[ignore]`d Rust live test.
@@ -5354,6 +5354,7 @@ All line numbers verified at `origin/main` @ `b9bcc3e` (pre-Tasks-1–9). Tasks 
   ### Changed
 
   - **Rust feature architecture** (Rust): private umbrella features `_http = [dep:reqwest, dep:chrono, dep:eventsource-stream, dep:tokio]` and `_cli = [dep:tokio, dep:async-stream]` replace the per-provider `dep:` lists; `tokio-stream` is promoted to an unconditional dependency; the HTTP-shared retry/transport helpers move from `providers/mod.rs` to `src/transport/http.rs` behind one `#[cfg(feature = "_http")]` gate. The public feature set is unchanged (plus the new `ollama-native` alias) and the resolved dependency set of every pre-existing feature is identical. CI adds `cargo hack check --each-feature`.
+  - **`StreamEventType` vocabulary pinned in the spec** (docs; no SDK behavior change): `specs/types.md` fixes the event-type set to `text | tool_call_start | tool_call_args | tool_call_end | usage | thinking_delta | thinking_done` and documents the real emitters per SDK. `done` is a boolean **field** on `StreamEvent`, never an event type — the old spec line listing it as a member was a spec bug; no SDK's `StreamEventType` ever included it.
 
   Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/python/CHANGELOG.md`](sdks/python/CHANGELOG.md), [`sdks/typescript/CHANGELOG.md`](sdks/typescript/CHANGELOG.md).
   ```
@@ -5391,9 +5392,10 @@ All line numbers verified at `origin/main` @ `b9bcc3e` (pre-Tasks-1–9). Tasks 
   ### Breaking
   - Typed thinking events: streams emit `StreamEventType.thinking_delta` / `StreamEventType.thinking_done` (string values `"thinking_delta"` / `"thinking_done"`), replacing the ad-hoc `event_type="thinking"` string previously emitted by the anthropic and chatgpt-codex providers. Anthropic additionally emits `thinking_done` carrying the full concatenated thinking text on `content_block_stop` of a thinking block (mirroring Rust); stream collection prefers the `thinking_done` buffer over the concatenated-delta fallback. Consumers matching `event.event_type == "thinking"` must switch to the new values. `StreamEvent.event_type` stays annotated `str` (`StrEnum` members are `str`).
   - CLI chat/stream contract (`ClaudeCodeClient` / `CodexCliClient` / `GeminiCliClient`): a successfully completed CLI turn always reports `stop_reason = "end_turn"` on both `chat()` and `stream()` — never `"tool_use"` (tools are executed internally by the CLI; reporting `tool_use` made agent loops re-execute already-executed tools). `chat()` is reimplemented as stream delegation, so `ChatResponse.tool_calls` for CLI backends now records the tools the CLI already executed (previously empty) and thinking / usage / session_id parity with collecting `stream()` holds by construction. One documented parity exception: `chat()` may backfill `ChatResponse.model` from provider config when the collected value is empty. The `chat()` failure surface shifts to the stream path: nonzero-exit/child-death raises `StreamError` (was `ProviderError`) and the timeout scope becomes per-read stall rather than whole-invoke; `codex_cli`'s text-only terminal now carries `stop_reason = "end_turn"` (was `None`).
+  - `ChatGptCodexProvider`: `account_id` gains a `None` default (signature requirement of the new optional `token_source`) — omitting it now raises `ConfigError` at construction instead of `TypeError` at call time.
 
   ### Added
-  - `token_source: Callable[[], Awaitable[str]] | None = None` on `ChatGptCodexProvider` and `Client.chatgpt_codex()`: when set, the bearer token is resolved at the top of **every retry attempt**, so long-lived agents can rotate expiring ChatGPT OAuth tokens without rebuilding the client. Constructor validation accepts `access_token` OR `token_source`. Note: `account_id` gains a `None` default to keep the signature legal — omitting it now raises `ConfigError` at construction (previously a `TypeError` at call time).
+  - `token_source: Callable[[], Awaitable[str]] | None = None` on `ChatGptCodexProvider` and `Client.chatgpt_codex()`: when set, the bearer token is resolved at the top of **every retry attempt**, so long-lived agents can rotate expiring ChatGPT OAuth tokens without rebuilding the client. Constructor validation accepts `access_token` OR `token_source` (`account_id` default change listed under Breaking above).
   - `Provider.claude_code` enum member, provider-construction routing, and a `Client.claude_code(...)` classmethod mirroring `Client.codex_cli(...)`, exposing the real `ClaudeCodeClient` constructor parameters.
   ```
 
