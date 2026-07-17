@@ -261,9 +261,10 @@ async for event in client.stream(
 
 Notes:
 - Uses `CLAUDE_CODE_PATH` env var or `claude` in `PATH`.
+- Available through both direct `ClaudeCodeClient()` and unified `Client.claude_code()` / `Provider.claude_code` dispatch (`binary_path`, `model`, `cli_timeout`; richer flags via the `ClaudeCodeClient` builder).
 - Live tests are opt-in: set `MOTOSAN_RUN_CLAUDE_CODE_LIVE=1`.
-- `tool_calls` is always empty (tools run inside CLI).
-- `agent_mode(True)` enables `--dangerously-skip-permissions` + JSON output parsing.
+- Blocking `chat()` delegates to `stream()` + collect: `tool_calls` records tools the CLI already executed, and a completed turn always reports `stop_reason="end_turn"`.
+- `agent_mode(True)` enables `--dangerously-skip-permissions`; `chat()` still uses the stream-JSON path because it delegates to `stream()`.
 - Python v0.9.0 adds full Rust-compatible Claude Code flag coverage: `bare`, `system_prompt`, `permission_mode`, `effort`, `fallback_model`, `add_dir(s)`, `allow_tool` / `allowed_tools`, `disallow_tool` / `disallowed_tools`, `mcp_config(s)`, `strict_mcp_config`, `settings`, `setting_source(s)`, `session_id`, `resume`, `continue_latest`, `fork_session`, `plugin_dir(s)`, `agent`, `no_session_persistence`, and `max_budget_usd`.
 - `system_prompt(...)` maps to `--system-prompt`; system messages / `ChatRequest.system` are appended with `--append-system-prompt`.
 - `allowed_tools`, `disallowed_tools`, and `mcp_configs` are variadic CLI arguments, matching Rust (`--allowed-tools Read Bash`, not comma-joined).

@@ -13,6 +13,7 @@ from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderEr
 from motosan_ai.providers import (
     AnthropicProvider,
     ChatGptCodexProvider,
+    ClaudeCodeClient,
     CodexCliClient,
     GeminiCliClient,
     GeminiCodeAssistProvider,
@@ -37,6 +38,7 @@ class Provider(StrEnum):
     minimax = "minimax"
     ollama = "ollama"
     gemini = "gemini"
+    claude_code = "claude_code"
     codex_cli = "codex_cli"
     gemini_cli = "gemini_cli"
     gemini_code_assist = "gemini_code_assist"
@@ -123,6 +125,11 @@ class Client:
                 connect_timeout=connect_timeout,
                 read_idle_timeout=read_idle_timeout,
             ).reasoning_effort(reasoning_effort)
+        elif provider_value == Provider.claude_code:
+            self.api_key = ""
+            self._provider = self._apply_cli_timeout(
+                ClaudeCodeClient(binary_path=binary_path), cli_timeout
+            )
         elif provider_value == Provider.codex_cli:
             self.api_key = ""
             self._provider = self._apply_cli_timeout(
@@ -323,6 +330,24 @@ class Client:
         )
 
     @classmethod
+    def claude_code(
+        cls,
+        binary_path: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
+        cli_timeout: float | None = _UNSET_CLI_TIMEOUT,
+    ) -> Client:
+        return cls(
+            provider=Provider.claude_code,
+            binary_path=binary_path,
+            model=model,
+            max_retries=max_retries,
+            retry_policy=retry_policy,
+            cli_timeout=cli_timeout,
+        )
+
+    @classmethod
     def gemini_cli(
         cls,
         binary_path: str | None = None,
@@ -377,9 +402,9 @@ class Client:
 
     @staticmethod
     def _apply_cli_timeout(
-        cli: CodexCliClient | GeminiCliClient,
+        cli: ClaudeCodeClient | CodexCliClient | GeminiCliClient,
         cli_timeout: float | None,
-    ) -> CodexCliClient | GeminiCliClient:
+    ) -> ClaudeCodeClient | CodexCliClient | GeminiCliClient:
         if cli_timeout is _UNSET_CLI_TIMEOUT:
             return cli
         if cli_timeout is None:
