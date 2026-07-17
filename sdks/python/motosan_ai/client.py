@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator, Iterable
 from dataclasses import replace
 from enum import StrEnum
+from types import TracebackType
 from typing import Any
 
 from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderError, RateLimitError
@@ -24,6 +25,10 @@ from motosan_ai.think_stripper import ThinkStripper
 from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
 
 logger = logging.getLogger(__name__)
+
+# cli_timeout sentinel: distinguishes "not passed" (keep the CLI provider's
+# default) from cli_timeout=None (which maps to .no_timeout()).
+_UNSET_CLI_TIMEOUT: Any = object()
 
 
 class Provider(StrEnum):
@@ -74,6 +79,10 @@ class Client:
         ollama_num_ctx: int | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        connect_timeout: float = 10.0,
+        read_idle_timeout: float = 120.0,
+        total_timeout: float | None = None,
+        cli_timeout: float | None = _UNSET_CLI_TIMEOUT,
     ) -> None:
         provider_value = Provider(provider)
         self.provider = provider_value
@@ -82,6 +91,7 @@ class Client:
             retry_policy if retry_policy is not None else RetryPolicy(max_retries=max_retries)
         )
         self._max_retries = self._retry_policy.max_retries
+        self._total_timeout = total_timeout
 
         if provider_value == Provider.gemini_code_assist:
             if not access_token:
@@ -94,6 +104,8 @@ class Client:
                 project_id=project_id,
                 model=model,
                 base_url=base_url,
+                connect_timeout=connect_timeout,
+                read_idle_timeout=read_idle_timeout,
             )
         elif provider_value == Provider.openai_chatgpt:
             if not access_token:
@@ -106,13 +118,19 @@ class Client:
                 account_id=account_id,
                 model=model,
                 base_url=base_url,
+                connect_timeout=connect_timeout,
+                read_idle_timeout=read_idle_timeout,
             ).reasoning_effort(reasoning_effort)
         elif provider_value == Provider.codex_cli:
             self.api_key = ""
-            self._provider = CodexCliClient(binary_path=binary_path)
+            self._provider = self._apply_cli_timeout(
+                CodexCliClient(binary_path=binary_path), cli_timeout
+            )
         elif provider_value == Provider.gemini_cli:
             self.api_key = ""
-            self._provider = GeminiCliClient(binary_path=binary_path)
+            self._provider = self._apply_cli_timeout(
+                GeminiCliClient(binary_path=binary_path), cli_timeout
+            )
         elif provider_value == Provider.ollama:
             self.api_key = api_key or ""
             if ollama_native:
@@ -124,12 +142,16 @@ class Client:
                     think=ollama_think,
                     keep_alive=ollama_keep_alive,
                     num_ctx=ollama_num_ctx,
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
                 )
             else:
                 self._provider = OpenAIProvider(
                     api_key=self.api_key,
                     model=model or "llama3.2",
                     base_url=base_url or "http://localhost:11434/v1",
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
                 )
         else:
             self.api_key = api_key or self._load_api_key(provider_value)
@@ -137,18 +159,35 @@ class Client:
                 raise ConfigError(f"Missing API key for provider: {provider_value.value}")
 
             if provider_value == Provider.anthropic:
-                self._provider = AnthropicProvider(api_key=self.api_key, model=model)
+                self._provider = AnthropicProvider(
+                    api_key=self.api_key,
+                    model=model,
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
+                )
             elif provider_value == Provider.openai:
                 self._provider = OpenAIProvider(
-                    api_key=self.api_key, model=model, base_url=base_url
+                    api_key=self.api_key,
+                    model=model,
+                    base_url=base_url,
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
                 )
             elif provider_value == Provider.gemini:
                 self._provider = GeminiProvider(
-                    api_key=self.api_key, model=model, base_url=base_url
+                    api_key=self.api_key,
+                    model=model,
+                    base_url=base_url,
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
                 )
             else:
                 self._provider = MinimaxProvider(
-                    api_key=self.api_key, model=model, base_url=base_url
+                    api_key=self.api_key,
+                    model=model,
+                    base_url=base_url,
+                    connect_timeout=connect_timeout,
+                    read_idle_timeout=read_idle_timeout,
                 )
 
     @classmethod
@@ -268,6 +307,7 @@ class Client:
         model: str | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        cli_timeout: float | None = _UNSET_CLI_TIMEOUT,
     ) -> Client:
         return cls(
             provider=Provider.codex_cli,
@@ -275,6 +315,7 @@ class Client:
             model=model,
             max_retries=max_retries,
             retry_policy=retry_policy,
+            cli_timeout=cli_timeout,
         )
 
     @classmethod
@@ -284,6 +325,7 @@ class Client:
         model: str | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        cli_timeout: float | None = _UNSET_CLI_TIMEOUT,
     ) -> Client:
         return cls(
             provider=Provider.gemini_cli,
@@ -291,6 +333,7 @@ class Client:
             model=model,
             max_retries=max_retries,
             retry_policy=retry_policy,
+            cli_timeout=cli_timeout,
         )
 
     @classmethod
@@ -328,6 +371,32 @@ class Client:
         }
         return os.getenv(env_map[provider])
 
+    @staticmethod
+    def _apply_cli_timeout(
+        cli: CodexCliClient | GeminiCliClient,
+        cli_timeout: float | None,
+    ) -> CodexCliClient | GeminiCliClient:
+        if cli_timeout is _UNSET_CLI_TIMEOUT:
+            return cli
+        if cli_timeout is None:
+            return cli.no_timeout()
+        return cli.timeout(cli_timeout)
+
+    async def aclose(self) -> None:
+        """Close the provider's underlying connection pool (idempotent)."""
+        await self._provider.aclose()
+
+    async def __aenter__(self) -> Client:
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        await self.aclose()
+
     def _build_request(
         self,
         messages: Iterable[Message | dict[str, Any]],
@@ -355,10 +424,21 @@ class Client:
         Use this when you need fields that ``chat()`` kwargs do not expose,
         such as tool_choice, thinking, mcp_servers, system_blocks, or
         stop_sequences. If ``request.model`` is None, ``self.model`` is used.
+        ``total_timeout`` bounds blocking calls like this one and ``chat()``
+        (retries included), never stream consumption; ``None`` disables it.
         """
         if request.model is None and self.model is not None:
             request = replace(request, model=self.model)
 
+        if self._total_timeout is None:
+            return await self._dispatch_chat(request)
+        try:
+            async with asyncio.timeout(self._total_timeout):
+                return await self._dispatch_chat(request)
+        except TimeoutError as exc:
+            raise NetworkError(f"total timeout of {self._total_timeout}s exceeded") from exc
+
+    async def _dispatch_chat(self, request: ChatRequest) -> ChatResponse:
         if self._retry_policy.max_retries > 0:
             from motosan_ai.retry import with_retry
 

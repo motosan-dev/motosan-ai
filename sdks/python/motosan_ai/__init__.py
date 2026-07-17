@@ -4,12 +4,14 @@ from motosan_ai.client import Client, Provider
 from motosan_ai.error import (
     AuthError,
     ConfigError,
+    IncompleteStreamError,
     InvalidRequestError,
     MotosanError,
     NetworkError,
     ProviderError,
     RateLimitError,
     StreamError,
+    StreamReadTimeoutError,
 )
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers import (
@@ -79,6 +81,7 @@ __all__ = [
     "ImageSource",
     "ImageSourceBase64",
     "ImageSourceUrl",
+    "IncompleteStreamError",
     "InvalidRequestError",
     "LocalProvider",
     "McpServerConfig",
@@ -99,6 +102,7 @@ __all__ = [
     "StreamError",
     "StreamEvent",
     "StreamEventType",
+    "StreamReadTimeoutError",
     "SystemBlock",
     "TextBlock",
     "ThinkingConfig",

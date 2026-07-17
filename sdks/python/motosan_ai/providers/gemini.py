@@ -7,7 +7,15 @@ from typing import Any
 
 import httpx
 
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
+from motosan_ai.error import (
+    AuthError,
+    IncompleteStreamError,
+    NetworkError,
+    ProviderError,
+    RateLimitError,
+    StreamError,
+    StreamReadTimeoutError,
+)
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
@@ -174,11 +182,26 @@ class GeminiProvider(BaseProvider):
         api_key: str,
         model: str | None = None,
         base_url: str | None = None,
+        *,
+        connect_timeout: float = 10.0,
+        read_idle_timeout: float = 120.0,
     ) -> None:
         self.api_key = api_key
         self.model = model or _DEFAULT_MODEL
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
-        self._http = httpx.AsyncClient(timeout=120.0)
+        self._read_idle_timeout = read_idle_timeout
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=connect_timeout,
+                read=read_idle_timeout,
+                write=read_idle_timeout,
+                pool=connect_timeout,
+            )
+        )
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        await self._http.aclose()
 
     def _model_for(self, request: ChatRequest) -> str:
         return request.model or self.model
@@ -278,14 +301,15 @@ class GeminiProvider(BaseProvider):
             )
         except httpx.HTTPError as exc:
             raise NetworkError(str(exc)) from exc
-        if not resp.is_success:
-            error_body = await resp.aread()
-            message = self._response_error_message(
-                resp.status_code, resp.headers, error_body.decode()
-            )
-            raise self._map_http_error(resp.status_code, message, resp.headers)
 
         try:
+            if not resp.is_success:
+                error_body = await resp.aread()
+                message = self._response_error_message(
+                    resp.status_code, resp.headers, error_body.decode()
+                )
+                raise self._map_http_error(resp.status_code, message, resp.headers)
+
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
@@ -349,10 +373,16 @@ class GeminiProvider(BaseProvider):
                         stop_reason=_stop_reason_for(finish_reason, has_tool_calls),
                     )
                     return
+
+            raise IncompleteStreamError("incomplete stream: gemini ended without a terminal event")
         except StreamError:
             raise
         except (AuthError, RateLimitError, ProviderError, NetworkError):
             raise
+        except httpx.ReadTimeout as exc:
+            raise StreamReadTimeoutError(
+                f"stream read timed out after {self._read_idle_timeout}s"
+            ) from exc
         except httpx.HTTPError as exc:
             raise StreamError(f"stream transport error: {exc}") from exc
         finally:
