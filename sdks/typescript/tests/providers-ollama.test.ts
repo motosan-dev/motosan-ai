@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OllamaProvider } from '../src/providers/ollama.js'
 import { DEFAULT_OLLAMA_MODEL } from '../src/models.js'
 import { RetryPolicy } from '../src/retry.js'
+import { IncompleteStreamError } from '../src/error.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
 const BASE = 'http://localhost:11434'
@@ -359,22 +360,27 @@ describe('OllamaProvider stream (native NDJSON adapter)', () => {
     expect(events[events.length - 1].done).toBe(true)
   })
 
-  it('ends WITHOUT synthesizing a done event on EOF without done:true', async () => {
+  it('throws IncompleteStreamError on EOF without done:true (M3/E2)', async () => {
     stubNdjson([
       '{"message":{"content":"a"},"done":false}\n',
       '{"message":{"content":"b"},"done":false}\n',
     ])
     const provider = new OllamaProvider('llama3.2', BASE)
     const events: StreamEvent[] = []
-    for await (const e of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
-      events.push(e)
+    let error: unknown
+    try {
+      for await (const e of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+        events.push(e)
+      }
+    } catch (e) {
+      error = e
     }
-    // No terminal done event synthesized (matches Rust Poll::Ready(None)).
-    expect(events.every((e) => !e.done)).toBe(true)
+    expect(error).toBeInstanceOf(IncompleteStreamError)
+    expect((error as Error).message).toBe('incomplete stream: ollama ended without a terminal event')
     expect(events.map((e) => e.content)).toEqual(['a', 'b'])
   })
 
-  it('ends without throwing when the NDJSON body errors after yielding data', async () => {
+  it('propagates an NDJSON body error after yielding partial data (M3: swallow removed)', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn(async () => {
@@ -402,7 +408,7 @@ describe('OllamaProvider stream (native NDJSON adapter)', () => {
           events.push(e)
         }
       })(),
-    ).resolves.toBeUndefined()
+    ).rejects.toThrow('socket closed')
     expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])
   })
 })

@@ -5,7 +5,7 @@
  * `types.rs:903-930` (ProviderCapabilities).
  */
 
-import { UnsupportedFeatureError } from './error.js'
+import { StreamReadTimeoutError, UnsupportedFeatureError } from './error.js'
 import type { BoxStream } from './stream.js'
 import type { ChatRequest, ChatResponse, ContentBlock, StreamEvent } from './types.js'
 
@@ -101,6 +101,24 @@ export function validateRequest(req: ChatRequest, caps: ProviderCapabilities): v
  */
 export type Provider = 'anthropic' | 'openai' | 'minimax' | 'ollama' | 'gemini' | 'chatgpt_codex'
 
+/** Per-request options accepted by Client.chat / Client.stream. */
+export interface RequestOptions {
+  /** Caller cancellation signal. Abort => CancelledError, never retried (E6). */
+  signal?: AbortSignal
+}
+
+/**
+ * What providers receive: `signal` is the fetch signal (caller signal, plus
+ * the opt-in totalMs AbortSignal.timeout on chat paths only); `callerSignal`
+ * is the raw caller signal, kept separate so the CancelledError-vs-
+ * retryable-abort split can test callerSignal.aborted; `preHeadersTimeoutMs`
+ * is the E4 connect budget, disarmed by http/fetch.ts once headers arrive.
+ */
+export interface ProviderRequestOptions extends RequestOptions {
+  callerSignal?: AbortSignal
+  preHeadersTimeoutMs?: number
+}
+
 /**
  * Minimal shape a provider must expose to be dispatched: a capability reshape
  * plus chat/stream. Concrete providers (AnthropicProvider/OpenAIProvider/
@@ -108,8 +126,8 @@ export type Provider = 'anthropic' | 'openai' | 'minimax' | 'ollama' | 'gemini' 
  */
 export interface ProviderImpl {
   capabilities(): ProviderCapabilities
-  chat(req: ChatRequest): Promise<ChatResponse>
-  stream(req: ChatRequest): BoxStream
+  chat(req: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse>
+  stream(req: ChatRequest, opts?: ProviderRequestOptions): BoxStream
 }
 
 /**
@@ -117,9 +135,13 @@ export interface ProviderImpl {
  * provider.chat (which owns its retry loop). NO retry here; mirrors Rust
  * client.rs dispatch_chat (validate → p.chat).
  */
-export async function dispatchChat(provider: ProviderImpl, req: ChatRequest): Promise<ChatResponse> {
+export async function dispatchChat(
+  provider: ProviderImpl,
+  req: ChatRequest,
+  opts?: ProviderRequestOptions,
+): Promise<ChatResponse> {
   validateRequest(req, provider.capabilities())
-  return provider.chat(req)
+  return provider.chat(req, opts)
 }
 
 /**
@@ -127,16 +149,20 @@ export async function dispatchChat(provider: ProviderImpl, req: ChatRequest): Pr
  * (which owns the initial-fetch retry; NO retry here). Sync return; the returned
  * generator throws on initial-fetch failure after provider internal retries.
  */
-export function dispatchStream(provider: ProviderImpl, req: ChatRequest): BoxStream {
+export function dispatchStream(
+  provider: ProviderImpl,
+  req: ChatRequest,
+  opts?: ProviderRequestOptions,
+): BoxStream {
   validateRequest(req, provider.capabilities())
-  return provider.stream(req)
+  return provider.stream(req, opts)
 }
 
 /**
- * Stream wrapper that applies a read timeout. SILENTLY terminates (returns/ends)
- * on timeout — does NOT throw, matching the M1 mid-stream-failure swallow contract.
- * Ports Rust `ReadTimeoutStream`: reset the deadline on each yielded event; if no
- * event arrives before the deadline, end the stream.
+ * Stream wrapper that applies a read-idle timeout. THROWS StreamReadTimeoutError
+ * when no event arrives within the deadline (E7 — the pre-M3 silent-end behavior
+ * is retired); the deadline resets on each yielded event and the inner iterator
+ * is cancelled before throwing.
  */
 export async function* readTimeoutStream(inner: BoxStream, timeoutSecs: number): BoxStream {
   const timeoutMs = timeoutSecs * 1000
@@ -173,7 +199,7 @@ export async function* readTimeoutStream(inner: BoxStream, timeoutSecs: number):
 
         if (raced === '__timeout__') {
           cancelInnerWithoutWaiting()
-          return
+          throw new StreamReadTimeoutError(timeoutSecs)
         }
 
         const result = raced as IteratorResult<StreamEvent>

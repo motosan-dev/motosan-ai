@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { GeminiProvider } from '../src/providers/gemini.js'
 import { collectStream } from '../src/stream.js'
-import { UnsupportedFeatureError } from '../src/error.js'
+import { IncompleteStreamError, UnsupportedFeatureError } from '../src/error.js'
 import { validateRequest } from '../src/provider.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
@@ -349,7 +349,7 @@ describe('GeminiProvider — SSE stream (no [DONE]; finishReason terminates)', (
     expect(resp.toolCalls[0].input.q).toBe('x')
   })
 
-  it('skips a defensive [DONE] line and does not fabricate a done on EOF (gemini.rs:447-449,531)', async () => {
+  it('skips a defensive [DONE] line and throws IncompleteStreamError on EOF without finishReason (M3/E2)', async () => {
     const mockFetch = vi.fn(async () => {
       // No finishReason anywhere; a stray [DONE] must be ignored; stream ends on EOF.
       const sse = [
@@ -362,8 +362,13 @@ describe('GeminiProvider — SSE stream (no [DONE]; finishReason terminates)', (
 
     const provider = new GeminiProvider('k')
     const events: StreamEvent[] = []
-    for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
-      events.push(evt)
+    let error: unknown
+    try {
+      for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+        events.push(evt)
+      }
+    } catch (e) {
+      error = e
     }
     // Exactly one text event; NO fabricated done (Gemini adapter never emits a
     // defensive EOF done — only finishReason drives it).
@@ -371,13 +376,11 @@ describe('GeminiProvider — SSE stream (no [DONE]; finishReason terminates)', (
       'partial',
     ])
     expect(events.some((e) => e.done)).toBe(false)
+    expect(error).toBeInstanceOf(IncompleteStreamError)
 
-    // collectStream still produces a response (tolerates a missing done).
-    const resp = await collectStream(
-      provider.stream({ messages: [{ role: 'user', content: 'hi' }] }),
-    )
-    expect(resp.content).toBe('partial')
-    expect(resp.stopReason).toBe('end_turn') // fabricated from toolCalls.length === 0
+    await expect(
+      collectStream(provider.stream({ messages: [{ role: 'user', content: 'hi' }] })),
+    ).rejects.toBeInstanceOf(IncompleteStreamError)
   })
 
   it('emits a usage event from usageMetadata (gemini.rs:496-511)', async () => {

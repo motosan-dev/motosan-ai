@@ -12,6 +12,35 @@ export class NetworkError extends MotosanError {}
 export class StreamError extends MotosanError {}
 
 /**
+ * Error thrown when the upstream byte/event stream ends (EOF) without the
+ * provider's terminal event (Anthropic message_stop, OpenAI [DONE], Gemini
+ * finishReason, Ollama done:true, Codex response.completed). Message
+ * convention: `incomplete stream: <provider> ended without a terminal event`.
+ * Subclasses StreamError deliberately (migration softener): existing
+ * `instanceof StreamError` handlers keep catching truncation. Replaces the
+ * retired v0.10.1 "exactly one terminal done even when upstream closes
+ * without [DONE]" invariant (M3/E3; specs/types.md stream termination).
+ */
+export class IncompleteStreamError extends StreamError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'IncompleteStreamError'
+  }
+}
+
+/**
+ * Thrown when the CALLER's AbortSignal aborts a request. NEVER retried
+ * (specs/retry.md transport table). Fetch-internal AbortError/TimeoutError
+ * with no caller signal aborted (e.g. AbortSignal.timeout) stay retryable.
+ */
+export class CancelledError extends MotosanError {
+  constructor(message = 'request cancelled by caller') {
+    super(message)
+    this.name = 'CancelledError'
+  }
+}
+
+/**
  * Error thrown when a stream read operation times out.
  * Carries the timeout duration in seconds.
  */
@@ -88,8 +117,11 @@ export function isRetryableNetworkError(error: unknown): boolean {
     return false
   }
 
-  // AbortError (fetch cancelled/timed out at fetch level)
-  if (error.name === 'AbortError') {
+  // AbortError / TimeoutError: fetch cancelled or timed out at fetch level.
+  // undici rejects with signal.reason — a TimeoutError DOMException for
+  // AbortSignal.timeout. Caller-signal aborts are translated to
+  // CancelledError BEFORE classification and never reach this predicate.
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') {
     return true
   }
 

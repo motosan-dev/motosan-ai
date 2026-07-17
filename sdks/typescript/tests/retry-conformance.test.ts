@@ -5,8 +5,8 @@
 // A failure means the implementation drifted from specs/retry.md — fix the
 // implementation (or the spec plus all three suites), never this file alone.
 import { describe, expect, it } from 'vitest'
-import { isRetryableStatus, parseRetryAfter } from '../src/error.js'
-import { RetryPolicy } from '../src/retry.js'
+import { CancelledError, isRetryableStatus, parseRetryAfter } from '../src/error.js'
+import { classifyForRetry, RetryPolicy } from '../src/retry.js'
 
 const RETRYABLE = [408, 409, 429, 500, 502, 503, 529, 599]
 const NON_RETRYABLE = [200, 301, 400, 401, 403, 404, 422, 499]
@@ -74,5 +74,25 @@ describe('specs/retry.md § backoff (full jitter)', () => {
     expect(policy.maxDelayMs).toBe(2000)
     expect(policy.jitter).toBe(true)
     expect(policy.respectRetryAfter).toBe(true)
+  })
+})
+
+describe('specs/retry.md § transport classification (M3 amendment)', () => {
+  // Coordination: the M3 spec task adds the CancelledError row to
+  // specs/retry.md's transport table; this TS suite is the ONLY conformance
+  // suite that changes — Rust (drop-based cancellation) and Python (asyncio
+  // CancelledError propagates untouched) had no classification change, so
+  // their suites need NO new row (Task 9 verifies exactly that).
+  it('CancelledError (caller-supplied signal aborted) is NEVER retryable', () => {
+    expect(classifyForRetry(new CancelledError()).retryable).toBe(false)
+  })
+
+  it('fetch-internal AbortError / TimeoutError (no caller signal) stay retryable', () => {
+    const abort = new Error('aborted')
+    abort.name = 'AbortError'
+    const timeout = new Error('timed out')
+    timeout.name = 'TimeoutError'
+    expect(classifyForRetry(abort).retryable).toBe(true)
+    expect(classifyForRetry(timeout).retryable).toBe(true)
   })
 })

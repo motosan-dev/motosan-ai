@@ -8,15 +8,14 @@
  * the Python mid-stream `StreamError` raise).
  */
 
-import { StreamError } from '../error.js'
+import { IncompleteStreamError, StreamError } from '../error.js'
 import { postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { textOnly, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   collectStream,
-  doneEvent,
   doneWithStopReason,
   textEvent,
   thinkingDelta,
@@ -206,18 +205,21 @@ export class ChatGptCodexProvider {
     return body
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const model = request.model ?? this.model
-    const response = await collectStream(this.stream(request))
+    const response = await collectStream(this.stream(request, opts))
     if (!response.model) response.model = model
     return response
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
-  private async *streamImpl(request: ChatRequest): AsyncGenerator<StreamEvent> {
+  private async *streamImpl(
+    request: ChatRequest,
+    opts?: ProviderRequestOptions,
+  ): AsyncGenerator<StreamEvent> {
     const model = request.model ?? this.model
     const body = this.buildResponsesBody(request, model)
     const headers = this.headers()
@@ -226,7 +228,13 @@ export class ChatGptCodexProvider {
     // other providers: nothing is retried after the first emitted event).
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(this.baseUrl, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.baseUrl, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -239,92 +247,86 @@ export class ChatGptCodexProvider {
     // only. Map item.id → call_id so every tool event carries the call_id.
     const itemIdToCallId = new Map<string, string>()
 
-    // Fatal `error` / `response.failed` frames throw a StreamError (Rust/
-    // Python parity). Other post-start body errors still end silently (M3).
-    try {
-      for await (const evt of parseSse(responseBody)) {
-        const data = evt.data
-        if (!data || data === '[DONE]' || typeof data !== 'object') continue
+    // Fatal `error` / `response.failed` frames throw a StreamError; other
+    // body errors propagate (M3 removed the swallow).
+    for await (const evt of parseSse(responseBody)) {
+      const data = evt.data
+      if (!data || data === '[DONE]' || typeof data !== 'object') continue
 
-        switch (data.type) {
-          case 'response.output_text.delta': {
-            const delta = data.delta
-            if (typeof delta === 'string' && delta) yield textEvent(delta)
-            break
-          }
-          case 'response.reasoning_text.delta':
-          case 'response.reasoning_summary_text.delta': {
-            const delta = data.delta
-            if (typeof delta === 'string' && delta) yield thinkingDelta(delta)
-            break
-          }
-          case 'response.output_item.added': {
-            const item = data.item
-            if (item && item.type === 'function_call' && item.call_id) {
-              sawToolCall = true
-              if (item.id) itemIdToCallId.set(String(item.id), String(item.call_id))
-              yield toolCallStart(String(item.call_id), String(item.name ?? ''))
-            }
-            break
-          }
-          case 'response.function_call_arguments.delta': {
-            const itemId = data.item_id
-            const delta = data.delta
-            if (itemId && typeof delta === 'string') {
-              const callId = itemIdToCallId.get(String(itemId)) ?? String(itemId)
-              yield toolCallArgsWithId(callId, delta)
-            }
-            break
-          }
-          case 'response.output_item.done': {
-            const item = data.item
-            if (item && item.type === 'function_call' && item.call_id) {
-              yield toolCallEndWithId(String(item.call_id))
-            }
-            break
-          }
-          case 'response.completed': {
-            const response =
-              data.response && typeof data.response === 'object' ? data.response : {}
-            const usage = response.usage
-            if (usage && typeof usage === 'object') {
-              const u: Usage = {
-                inputTokens: Number(usage.input_tokens ?? 0),
-                outputTokens: Number(usage.output_tokens ?? 0),
-              }
-              const cached = Number(usage.input_tokens_details?.cached_tokens ?? 0)
-              if (cached > 0) u.cacheReadInputTokens = cached
-              yield usageEvent(u)
-            }
-            const status = response.status ?? 'completed'
-            const stop: StopReason = sawToolCall
-              ? 'tool_use'
-              : status === 'incomplete'
-                ? 'max_tokens'
-                : 'end_turn'
-            yield doneWithStopReason(stop)
-            return
-          }
-          case 'error':
-          case 'response.failed':
-            // Fatal stream error frame: surface it (Rust MotosanError::Stream
-            // / Python StreamError parity).
-            throw new StreamError(chatGptCodexErrorMessage(data))
-          default:
-            break
+      switch (data.type) {
+        case 'response.output_text.delta': {
+          const delta = data.delta
+          if (typeof delta === 'string' && delta) yield textEvent(delta)
+          break
         }
+        case 'response.reasoning_text.delta':
+        case 'response.reasoning_summary_text.delta': {
+          const delta = data.delta
+          if (typeof delta === 'string' && delta) yield thinkingDelta(delta)
+          break
+        }
+        case 'response.output_item.added': {
+          const item = data.item
+          if (item && item.type === 'function_call' && item.call_id) {
+            sawToolCall = true
+            if (item.id) itemIdToCallId.set(String(item.id), String(item.call_id))
+            yield toolCallStart(String(item.call_id), String(item.name ?? ''))
+          }
+          break
+        }
+        case 'response.function_call_arguments.delta': {
+          const itemId = data.item_id
+          const delta = data.delta
+          if (itemId && typeof delta === 'string') {
+            const callId = itemIdToCallId.get(String(itemId)) ?? String(itemId)
+            yield toolCallArgsWithId(callId, delta)
+          }
+          break
+        }
+        case 'response.output_item.done': {
+          const item = data.item
+          if (item && item.type === 'function_call' && item.call_id) {
+            yield toolCallEndWithId(String(item.call_id))
+          }
+          break
+        }
+        case 'response.completed': {
+          const response =
+            data.response && typeof data.response === 'object' ? data.response : {}
+          const usage = response.usage
+          if (usage && typeof usage === 'object') {
+            const u: Usage = {
+              inputTokens: Number(usage.input_tokens ?? 0),
+              outputTokens: Number(usage.output_tokens ?? 0),
+            }
+            const cached = Number(usage.input_tokens_details?.cached_tokens ?? 0)
+            if (cached > 0) u.cacheReadInputTokens = cached
+            yield usageEvent(u)
+          }
+          const status = response.status ?? 'completed'
+          const stop: StopReason = sawToolCall
+            ? 'tool_use'
+            : status === 'incomplete'
+              ? 'max_tokens'
+              : 'end_turn'
+          yield doneWithStopReason(stop)
+          return
+        }
+        case 'error':
+        case 'response.failed':
+          // Fatal stream error frame: surface it (Rust MotosanError::Stream
+          // / Python StreamError parity).
+          throw new StreamError(chatGptCodexErrorMessage(data))
+        default:
+          break
       }
-    } catch (error) {
-      if (error instanceof StreamError) {
-        throw error
-      }
-      // Ignore other post-start stream-body errors; end without a terminal
-      // done (mirrors ollama.ts:362-366). Surfacing these is milestone M3.
-      return
     }
 
-    // Defensive terminal for a clean EOF without response.completed
-    // (mirrors anthropic.ts:386-391). response.completed returns earlier.
-    yield doneEvent()
+    // EOF without response.completed: truncation, not completion (M3/E2/E3 —
+    // the defensive doneEvent() is retired). chat() = collectStream(stream()),
+    // so a truncated chat() now rejects with IncompleteStreamError too.
+    throw new IncompleteStreamError(
+      'incomplete stream: chatgpt_codex ended without a terminal event',
+    )
   }
 }

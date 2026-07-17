@@ -11,7 +11,7 @@
  * (Rust client.rs:577).
  */
 import { DEFAULT_MINIMAX_MODEL } from '../models.js'
-import { minimaxCaps, type ProviderCapabilities } from '../provider.js'
+import { minimaxCaps, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
 import { RetryPolicy } from '../retry.js'
 import type { BoxStream } from '../stream.js'
 import type { ChatRequest, ChatResponse } from '../types.js'
@@ -28,6 +28,7 @@ export class MinimaxProvider {
       apiKey,
       model ?? DEFAULT_MINIMAX_MODEL,
       baseUrl ?? DEFAULT_MINIMAX_BASE_URL,
+      'minimax',
     )
   }
 
@@ -36,12 +37,12 @@ export class MinimaxProvider {
     return this
   }
 
-  chat(request: ChatRequest): Promise<ChatResponse> {
-    return this.inner.chat(request)
+  chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
+    return this.inner.chat(request, opts)
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.inner.stream(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.inner.stream(request, opts)
   }
 
   /** Text-only but MCP-capable via Anthropic-compatible wire. */

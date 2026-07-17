@@ -1,8 +1,9 @@
+import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_OPENAI_MODEL } from '../models.js'
-import { withImage, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { withImage, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
 import {
   doneEvent,
@@ -141,7 +142,10 @@ export class OpenAIProvider {
     return ''
   }
 
-  private async chatViaResponses(request: ChatRequest): Promise<ChatResponse> {
+  private async chatViaResponses(
+    request: ChatRequest,
+    opts?: ProviderRequestOptions,
+  ): Promise<ChatResponse> {
     const model = request.model ?? this.model
     const instructionsParts: string[] = []
 
@@ -209,7 +213,13 @@ export class OpenAIProvider {
 
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(this.responsesUrl, this.headers(), body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(this.responsesUrl, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
     const content = this.extractResponsesText(payload)
@@ -238,7 +248,7 @@ export class OpenAIProvider {
     }
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
 
@@ -246,7 +256,13 @@ export class OpenAIProvider {
     try {
       payload = await withRetry(
         this.retryPolicy,
-        async () => postJson<any>(this.chatUrl, this.headers(), body),
+        async () =>
+          attemptWithCancellation(opts?.callerSignal, () =>
+            postJson<any>(this.chatUrl, this.headers(), body, {
+              signal: opts?.signal,
+              preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+            }),
+          ),
         classifyForRetry,
       )
     } catch (error) {
@@ -255,7 +271,7 @@ export class OpenAIProvider {
         error instanceof Error &&
         (error as { status?: number }).status === 404
       ) {
-        return this.chatViaResponses(request)
+        return this.chatViaResponses(request, opts)
       }
       throw error
     }
@@ -298,15 +314,15 @@ export class OpenAIProvider {
     }
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
   capabilities(): ProviderCapabilities {
     return withImage()
   }
 
-  private async *streamImpl(request: ChatRequest) {
+  private async *streamImpl(request: ChatRequest, opts?: ProviderRequestOptions) {
     const resolvedModel = request.model ?? this.model
     const body = serializeOpenAiRequest(request, resolvedModel)
     body.stream = true
@@ -314,7 +330,13 @@ export class OpenAIProvider {
     // Retry ONLY the initial fetch; no retry after the first emitted event.
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(this.chatUrl, this.headers(), body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.chatUrl, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -425,20 +447,26 @@ export class OpenAIProvider {
       }
     }
 
-    // Defensive: EOF without [DONE] — emit terminal once.
+    // EOF without the [DONE] sentinel (M3, amended): a stashed finish_reason
+    // means the stream is SEMANTICALLY complete — [DONE] is only the
+    // transport epilogue — so emit the terminal done carrying it, open-tool
+    // flush included (mirrors the [DONE] branch; narrow survival of the
+    // pre-M3 EOF fabrication, ONLY when finish_reason was seen). EOF with
+    // NEITHER signal is truncation: the no-signal fabrication is retired.
     if (!doneEmitted) {
-      // If a tool is still open (no finish_reason/[DONE] closed it), flush it.
-      if (openToolIndex !== undefined) {
-        const openId = toolBuffer.get(openToolIndex)?.id
-        if (openId) {
-          yield toolCallEndWithId(openId)
+      if (pendingStopReason !== undefined) {
+        if (openToolIndex !== undefined) {
+          const openId = toolBuffer.get(openToolIndex)?.id
+          if (openId) {
+            yield toolCallEndWithId(openId)
+          }
+          openToolIndex = undefined
         }
-        openToolIndex = undefined
+        doneEmitted = true
+        yield doneWithStopReason(pendingStopReason)
+        return
       }
-      doneEmitted = true
-      yield pendingStopReason !== undefined
-        ? doneWithStopReason(pendingStopReason)
-        : doneEvent()
+      throw new IncompleteStreamError('incomplete stream: openai ended without a terminal event')
     }
   }
 }

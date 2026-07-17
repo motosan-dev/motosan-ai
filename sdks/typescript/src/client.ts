@@ -1,4 +1,4 @@
-import { ConfigError } from './error.js'
+import { CancelledError, ConfigError } from './error.js'
 import {
   dispatchChat,
   dispatchStream,
@@ -6,6 +6,8 @@ import {
   textOnly,
   type Provider,
   type ProviderImpl as DispatchProvider,
+  type ProviderRequestOptions,
+  type RequestOptions,
 } from './provider.js'
 import { RetryPolicy } from './retry.js'
 import { collectStream, type BoxStream } from './stream.js'
@@ -21,10 +23,23 @@ import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
 export type ProviderName = Provider
 
+/** E4 one-timeout-model settings (milliseconds). */
+export interface TimeoutSettings {
+  /** Connect budget; fused with readIdleMs into http/fetch.ts's disarm-at-headers deadline. Default 10_000. */
+  connectMs?: number
+  /** Max gap between stream events (readTimeoutStream). Default 120_000. */
+  readIdleMs?: number
+  /** Whole-call budget, chat() only — NEVER applied to stream body consumption. Default undefined (off). */
+  totalMs?: number
+}
+
+const DEFAULT_CONNECT_MS = 10_000
+const DEFAULT_READ_IDLE_MS = 120_000
+
 export interface ProviderLike {
   capabilities?(): ReturnType<DispatchProvider['capabilities']>
-  chat(request: ChatRequest): Promise<ChatResponse>
-  stream(request: ChatRequest): AsyncIterable<StreamEvent>
+  chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse>
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): AsyncIterable<StreamEvent>
 }
 
 /**
@@ -59,8 +74,8 @@ function asDispatchProvider(provider: ProviderLike): DispatchProvider {
 
   return {
     capabilities: textOnly,
-    chat: (request: ChatRequest) => provider.chat(request),
-    stream: (request: ChatRequest) => provider.stream(request),
+    chat: (request: ChatRequest, opts?: ProviderRequestOptions) => provider.chat(request, opts),
+    stream: (request: ChatRequest, opts?: ProviderRequestOptions) => provider.stream(request, opts),
   }
 }
 
@@ -73,7 +88,7 @@ export class ClientBuilder {
   protected _apiKey?: string
   protected _model?: string
   protected _retryPolicy: RetryPolicy = RetryPolicy.default()
-  protected _streamReadTimeoutSecs?: number
+  protected _timeouts: TimeoutSettings = {}
   protected _anthropicBaseUrl?: string
   protected _minimaxBaseUrl?: string
   protected _geminiBaseUrl?: string
@@ -110,8 +125,15 @@ export class ClientBuilder {
     return this
   }
 
+  /** E4 one-timeout-model. Unset fields keep defaults (connect 10s, readIdle 120s, total off). */
+  timeouts(t: TimeoutSettings): this {
+    this._timeouts = { ...this._timeouts, ...t }
+    return this
+  }
+
+  /** @deprecated Alias for timeouts({ readIdleMs: n * 1000 }); superseded by the E4 timeout model. */
   streamReadTimeoutSecs(n: number): this {
-    this._streamReadTimeoutSecs = n
+    this._timeouts = { ...this._timeouts, readIdleMs: n * 1000 }
     return this
   }
 
@@ -315,7 +337,7 @@ export class ClientBuilder {
     }
 
     const provider = this.buildProvider(this._provider, apiKey ?? '')
-    return new Client(provider, this._streamReadTimeoutSecs)
+    return new Client(provider, this._timeouts)
   }
 }
 
@@ -327,7 +349,9 @@ export class ClientBuilder {
  */
 export class Client {
   private provider: DispatchProvider
-  private streamReadTimeoutSecs?: number
+  private readonly connectMs: number
+  private readonly readIdleMs: number
+  private readonly totalMs?: number
 
   static builder(): ClientBuilder {
     return new ClientBuilder()
@@ -342,9 +366,11 @@ export class Client {
           minimaxBaseUrl?: string
         }
       | ProviderLike,
-    streamReadTimeoutSecs?: number,
+    timeouts?: TimeoutSettings,
   ) {
-    this.streamReadTimeoutSecs = streamReadTimeoutSecs
+    this.connectMs = timeouts?.connectMs ?? DEFAULT_CONNECT_MS
+    this.readIdleMs = timeouts?.readIdleMs ?? DEFAULT_READ_IDLE_MS
+    this.totalMs = timeouts?.totalMs
 
     if (typeof (options as ProviderLike).chat === 'function') {
       this.provider = asDispatchProvider(options as ProviderLike)
@@ -388,34 +414,74 @@ export class Client {
     }
   }
 
-  /** Send a chat request; validates capabilities BEFORE any HTTP call. */
-  async chat(request: ChatRequest): Promise<ChatResponse> {
-    return dispatchChat(this.provider, request)
+  /**
+   * Send a chat request; validates capabilities BEFORE any HTTP call.
+   * Signals (E4/E6): the caller signal plus the opt-in totalMs budget
+   * (AbortSignal.timeout, armed across the WHOLE call including retries) are
+   * the only whole-call signals. The connect budget is NOT composed here — it
+   * rides preHeadersTimeoutMs into http/fetch.ts, where its timer is
+   * disarmed the moment headers arrive.
+   */
+  async chat(request: ChatRequest, opts?: RequestOptions): Promise<ChatResponse> {
+    let signal = opts?.signal
+    if (this.totalMs !== undefined) {
+      const total = AbortSignal.timeout(this.totalMs)
+      signal = signal ? AbortSignal.any([signal, total]) : total
+    }
+    try {
+      return await dispatchChat(this.provider, request, {
+        signal,
+        callerSignal: opts?.signal,
+        preHeadersTimeoutMs: this.connectMs + this.readIdleMs,
+      })
+    } catch (error) {
+      if (opts?.signal?.aborted && !(error instanceof CancelledError)) {
+        throw new CancelledError()
+      }
+      throw error
+    }
   }
 
   /**
-   * Stream a chat request: dispatch (validate → provider.stream) → optional
-   * readTimeoutStream → stripThink. Matches Rust ordering.
+   * Stream a chat request: dispatch (validate -> provider.stream) ->
+   * readTimeoutStream(readIdleMs, ALWAYS on; default 120s) -> stripThink ->
+   * caller-abort translation. Streams get ONLY the caller signal: totalMs
+   * never applies to stream body consumption.
    */
-  stream(request: ChatRequest): AsyncIterable<StreamEvent> {
-    let stream: BoxStream = dispatchStream(this.provider, request)
-
-    if (this.streamReadTimeoutSecs !== undefined) {
-      stream = readTimeoutStream(stream, this.streamReadTimeoutSecs)
-    }
-
+  stream(request: ChatRequest, opts?: RequestOptions): AsyncIterable<StreamEvent> {
+    let stream: BoxStream = dispatchStream(this.provider, request, {
+      signal: opts?.signal,
+      callerSignal: opts?.signal,
+      preHeadersTimeoutMs: this.connectMs + this.readIdleMs,
+    })
+    stream = readTimeoutStream(stream, this.readIdleMs / 1000)
     stream = stripThink(stream)
-    return stream
+    return this.translateCallerAbort(stream, opts?.signal)
+  }
+
+  /** Mid-stream caller abort surfaces as CancelledError, never a raw AbortError (E6). */
+  private async *translateCallerAbort(
+    inner: BoxStream,
+    callerSignal: AbortSignal | undefined,
+  ): AsyncIterable<StreamEvent> {
+    try {
+      for await (const evt of inner) yield evt
+    } catch (error) {
+      if (callerSignal?.aborted && !(error instanceof CancelledError)) {
+        throw new CancelledError()
+      }
+      throw error
+    }
   }
 
   /** Stream and collect the full response into a ChatResponse. */
-  async streamCollect(request: ChatRequest): Promise<ChatResponse> {
-    return collectStream(this.stream(request))
+  async streamCollect(request: ChatRequest, opts?: RequestOptions): Promise<ChatResponse> {
+    return collectStream(this.stream(request, opts))
   }
 
   /** Stream and collect, preferring the request's model override in the result. */
-  async streamCollectWith(request: ChatRequest): Promise<ChatResponse> {
-    const response = await collectStream(this.stream(request))
+  async streamCollectWith(request: ChatRequest, opts?: RequestOptions): Promise<ChatResponse> {
+    const response = await collectStream(this.stream(request, opts))
     if (request.model) {
       response.model = request.model
     }

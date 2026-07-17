@@ -1,8 +1,9 @@
+import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_GEMINI_MODEL } from '../models.js'
-import { withImage, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { withImage, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeGeminiRequest } from '../serialize/gemini.js'
 import {
   BoxStream,
@@ -90,14 +91,20 @@ export class GeminiProvider {
     return { 'x-goog-api-key': this.apiKey } // (gemini.rs:77)
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const model = this.resolveModel(request)
     const url = this.generateUrl(model)
     const body = serializeGeminiRequest(request, model)
 
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(url, this.headers(), body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(url, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -148,11 +155,11 @@ export class GeminiProvider {
     }
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
-  private async *streamImpl(request: ChatRequest) {
+  private async *streamImpl(request: ChatRequest, opts?: ProviderRequestOptions) {
     const model = this.resolveModel(request)
     const url = this.streamUrl(model)
     const body = serializeGeminiRequest(request, model)
@@ -161,7 +168,13 @@ export class GeminiProvider {
     // body is obtained, parseSse drives with NO mid-stream retry (gemini.rs:372-413).
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(url, this.headers(), body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(url, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -170,6 +183,7 @@ export class GeminiProvider {
     // doneWithStopReason) or stream EOF. NO defensive EOF done (gemini.rs:531;
     // contrast openai.ts:460-474). (sse.ts [DONE] is advisory and never
     // terminates — sse.ts:7-9,134-139.)
+    let sawTerminal = false
     for await (const evt of parseSse(responseBody)) {
       const data = evt.data
 
@@ -217,9 +231,13 @@ export class GeminiProvider {
       // done LAST, only when finishReason present — the ONLY terminator
       // (gemini.rs:513-523).
       if (finishReason !== undefined) {
+        sawTerminal = true
         yield doneWithStopReason(mapFinishReason(finishReason, hasToolCalls))
       }
     }
-    // EOF: generator ends naturally. NO fabricated done (gemini.rs:531).
+    // EOF without any finishReason: truncation, not completion (M3/E2).
+    if (!sawTerminal) {
+      throw new IncompleteStreamError('incomplete stream: gemini ended without a terminal event')
+    }
   }
 }

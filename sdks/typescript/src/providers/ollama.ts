@@ -1,8 +1,9 @@
+import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseNdjson } from '../http/ndjson.js'
 import { DEFAULT_OLLAMA_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { textOnly, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   doneEvent,
   textEvent,
@@ -218,11 +219,17 @@ export class OllamaProvider {
     return out
   }
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
+  async chat(req: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const body = this.buildRequestBody(req, false)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(this.endpoint(), {}, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(this.endpoint(), {}, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -273,65 +280,67 @@ export class OllamaProvider {
     }
   }
 
-  stream(req: ChatRequest): BoxStream {
-    return this.streamImpl(req)
+  stream(req: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(req, opts)
   }
 
-  private async *streamImpl(req: ChatRequest) {
+  private async *streamImpl(req: ChatRequest, opts?: ProviderRequestOptions) {
     const body = this.buildRequestBody(req, true)
 
     // Retry ONLY the initial postStream fetch via the shared engine.
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(this.endpoint(), {}, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.endpoint(), {}, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
-    // Adapter over parseNdjson: decide termination on done:true.
-    try {
-      for await (const obj of parseNdjson(responseBody)) {
-        const done = (obj as { done?: unknown }).done === true
-        if (done) {
-          // Rust StreamEvent::done() carries NO stop_reason — plain doneEvent.
-          yield doneEvent()
-          return
-        }
+    // Adapter over parseNdjson: terminal event is done:true. Body errors
+    // propagate (M3 removed the M1-era swallow).
+    for await (const obj of parseNdjson(responseBody)) {
+      const done = (obj as { done?: unknown }).done === true
+      if (done) {
+        // Rust StreamEvent::done() carries NO stop_reason — plain doneEvent.
+        yield doneEvent()
+        return
+      }
 
-        const message = (obj as { message?: any }).message
-        const content =
-          typeof message?.content === 'string' ? message.content : ''
-        const thinking =
-          typeof message?.thinking === 'string' ? message.thinking : ''
+      const message = (obj as { message?: any }).message
+      const content =
+        typeof message?.content === 'string' ? message.content : ''
+      const thinking =
+        typeof message?.thinking === 'string' ? message.thinking : ''
 
-        // text selection (ollama.rs:459-465). Streamed thinking is surfaced as
-        // a plain textEvent (folded into the text stream).
-        let text: string
-        if (thinking !== '' && content === '') {
-          text = thinking
-        } else if (content !== '') {
-          text = content
-        } else {
-          text = ''
-        }
-        if (text !== '') {
-          yield textEvent(text)
-        }
+      // text selection (ollama.rs:459-465). Streamed thinking is surfaced as
+      // a plain textEvent (folded into the text stream).
+      let text: string
+      if (thinking !== '' && content === '') {
+        text = thinking
+      } else if (content !== '') {
+        text = content
+      } else {
+        text = ''
+      }
+      if (text !== '') {
+        yield textEvent(text)
+      }
 
-        // 3-event pattern per tool call (ollama.rs:471-483).
-        if (message) {
-          for (const tc of OllamaProvider.extractToolCalls(message)) {
-            yield toolCallStart(tc.id, tc.name)
-            yield toolCallArgsWithId(tc.id, JSON.stringify(tc.input))
-            yield toolCallEndWithId(tc.id)
-          }
+      // 3-event pattern per tool call (ollama.rs:471-483).
+      if (message) {
+        for (const tc of OllamaProvider.extractToolCalls(message)) {
+          yield toolCallStart(tc.id, tc.name)
+          yield toolCallArgsWithId(tc.id, JSON.stringify(tc.input))
+          yield toolCallEndWithId(tc.id)
         }
       }
-    } catch {
-      // Ignore post-start stream body errors, matching Rust's partial-success
-      // stream semantics: end without synthesizing a terminal done event.
-      return
     }
-    // EOF without done:true — let the generator end (NO synthesized done),
-    // matching Rust Poll::Ready(None). collectStream fabricates a stop_reason.
+    // EOF without done:true: truncation, not completion (M3/E2). done:true
+    // returns from the generator above, so reaching here means no terminal.
+    throw new IncompleteStreamError('incomplete stream: ollama ended without a terminal event')
   }
 }

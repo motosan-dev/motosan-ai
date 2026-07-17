@@ -1,9 +1,9 @@
-import { ProviderError, StreamError } from '../error.js'
+import { IncompleteStreamError, ProviderError, StreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
-import { fullCaps, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { fullCaps, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
@@ -140,15 +140,18 @@ interface StreamState {
 export class AnthropicProvider {
   private readonly model: string
   private readonly baseUrl: string
+  private readonly providerName: string
   private retryPolicy: RetryPolicy
 
   constructor(
     private readonly apiKey: string,
     model?: string,
     baseUrl = 'https://api.anthropic.com',
+    providerName = 'anthropic',
   ) {
     this.model = model ?? DEFAULT_ANTHROPIC_MODEL
     this.baseUrl = baseUrl
+    this.providerName = providerName
     this.retryPolicy = RetryPolicy.default()
   }
 
@@ -190,14 +193,20 @@ export class AnthropicProvider {
     return this.headers(beta ? { 'anthropic-beta': beta } : {})
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const model = request.model ?? this.model
     const serialized = serializeAnthropicRequest(request, model)
     const body = isSetupToken(this.apiKey) ? withOAuthSystemIdentity(serialized) : serialized
     const headers = this.requestHeaders(request, body)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(`${this.baseUrl}/v1/messages`, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(`${this.baseUrl}/v1/messages`, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -233,11 +242,11 @@ export class AnthropicProvider {
     }
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
-  private async *streamImpl(request: ChatRequest) {
+  private async *streamImpl(request: ChatRequest, opts?: ProviderRequestOptions) {
     const model = request.model ?? this.model
     const serialized = {
       ...serializeAnthropicRequest(request, model),
@@ -251,7 +260,13 @@ export class AnthropicProvider {
     // has been returned").
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(`${this.baseUrl}/v1/messages`, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(`${this.baseUrl}/v1/messages`, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -360,12 +375,12 @@ export class AnthropicProvider {
       }
     }
 
-    // Defensive: terminate even if message_stop never arrived.
-    if (state.stopReason !== undefined) {
-      yield doneWithStopReason(state.stopReason)
-    } else {
-      yield doneEvent()
-    }
+    // EOF without message_stop: truncation, not completion (M3/E3 — the
+    // fabricated clean done is retired). A message_delta stop_reason alone
+    // is NOT terminal; only message_stop is.
+    throw new IncompleteStreamError(
+      `incomplete stream: ${this.providerName} ended without a terminal event`,
+    )
   }
 
   capabilities(): ProviderCapabilities {

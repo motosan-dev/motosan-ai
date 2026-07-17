@@ -29,7 +29,7 @@ export {
   CHATGPT_CODEX_MODELS,
 } from './models.js'
 export { serializeGeminiRequest } from './serialize/gemini.js'
-export type { ProviderCapabilities, Provider } from './provider.js'
+export type { ProviderCapabilities, Provider, RequestOptions, ProviderRequestOptions } from './provider.js'
 export { textOnly, withImage, fullCaps, minimaxCaps, validateRequest } from './provider.js'
 
 // M4: server-side MCP types (also covered by `export * from './types.js'`; listed
