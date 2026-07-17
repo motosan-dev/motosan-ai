@@ -128,6 +128,10 @@ pub struct Client {
     /// via [`ClientBuilder::chatgpt_codex_reasoning_effort`].
     #[cfg(feature = "chatgpt-codex")]
     chatgpt_codex_reasoning_effort: Option<String>,
+    /// Dynamic token source overriding `chatgpt_codex_access_token` when
+    /// set. Configured via [`ClientBuilder::chatgpt_codex_token_source`].
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_token_source: Option<std::sync::Arc<dyn crate::auth::TokenSource>>,
     built: BuiltProvider,
     /// Shared HTTP transport. `reqwest::Client` clones share one connection pool.
     #[cfg(feature = "_http")]
@@ -610,7 +614,7 @@ impl Client {
             .clone()
             .or_else(|| self.model.clone())
             .unwrap_or_default();
-        crate::providers::chatgpt_codex::ChatGptCodexProvider::new(
+        let provider = crate::providers::chatgpt_codex::ChatGptCodexProvider::new(
             self.chatgpt_codex_access_token.clone().unwrap_or_default(),
             self.chatgpt_codex_account_id.clone().unwrap_or_default(),
             model,
@@ -619,7 +623,12 @@ impl Client {
         .with_retry_policy(self.retry_policy.clone())
         .with_total_timeout(self.timeouts.total)
         .with_http_client(self.http.clone())
-        .with_reasoning_effort(self.chatgpt_codex_reasoning_effort.clone())
+        .with_reasoning_effort(self.chatgpt_codex_reasoning_effort.clone());
+        match &self.chatgpt_codex_token_source {
+            // A dynamic source wins over the static access token.
+            Some(source) => provider.with_token_source(std::sync::Arc::clone(source)),
+            None => provider,
+        }
     }
 }
 
@@ -661,6 +670,8 @@ pub struct ClientBuilder {
     chatgpt_codex_model: Option<String>,
     #[cfg(feature = "chatgpt-codex")]
     chatgpt_codex_reasoning_effort: Option<String>,
+    #[cfg(feature = "chatgpt-codex")]
+    chatgpt_codex_token_source: Option<std::sync::Arc<dyn crate::auth::TokenSource>>,
 }
 
 impl ClientBuilder {
@@ -941,6 +952,25 @@ impl ClientBuilder {
         self
     }
 
+    /// Set a dynamic [`TokenSource`](crate::auth::TokenSource) for the
+    /// ChatGPT-backend Responses provider. The provider resolves
+    /// `access_token()` at the top of every HTTP attempt (including
+    /// retries), so a refreshing source can rotate tokens mid-retry-loop.
+    ///
+    /// Wins over the static `access_token` passed to
+    /// [`chatgpt_codex`](Self::chatgpt_codex) when both are set. With only a
+    /// token source, calling `chatgpt_codex(...)` is not required — but
+    /// `account_id` then defaults to empty, so pass it via
+    /// `chatgpt_codex("", account_id, model)` when the backend requires it.
+    #[cfg(feature = "chatgpt-codex")]
+    pub fn chatgpt_codex_token_source(
+        mut self,
+        token_source: std::sync::Arc<dyn crate::auth::TokenSource>,
+    ) -> Self {
+        self.chatgpt_codex_token_source = Some(token_source);
+        self
+    }
+
     pub fn build(self) -> Result<Client, MotosanError> {
         let provider = self
             .provider
@@ -1052,6 +1082,8 @@ impl ClientBuilder {
             chatgpt_codex_model: self.chatgpt_codex_model,
             #[cfg(feature = "chatgpt-codex")]
             chatgpt_codex_reasoning_effort: self.chatgpt_codex_reasoning_effort,
+            #[cfg(feature = "chatgpt-codex")]
+            chatgpt_codex_token_source: self.chatgpt_codex_token_source,
             built: BuiltProvider::Disabled("uninitialized"),
             #[cfg(feature = "_http")]
             http,

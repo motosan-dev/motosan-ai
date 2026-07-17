@@ -7,34 +7,22 @@
 //! [`gemini_cli`](super::gemini_cli) so all three CLI backends are
 //! interchangeable via `Box<dyn ProviderImpl>`.
 //!
-//! # Streaming vs Blocking
+//! # One pipeline for chat and stream
 //!
-//! Unlike the HTTP providers (Anthropic, OpenAI, etc.) where `.chat()`
-//! and `.stream()` are two views over the same SSE engine, CLI backends
-//! spawn the binary in **different modes** for each path:
-//!
-//! - [`chat`](ClaudeCodeProvider) spawns `claude --print -` (no
-//!   `--output-format`), waits for the subprocess to exit, collects the
-//!   complete stdout, and returns a single [`ChatResponse`]. No
-//!   intermediate events are surfaced. Token usage is `0`/`0` unless
-//!   `agent_mode` is enabled (which adds `--output-format json`).
-//! - [`stream`](ClaudeCodeProvider) spawns
-//!   `claude --print --output-format stream-json --verbose -`, reads
-//!   NDJSON lines from stdout as they arrive, and yields one
-//!   [`StreamEvent`] per parsed line. The `--verbose` flag is **required**
-//!   by `claude` ≥ 2.1.x for this format and is enforced by this crate.
-//!
-//! Callers should prefer `stream()` for any UI that benefits from
-//! incremental output, and `chat()` only when they need the whole reply
-//! as a single string.
+//! Both [`chat`](ClaudeCodeProvider) and [`stream`](ClaudeCodeProvider)
+//! spawn `claude --print --output-format stream-json --verbose -` and
+//! parse its NDJSON. `chat()` is `collect_stream(stream())` plus a model
+//! backfill from provider config, so tool_calls / thinking / usage /
+//! session_id parity holds by construction and a completed turn always
+//! reports `stop_reason = end_turn` (the CLI executes tools internally).
 //!
 //! # Cancellation
 //!
 //! There is no explicit cancel handle. Spawned CLI children use
 //! `kill_on_drop(true)`: dropping the `chat()` future or returned [`BoxStream`]
-//! kills and reaps the child process. Stream drivers own and reap the child at the tail;
-//! use [`ClaudeCodeProvider::timeout`] to bound runtime. A stalled stream read
-//! yields `Err(MotosanError::StreamReadTimeout(_))` and terminates the stream.
+//! terminates the child process. Stream drivers drain stderr concurrently and
+//! reap and validate the exit status before yielding terminal success. Use
+//! [`ClaudeCodeProvider::timeout`] to bound read stalls.
 //!
 //! [`StreamEvent`]: crate::StreamEvent
 
@@ -59,8 +47,7 @@ pub struct ClaudeCodeProvider {
     /// Path to the `claude` binary. Defaults to `$CLAUDE_CODE_PATH` or
     /// `"claude"` (resolved via `PATH`).
     pub binary_path: PathBuf,
-    /// Whether to pass `--dangerously-skip-permissions` and switch the
-    /// blocking path to `--output-format json` (so usage can be parsed).
+    /// Whether to pass `--dangerously-skip-permissions`.
     pub agent_mode: bool,
     /// Whether to pass `--bare`. Skips hooks, plugins, auto-memory,
     /// keychain reads, and user/project settings discovery, so the
@@ -449,25 +436,26 @@ impl ClaudeCodeProvider {
         }
     }
 
-    /// Send a chat request by invoking the `claude` CLI as a subprocess.
+    /// Send a chat request by delegating to [`Self::stream`] and collecting
+    /// the events with [`crate::stream::collect_stream`].
+    ///
+    /// Both paths share one spawn/parse pipeline, so `content`, `thinking`,
+    /// `tool_calls`, `usage`, `session_id`, and `stop_reason` are identical
+    /// by construction. A successfully completed CLI turn always reports
+    /// [`StopReason::EndTurn`]: the CLI executes its tools internally, so
+    /// [`ChatResponse::tool_calls`] is the record of tools the CLI already
+    /// ran — never a request for the caller to execute them.
+    ///
+    /// Documented parity exception: `model` is backfilled from the request /
+    /// provider configuration because stream events carry no model name.
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        // Extract system prompt: prefer request.system, fall back to first system message.
-        let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
-        let append_system_prompt = request.system.or(msg_system);
-
-        let config = self.build_spawn_config(request.model, append_system_prompt);
-
-        let (text, usage, session_id) = spawn::invoke_cli(&config, &user_prompt).await?;
-
-        Ok(ChatResponse {
-            content: text,
-            thinking: None,
-            tool_calls: vec![],
-            model: config.model.unwrap_or_default(),
-            usage,
-            stop_reason: StopReason::EndTurn,
-            session_id,
-        })
+        let configured_model = request.model.clone().or_else(|| self.model.clone());
+        let stream = self.stream(request).await?;
+        let mut resp = crate::stream::collect_stream(stream).await?;
+        if resp.model.is_empty() {
+            resp.model = configured_model.unwrap_or_default();
+        }
+        Ok(resp)
     }
 
     /// Stream a chat request via `claude --print --output-format stream-json`.
@@ -511,6 +499,7 @@ impl ClaudeCodeProvider {
             retry_after: None,
             request_id: None,
         })?;
+        let mut stderr = crate::transport::cli::StderrCapture::start_child(&mut child);
 
         // Write prompt to stdin then close it.
         {
@@ -523,13 +512,16 @@ impl ClaudeCodeProvider {
                     retry_after: None,
                     request_id: None,
                 })?;
-            stdin.write_all(user_prompt.as_bytes()).await.map_err(|e| {
-                MotosanError::ProviderError {
-                    message: format!("failed to write to claude stdin: {e}"),
-                    status_code: None,
-                    retry_after: None,
-                    request_id: None,
-                }
+            crate::transport::cli::poll_with_stderr(
+                stdin.write_all(user_prompt.as_bytes()),
+                &mut stderr,
+            )
+            .await
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("failed to write to claude stdin: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
             })?;
             // stdin dropped here, sending EOF
         }
@@ -546,10 +538,16 @@ impl ClaudeCodeProvider {
 
         let reader = BufReader::new(stdout);
 
-        Ok(drive_lines(Some(child), reader, config.timeout))
+        Ok(drive_lines_with_stderr(
+            Some(child),
+            reader,
+            config.timeout,
+            stderr,
+        ))
     }
 }
 
+#[cfg(test)]
 pub(crate) fn drive_lines<R>(
     mut child: Option<tokio::process::Child>,
     reader: R,
@@ -558,34 +556,64 @@ pub(crate) fn drive_lines<R>(
 where
     R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
 {
+    let stderr = crate::transport::cli::StderrCapture::start(&mut child);
+    drive_lines_with_stderr(child, reader, read_timeout, stderr)
+}
+
+fn drive_lines_with_stderr<R>(
+    mut child: Option<tokio::process::Child>,
+    reader: R,
+    read_timeout: Option<Duration>,
+    mut stderr: crate::transport::cli::StderrCapture,
+) -> BoxStream
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
     use tokio::io::AsyncBufReadExt;
 
     Box::pin(async_stream::stream! {
         let mut lines = reader.lines();
-        let mut saw_tool_call = false;
-
         loop {
             let next = match read_timeout {
-                Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
+                Some(dur) => match tokio::time::timeout(
+                    dur,
+                    crate::transport::cli::poll_with_stderr(
+                        lines.next_line(),
+                        &mut stderr,
+                    ),
+                ).await {
                     Ok(res) => res,
                     Err(_) => {
-                        reap_child(&mut child, true).await;
+                        crate::transport::cli::terminate(&mut child, &mut stderr).await;
                         yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
                         break;
                     }
                 },
-                None => lines.next_line().await,
+                None => crate::transport::cli::poll_with_stderr(
+                    lines.next_line(),
+                    &mut stderr,
+                ).await,
             };
 
             let line = match next {
                 Ok(Some(line)) => line.trim().to_string(),
                 // EOF/read error before a terminal event surfaces an abnormal child exit.
                 Ok(None) => {
-                    yield Err(abnormal_exit_error(&mut child, None).await);
+                    yield Err(crate::transport::cli::abnormal_exit_error(
+                        &mut child,
+                        &mut stderr,
+                        CLI_LABEL,
+                        None,
+                    ).await);
                     break;
                 }
                 Err(e) => {
-                    yield Err(abnormal_exit_error(&mut child, Some(e)).await);
+                    yield Err(crate::transport::cli::abnormal_exit_error(
+                        &mut child,
+                        &mut stderr,
+                        CLI_LABEL,
+                        Some(e),
+                    ).await);
                     break;
                 }
             };
@@ -599,26 +627,31 @@ where
                         yield Ok(event);
                     }
                     stream_json::NdjsonAction::ToolCalls(events) => {
-                        saw_tool_call = true;
                         for event in events {
                             yield Ok(event);
                         }
                     }
                     stream_json::NdjsonAction::Result { usage, done, session_id } => {
                         let _ = done;
-                        // Reaped at the loop tail AFTER the terminal yields below, so a
-                        // slow child exit can never delay/deadlock delivery of `done`.
+                        if let Err(err) = crate::transport::cli::validate_terminal_exit(
+                            &mut child,
+                            &mut stderr,
+                            CLI_LABEL,
+                        ).await {
+                            yield Err(err);
+                            break;
+                        }
                         if let Some(id) = session_id {
                             yield Ok(crate::types::StreamEvent::session_started(id));
                         }
                         if let Some(usage_event) = usage {
                             yield Ok(usage_event);
                         }
-                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                         break;
                     }
                     stream_json::NdjsonAction::Error(msg) => {
-                        reap_child(&mut child, true).await;
+                        crate::transport::cli::terminate(&mut child, &mut stderr).await;
                         yield Err(MotosanError::ProviderError {
                             message: msg,
                             status_code: None,
@@ -630,145 +663,18 @@ where
                 }
             }
         }
-
-        reap_child(&mut child, false).await;
     })
-}
-
-async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
-    if let Some(mut c) = child.take() {
-        if kill {
-            // SIGKILL unblocks the child immediately, so wait() returns promptly.
-            let _ = c.start_kill();
-            let _ = c.wait().await;
-        } else {
-            // Cooperative reap (success/EOF path) — but never hang the stream: if
-            // the child does not exit promptly (e.g. blocked on an undrained stderr
-            // pipe), SIGKILL it so the stream can always terminate.
-            if tokio::time::timeout(Duration::from_secs(5), c.wait())
-                .await
-                .is_err()
-            {
-                let _ = c.start_kill();
-                let _ = c.wait().await;
-            }
-        }
-    }
 }
 
 const CLI_LABEL: &str = "claude CLI";
 
+#[cfg(test)]
 async fn abnormal_exit_error(
     child: &mut Option<tokio::process::Child>,
     read_err: Option<std::io::Error>,
 ) -> MotosanError {
-    use std::future::{poll_fn, Future};
-    use std::pin::Pin;
-    use std::task::Poll;
-    use tokio::io::{AsyncRead, ReadBuf};
-
-    let mut status = "unknown".to_string();
-    let mut stderr_excerpt = String::new();
-
-    if let Some(mut c) = child.take() {
-        let mut stderr = c.stderr.take();
-        let mut stderr_buf = Vec::with_capacity(8000);
-        let mut read_buf = [0_u8; 8192];
-        let mut child_done = false;
-        let mut stderr_done = stderr.is_none();
-        let mut wait_failed = false;
-
-        let collection_timed_out = {
-            let wait = c.wait();
-            tokio::pin!(wait);
-            let collect = poll_fn(|cx| {
-                if !child_done {
-                    match wait.as_mut().poll(cx) {
-                        Poll::Ready(Ok(exit)) => {
-                            child_done = true;
-                            status = exit
-                                .code()
-                                .map_or_else(|| exit.to_string(), |code| code.to_string());
-                        }
-                        Poll::Ready(Err(_)) => {
-                            wait_failed = true;
-                            return Poll::Ready(());
-                        }
-                        Poll::Pending => {}
-                    }
-                }
-
-                if !stderr_done {
-                    if let Some(pipe) = stderr.as_mut() {
-                        let mut reads = 0;
-                        loop {
-                            let read = {
-                                let mut buf = ReadBuf::new(&mut read_buf);
-                                match Pin::new(&mut *pipe).poll_read(cx, &mut buf) {
-                                    Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.filled().len())),
-                                    Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-                                    Poll::Pending => Poll::Pending,
-                                }
-                            };
-                            match read {
-                                Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
-                                    stderr_done = true;
-                                    break;
-                                }
-                                Poll::Ready(Ok(n)) => {
-                                    let retained = (8000 - stderr_buf.len()).min(n);
-                                    stderr_buf.extend_from_slice(&read_buf[..retained]);
-                                    reads += 1;
-                                    if reads == 16 {
-                                        cx.waker().wake_by_ref();
-                                        break;
-                                    }
-                                }
-                                Poll::Pending => break,
-                            }
-                        }
-                    }
-                }
-
-                if child_done && stderr_done {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            });
-
-            tokio::time::timeout(Duration::from_secs(5), collect)
-                .await
-                .is_err()
-        };
-
-        if wait_failed || (collection_timed_out && !child_done) {
-            let _ = c.start_kill();
-            if let Ok(exit) = c.wait().await {
-                status = exit
-                    .code()
-                    .map_or_else(|| exit.to_string(), |code| code.to_string());
-            }
-        }
-
-        stderr_excerpt = String::from_utf8_lossy(&stderr_buf)
-            .trim()
-            .chars()
-            .take(2000)
-            .collect();
-    }
-
-    let detail = if !stderr_excerpt.is_empty() {
-        stderr_excerpt
-    } else if let Some(err) = read_err {
-        format!("stdout read error: {err}")
-    } else {
-        "stream ended before a terminal event".to_string()
-    };
-
-    MotosanError::Stream(format!(
-        "{CLI_LABEL} exited unexpectedly (status {status}): {detail}"
-    ))
+    let mut stderr = crate::transport::cli::StderrCapture::start(child);
+    crate::transport::cli::abnormal_exit_error(child, &mut stderr, CLI_LABEL, read_err).await
 }
 
 impl Default for ClaudeCodeProvider {
@@ -798,6 +704,163 @@ impl super::ProviderImpl for ClaudeCodeProvider {
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// F4 parity: one fake-CLI transcript through `chat()` and through
+    /// `collect_stream(stream())` must agree on content / thinking /
+    /// tool_calls / stop_reason / usage / session_id. `model` is the one
+    /// documented exception: `chat()` backfills it from provider config.
+    #[cfg(unix)]
+    mod chat_stream_parity {
+        use super::*;
+        use crate::types::StopReason;
+
+        const TRANSCRIPT: &str = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"/tmp/x"}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":" done"}]}}"#,
+            "\n",
+            r#"{"type":"result","result":"done","usage":{"input_tokens":7,"output_tokens":3},"session_id":"sess_42"}"#,
+        );
+
+        /// Write an executable fake `claude` that ignores its argv, drains
+        /// stdin (the provider writes the prompt then closes the pipe), and
+        /// plays back `body` on stdout.
+        fn write_fake_cli(test_name: &str, body: &str) -> std::path::PathBuf {
+            use std::io::Write;
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!(
+                "motosan-fake-claude-{test_name}-{}",
+                std::process::id()
+            ));
+            let mut f = std::fs::File::create(&path).expect("create fake CLI");
+            write!(
+                f,
+                "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{body}\nNDJSON\n"
+            )
+            .expect("write fake CLI");
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake CLI");
+            path
+        }
+
+        #[tokio::test]
+        async fn chat_equals_collected_stream_and_reports_end_turn() {
+            let bin = write_fake_cli("parity", TRANSCRIPT);
+            let provider = || ClaudeCodeProvider::with_path(bin.clone()).model("sonnet");
+
+            let chat_resp = provider()
+                .chat(test_request("hi"))
+                .await
+                .expect("chat should succeed");
+            let stream = provider()
+                .stream(test_request("hi"))
+                .await
+                .expect("stream should start");
+            let collected = crate::stream::collect_stream(stream)
+                .await
+                .expect("collect should succeed");
+            let _ = std::fs::remove_file(&bin);
+
+            // F4: chat()'s tool_calls = the executed-tool record from the CLI.
+            assert_eq!(
+                chat_resp.tool_calls.len(),
+                1,
+                "chat() must surface the CLI's executed-tool record"
+            );
+            assert_eq!(chat_resp.tool_calls[0].id, "toolu_1");
+            assert_eq!(chat_resp.tool_calls[0].name, "Read");
+            assert_eq!(
+                chat_resp.tool_calls[0].input,
+                serde_json::json!({"path": "/tmp/x"})
+            );
+            assert_eq!(chat_resp.tool_calls, collected.tool_calls);
+
+            // F4: a completed CLI turn ALWAYS reports end_turn — the CLI
+            // already ran its tools; tool_use would make agent loops
+            // re-execute them.
+            assert_eq!(chat_resp.stop_reason, StopReason::EndTurn);
+            assert_eq!(collected.stop_reason, StopReason::EndTurn);
+
+            assert_eq!(chat_resp.content, "checking done");
+            assert_eq!(chat_resp.content, collected.content);
+            assert_eq!(chat_resp.thinking, None);
+            assert_eq!(chat_resp.thinking, collected.thinking);
+            assert_eq!(chat_resp.usage.input_tokens, 7);
+            assert_eq!(chat_resp.usage.output_tokens, 3);
+            assert_eq!(chat_resp.usage, collected.usage);
+            assert_eq!(chat_resp.session_id.as_deref(), Some("sess_42"));
+            assert_eq!(chat_resp.session_id, collected.session_id);
+
+            // Documented F4 parity exception: model backfill from config.
+            assert_eq!(chat_resp.model, "sonnet");
+            assert_eq!(collected.model, "");
+        }
+
+        #[tokio::test]
+        async fn chat_times_out_via_stream_read_timeout() {
+            // SpawnConfig.timeout must still bound chat() on the delegated
+            // path — as the M3 read-idle timeout, not the old total-wall
+            // ProviderError.
+            let bin = write_fake_cli("stall", "");
+            // Overwrite with a stalling body: never emits a line.
+            std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").expect("write stall script");
+            let provider = ClaudeCodeProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_millis(50));
+            let result = provider.chat(test_request("hi")).await;
+            let _ = std::fs::remove_file(&bin);
+            match result {
+                Err(crate::error::MotosanError::StreamReadTimeout(_)) => {}
+                other => panic!("expected StreamReadTimeout, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn lifecycle_rejects_nonzero_exit_after_success_terminal() {
+            let bin = write_fake_cli("late-exit", "");
+            std::fs::write(
+                &bin,
+                format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{TRANSCRIPT}\nNDJSON\n\
+                     printf 'late claude failure\\n' >&2\nsleep 0.2\nexit 7\n"
+                ),
+            )
+            .expect("write late-exit script");
+            let result = ClaudeCodeProvider::with_path(bin.clone())
+                .chat(test_request("hi"))
+                .await;
+            let _ = std::fs::remove_file(&bin);
+
+            match result {
+                Err(crate::error::MotosanError::Stream(message)) => {
+                    assert!(message.contains("status"), "got: {message}");
+                    assert!(message.contains('7'), "got: {message}");
+                    assert!(message.contains("late claude failure"), "got: {message}");
+                }
+                other => panic!("expected Stream error for exit 7, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn lifecycle_drains_large_stderr_before_success_terminal() {
+            let bin = write_fake_cli("large-stderr", "");
+            std::fs::write(
+                &bin,
+                format!(
+                    "#!/bin/sh\ncat > /dev/null\nyes x | head -c 1048576 >&2\n\
+                     cat <<'NDJSON'\n{TRANSCRIPT}\nNDJSON\n"
+                ),
+            )
+            .expect("write large-stderr script");
+            let result = ClaudeCodeProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_secs(10))
+                .chat(test_request("hi"))
+                .await;
+            let _ = std::fs::remove_file(&bin);
+
+            let response = result.expect("large stderr must not block stdout");
+            assert_eq!(response.stop_reason, StopReason::EndTurn);
+        }
+    }
 
     /// Compile-time + runtime check that `ClaudeCodeProvider` can be coerced
     /// into `Box<dyn ProviderImpl>` and used polymorphically alongside the

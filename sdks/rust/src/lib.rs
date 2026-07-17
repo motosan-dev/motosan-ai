@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod client;
 pub mod error;
 pub mod models;
@@ -23,6 +24,7 @@ pub use providers::gemini_cli;
 #[cfg(feature = "gemini-cli")]
 pub use providers::gemini_cli::GeminiCliProvider;
 
+pub use auth::{StaticTokenSource, TokenSource};
 pub use client::{Client, ClientBuilder};
 pub use error::MotosanError;
 pub use models::{

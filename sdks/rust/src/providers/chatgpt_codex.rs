@@ -1,10 +1,11 @@
+use crate::auth::{StaticTokenSource, TokenSource};
 use crate::error::MotosanError;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ProviderImpl,
+    extract_error_message, extract_request_id, map_http_error, parse_retry_after, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
+use crate::transport::http::send_with_retry_async_build;
 use crate::types::{
     ChatRequest, ChatResponse, ProviderCapabilities, Role, StopReason, StreamEvent, Usage,
 };
@@ -15,6 +16,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
@@ -23,10 +25,13 @@ const CHATGPT_CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses
 /// `originator` header value codex's CLI sends; settled GREEN by the spike.
 const ORIGINATOR: &str = "codex_cli_rs";
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ChatGptCodexProvider {
     http: Client,
-    access_token: String,
+    /// Resolved at the top of every HTTP attempt (F5). `new()` seeds a
+    /// [`StaticTokenSource`]; [`Self::with_token_source`] swaps in a dynamic
+    /// (e.g. refreshing) source.
+    token_source: Arc<dyn TokenSource>,
     account_id: String,
     model: String,
     base_url: String,
@@ -39,6 +44,22 @@ pub struct ChatGptCodexProvider {
     reasoning_effort: Option<String>,
 }
 
+/// Manual impl: the pre-0.25 derived form leaked the raw access token.
+/// Never print token material here.
+impl std::fmt::Debug for ChatGptCodexProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatGptCodexProvider")
+            .field("token_source", &"<token source>")
+            .field("account_id", &self.account_id)
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("retry_policy", &self.retry_policy)
+            .field("total_timeout", &self.total_timeout)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .finish_non_exhaustive()
+    }
+}
+
 impl ChatGptCodexProvider {
     pub fn new(
         access_token: impl Into<String>,
@@ -48,7 +69,7 @@ impl ChatGptCodexProvider {
     ) -> Self {
         Self {
             http: Client::new(),
-            access_token: access_token.into(),
+            token_source: Arc::new(StaticTokenSource::new(access_token)),
             account_id: account_id.into(),
             model: model.into(),
             base_url: base_url.unwrap_or_else(|| CHATGPT_CODEX_URL.to_string()),
@@ -87,9 +108,19 @@ impl ChatGptCodexProvider {
         self
     }
 
-    fn apply_auth(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    /// Replace the token source. The provider resolves
+    /// [`TokenSource::access_token`] at the top of **every** HTTP attempt
+    /// (including retries), so a refreshing source can rotate tokens
+    /// mid-retry-loop. Wins over the `access_token` given to
+    /// [`new`](Self::new).
+    pub fn with_token_source(mut self, token_source: Arc<dyn TokenSource>) -> Self {
+        self.token_source = token_source;
+        self
+    }
+
+    fn apply_auth(&self, request: reqwest::RequestBuilder, token: &str) -> reqwest::RequestBuilder {
         request
-            .header("authorization", format!("Bearer {}", self.access_token))
+            .header("authorization", format!("Bearer {token}"))
             .header("chatgpt-account-id", &self.account_id)
             .header("originator", ORIGINATOR)
             .header("openai-beta", "responses=experimental")
@@ -275,13 +306,22 @@ impl ProviderImpl for ChatGptCodexProvider {
         let url = self.url();
         let body = self.build_responses_body(&req);
 
-        let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(
-                self.http
-                    .post(&url)
-                    .header("content-type", "application/json"),
-            )
-            .json(&body)
+        let response = send_with_retry_async_build(&self.retry_policy, || {
+            let url = &url;
+            let body = &body;
+            async move {
+                // Per-attempt token resolution (F5): a refreshing source can
+                // hand out a new token between retries.
+                let token = self.token_source.access_token().await?;
+                Ok(self
+                    .apply_auth(
+                        self.http
+                            .post(url)
+                            .header("content-type", "application/json"),
+                        &token,
+                    )
+                    .json(body))
+            }
         })
         .await?;
 
@@ -337,8 +377,9 @@ struct ChatGptCodexStreamAdapter {
     /// matching `response.output_item.done` can close the same id.
     seen_tool_ids: HashSet<String>,
     /// Set once any `function_call` item is observed, so `response.completed`
-    /// resolves to `ToolUse` (mirrors the gated `cli_terminal_stop_reason`
-    /// helper, which `chatgpt-codex` is not in scope to reach from here).
+    /// resolves to `ToolUse`. Unlike the CLI backends (always `EndTurn` per
+    /// F4 — their tools run inside the CLI), chatgpt-codex is an HTTP
+    /// provider whose caller must execute the requested tools.
     saw_tool_call: bool,
     /// A fatal stream error to surface on the next `poll_next` (top-level
     /// `error` / `response.failed`).
@@ -751,6 +792,17 @@ mod tests {
         let body = p.build_responses_body(&req);
 
         assert_eq!(body["reasoning"]["effort"], json!("high"));
+    }
+
+    #[test]
+    fn provider_debug_never_leaks_token_material() {
+        let p = test_provider(); // constructed with access token "test-token"
+        let debug = format!("{p:?}");
+        assert!(
+            !debug.contains("test-token"),
+            "Debug must redact the token: {debug}"
+        );
+        assert!(debug.contains("ChatGptCodexProvider"));
     }
 
     #[test]

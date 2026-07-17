@@ -16,13 +16,7 @@ use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-
-use crate::error::MotosanError;
-use crate::types::Usage;
-
-use super::stream_json::{self, NdjsonAction};
 
 /// Approval mode forwarded as `--approval-mode <mode>`.
 ///
@@ -182,8 +176,11 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
     args
 }
 
-/// Assemble a ready-to-spawn [`Command`] for a blocking `gemini` call.
-fn build_command(config: &SpawnConfig) -> Command {
+/// Assemble a ready-to-spawn [`Command`] for a
+/// `gemini -p "" -o stream-json` invocation; used by
+/// [`GeminiCliProvider::stream`](super::GeminiCliProvider::stream), which
+/// `chat()` delegates to.
+pub(super) fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
     if let Some(dir) = &config.cwd {
         cmd.current_dir(dir);
@@ -196,138 +193,6 @@ fn build_command(config: &SpawnConfig) -> Command {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd
-}
-
-/// Spawn `gemini`, feed it `prompt` on stdin, and collect the turn.
-///
-/// Returns `(content, usage, session_id)` where `content` is the concatenation of
-/// every `assistant` delta chunk and `usage` is the token tally from
-/// the terminal `result` event. Gemini CLI does not expose a separate
-/// reasoning stream in headless output, so there is no `thinking`
-/// field to populate.
-///
-/// # Errors
-///
-/// Returns [`MotosanError::ProviderError`] if the subprocess fails to
-/// spawn, times out after [`DEFAULT_TIMEOUT`], exits non-zero, or emits a
-/// `result` event with a non-`success` status.
-pub async fn invoke_cli(
-    config: &SpawnConfig,
-    prompt: &str,
-) -> Result<(String, Usage, Option<String>), MotosanError> {
-    let mut cmd = build_command(config);
-
-    let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
-        message: format!("failed to spawn gemini CLI: {e}"),
-        status_code: None,
-        retry_after: None,
-        request_id: None,
-    })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("failed to write to gemini stdin: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?;
-    }
-
-    let result = match config.timeout {
-        Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
-            .await
-            .map_err(|_| MotosanError::ProviderError {
-                message: format!("gemini CLI timed out after {} seconds", dur.as_secs()),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("gemini CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-        None => child
-            .wait_with_output()
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("gemini CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-    };
-
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        return Err(MotosanError::ProviderError {
-            message: format!(
-                "gemini CLI exited with {}: {}",
-                result.status,
-                stderr.trim()
-            ),
-            status_code: None,
-            retry_after: None,
-            request_id: None,
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    parse_collected_stream(&stdout)
-}
-
-/// Accumulate the NDJSON stream-json output into `(content, usage, session_id)`.
-///
-/// Assistant deltas are concatenated in arrival order. The last
-/// `result` event with `stats` wins for usage. A non-success `result`
-/// is surfaced as an error.
-fn parse_collected_stream(raw: &str) -> Result<(String, Usage, Option<String>), MotosanError> {
-    let mut content = String::new();
-    let mut session_id: Option<String> = None;
-    let mut usage = Usage {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: None,
-        cache_read_input_tokens: None,
-    };
-
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match stream_json::parse_ndjson_line(line) {
-            Some(NdjsonAction::Text(event)) => content.push_str(&event.content),
-            Some(NdjsonAction::SessionStarted(event)) if session_id.is_none() => {
-                session_id = event.session_id;
-            }
-            Some(NdjsonAction::SessionStarted(_)) => {}
-            Some(NdjsonAction::ToolCalls(_)) => {}
-            Some(NdjsonAction::Result {
-                usage: Some(event), ..
-            }) => {
-                if let Some(u) = event.usage {
-                    usage = u;
-                }
-            }
-            Some(NdjsonAction::Result { usage: None, .. }) => {}
-            Some(NdjsonAction::Error(msg)) => {
-                return Err(MotosanError::ProviderError {
-                    message: format!("gemini CLI: {msg}"),
-                    status_code: None,
-                    retry_after: None,
-                    request_id: None,
-                });
-            }
-            None => {}
-        }
-    }
-
-    Ok((content, usage, session_id))
 }
 
 #[cfg(test)]
@@ -643,47 +508,5 @@ mod tests {
         assert_eq!(model_to_forward("DEFAULT"), None);
         assert_eq!(model_to_forward(""), None);
         assert_eq!(model_to_forward("   "), None);
-    }
-
-    #[test]
-    fn parse_collected_stream_accumulates_deltas_and_usage() {
-        let raw = concat!(
-            r#"{"type":"init","session_id":"s","model":"auto-gemini-3"}"#,
-            "\n",
-            r#"{"type":"message","role":"user","content":"hi"}"#,
-            "\n",
-            r#"{"type":"message","role":"assistant","content":"pon","delta":true}"#,
-            "\n",
-            r#"{"type":"message","role":"assistant","content":"g","delta":true}"#,
-            "\n",
-            r#"{"type":"result","status":"success","stats":{"input_tokens":10,"output_tokens":5,"cached":3}}"#,
-            "\n",
-        );
-        let (content, usage, session_id) = parse_collected_stream(raw).expect("should parse");
-        assert_eq!(content, "pong");
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.cache_read_input_tokens, Some(3));
-        // Blocking-path (chat()) session-id readback: the `init` event's id must
-        // be captured by the collector, not dropped.
-        assert_eq!(session_id.as_deref(), Some("s"));
-    }
-
-    #[test]
-    fn parse_collected_stream_surfaces_non_success_result() {
-        let raw = r#"{"type":"result","status":"failed"}"#;
-        let err = parse_collected_stream(raw).unwrap_err();
-        let MotosanError::ProviderError { message: msg, .. } = err else {
-            panic!("expected ProviderError");
-        };
-        assert!(msg.contains("failed"));
-    }
-
-    #[test]
-    fn parse_collected_stream_ignores_blank_lines() {
-        let raw = "\n\n   \n";
-        let (content, usage, _session_id) = parse_collected_stream(raw).expect("should parse");
-        assert_eq!(content, "");
-        assert_eq!(usage.input_tokens, 0);
     }
 }

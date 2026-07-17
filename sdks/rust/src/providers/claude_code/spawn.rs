@@ -1,26 +1,12 @@
-//! Subprocess lifecycle and flag wiring for the Claude Code CLI provider.
-//!
-//! Argv layout is built by [`common_args`] and reused by both the blocking
-//! [`invoke_cli`] path and [`ClaudeCodeProvider::stream`](super::ClaudeCodeProvider::stream).
-//! Only `--print` and `--output-format <fmt>` live outside `common_args` because
-//! they differ between paths:
-//!
-//! - Blocking non-agent → `--print` (implicit `text` output)
-//! - Blocking agent mode → `--print --output-format json`
-//! - Streaming → `--print --output-format stream-json`
-//!
-//! Everything else (model, system prompts, permissions, MCP config, session
-//! resume, ...) is stable across paths and flows through `common_args`.
+//! Flag wiring for the Claude Code CLI provider. Argv layout is built by
+//! [`common_args`] and consumed by
+//! [`ClaudeCodeProvider::stream`](super::ClaudeCodeProvider::stream), which
+//! both `chat()` and `stream()` share since chat() delegates to stream
+//! collection.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
-
-use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
-
-use crate::error::MotosanError;
-use crate::types::Usage;
 
 /// Permission mode forwarded as `--permission-mode <mode>`.
 ///
@@ -91,8 +77,7 @@ impl EffortLevel {
 pub struct SpawnConfig {
     /// Filesystem path to the `claude` binary.
     pub binary_path: PathBuf,
-    /// Whether to pass `--dangerously-skip-permissions`. Also flips the
-    /// blocking path to `--output-format json` so usage can be parsed.
+    /// Whether to pass `--dangerously-skip-permissions`.
     pub agent_mode: bool,
     /// Whether to pass `--bare`. Skips hooks, plugins, auto-memory,
     /// keychain reads, and user/project settings discovery so the
@@ -185,8 +170,9 @@ pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
     }
 }
 
-/// Build the argv fragment shared between the blocking [`invoke_cli`] path
-/// and [`ClaudeCodeProvider::stream`](super::ClaudeCodeProvider::stream).
+/// Build the argv fragment consumed by
+/// [`ClaudeCodeProvider::stream`](super::ClaudeCodeProvider::stream), which
+/// both `chat()` and `stream()` share.
 ///
 /// Returns a `Vec<OsString>` rather than mutating a `Command` so the
 /// config-to-argv mapping is pure and unit-testable. Callers append the
@@ -363,180 +349,6 @@ pub(crate) fn common_args(config: &SpawnConfig) -> Vec<OsString> {
     args
 }
 
-/// Build the blocking `claude --print ...` Command (everything except spawn).
-/// Shared construction point so working-directory / env wiring is applied and
-/// unit-testable in one place.
-fn build_command(config: &SpawnConfig) -> Command {
-    let mut cmd = Command::new(&config.binary_path);
-    if let Some(dir) = &config.cwd {
-        cmd.current_dir(dir);
-    }
-    cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
-    cmd.arg("--print");
-    if config.agent_mode {
-        cmd.arg("--output-format").arg("json");
-    }
-    cmd.args(common_args(config));
-    cmd.arg("-"); // read prompt from stdin
-    cmd.kill_on_drop(true);
-    cmd.stdin(std::process::Stdio::piped());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-    cmd
-}
-
-/// Invoke the `claude` CLI with `--print` and return `(text, usage, session_id)`.
-pub async fn invoke_cli(
-    config: &SpawnConfig,
-    prompt: &str,
-) -> Result<(String, Usage, Option<String>), MotosanError> {
-    let mut cmd = build_command(config);
-
-    let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
-        message: format!("failed to spawn claude CLI: {e}"),
-        status_code: None,
-        retry_after: None,
-        request_id: None,
-    })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("failed to write to claude stdin: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?;
-        // Drop stdin to close it so the child reads EOF.
-    }
-
-    let result = match config.timeout {
-        Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
-            .await
-            .map_err(|_| MotosanError::ProviderError {
-                message: format!("claude CLI timed out after {} seconds", dur.as_secs()),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("claude CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-        None => child
-            .wait_with_output()
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("claude CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-    };
-
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        return Err(MotosanError::ProviderError {
-            message: format!(
-                "claude CLI exited with {}: {}",
-                result.status,
-                stderr.trim()
-            ),
-            status_code: None,
-            retry_after: None,
-            request_id: None,
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&result.stdout).to_string();
-
-    if config.agent_mode {
-        parse_agent_json(&stdout)
-    } else {
-        Ok((
-            stdout.trim().to_string(),
-            Usage {
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_creation_input_tokens: None,
-                cache_read_input_tokens: None,
-            },
-            None,
-        ))
-    }
-}
-
-/// Parse the JSON output from agent mode, extracting `result`, `usage`, and `session_id`.
-fn parse_agent_json(raw: &str) -> Result<(String, Usage, Option<String>), MotosanError> {
-    let v: serde_json::Value =
-        serde_json::from_str(raw).map_err(|e| MotosanError::ProviderError {
-            message: format!("failed to parse claude JSON output: {e}"),
-            status_code: None,
-            retry_after: None,
-            request_id: None,
-        })?;
-
-    let subtype = v.get("subtype").and_then(|subtype| subtype.as_str());
-    let is_error = v
-        .get("is_error")
-        .and_then(|is_error| is_error.as_bool())
-        .unwrap_or(false);
-    let subtype_is_error = subtype.is_some_and(|subtype| subtype.starts_with("error"));
-    if is_error || subtype_is_error {
-        let subtype = subtype.unwrap_or("unknown");
-        let detail = v
-            .get("result")
-            .and_then(|result| result.as_str())
-            .filter(|result| !result.is_empty())
-            .unwrap_or("no result message");
-        return Err(MotosanError::ProviderError {
-            message: format!("claude_code terminal error ({subtype}): {detail}"),
-            status_code: None,
-            retry_after: None,
-            request_id: None,
-        });
-    }
-
-    let text = v
-        .get("result")
-        .and_then(|r| r.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    let usage = match v.get("usage") {
-        Some(u) => Usage {
-            input_tokens: u.get("input_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-            output_tokens: u.get("output_tokens").and_then(|t| t.as_u64()).unwrap_or(0) as u32,
-            cache_creation_input_tokens: u
-                .get("cache_creation_input_tokens")
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32),
-            cache_read_input_tokens: u
-                .get("cache_read_input_tokens")
-                .and_then(|t| t.as_u64())
-                .map(|t| t as u32),
-        },
-        None => Usage {
-            input_tokens: 0,
-            output_tokens: 0,
-            cache_creation_input_tokens: None,
-            cache_read_input_tokens: None,
-        },
-    };
-
-    let session_id = v
-        .get("session_id")
-        .and_then(|s| s.as_str())
-        .filter(|s| !s.is_empty())
-        .map(str::to_string);
-
-    Ok((text, usage, session_id))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,58 +389,6 @@ mod tests {
         args.iter()
             .map(|a| a.to_string_lossy().into_owned())
             .collect()
-    }
-
-    #[test]
-    fn build_command_uses_binary_and_print_args() {
-        let cmd = build_command(&empty_config());
-        let std_cmd = cmd.as_std();
-        let argv: Vec<String> = std_cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert!(argv.contains(&"--print".to_string()));
-        assert_eq!(argv.last().map(String::as_str), Some("-"));
-    }
-
-    #[test]
-    fn build_command_sets_current_dir_when_cwd_present() {
-        let cfg = SpawnConfig {
-            cwd: Some(PathBuf::from("/work/dir")),
-            ..empty_config()
-        };
-        let cmd = build_command(&cfg);
-        assert_eq!(
-            cmd.as_std().get_current_dir(),
-            Some(std::path::Path::new("/work/dir"))
-        );
-        assert_eq!(
-            build_command(&empty_config()).as_std().get_current_dir(),
-            None
-        );
-    }
-
-    #[test]
-    fn build_command_injects_envs() {
-        let cfg = SpawnConfig {
-            envs: vec![("ANTHROPIC_API_KEY".to_string(), "sk-secret".to_string())],
-            ..empty_config()
-        };
-        let std_cmd = build_command(&cfg);
-        let std_cmd = std_cmd.as_std();
-        let found = std_cmd.get_envs().any(|(k, v)| {
-            k.to_string_lossy() == "ANTHROPIC_API_KEY"
-                && v.map(|v| v.to_string_lossy().into_owned()) == Some("sk-secret".to_string())
-        });
-        assert!(found, "env must be injected");
-        let argv: Vec<String> = std_cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        assert!(
-            !argv.iter().any(|a| a.contains("sk-secret")),
-            "secret must not leak into argv"
-        );
     }
 
     #[test]
@@ -1052,28 +812,5 @@ mod tests {
                 "3",
             ]
         );
-    }
-
-    #[test]
-    fn agent_json_error_subtype_without_result_is_err() {
-        let raw = r#"{"type":"result","subtype":"error_max_turns","is_error":true}"#;
-        match parse_agent_json(raw) {
-            Err(MotosanError::ProviderError { message: msg, .. }) => {
-                assert!(msg.contains("error_max_turns"), "got: {msg}");
-            }
-            other => panic!("expected ProviderError, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn agent_json_is_error_with_result_surfaces_message() {
-        let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}"#;
-        match parse_agent_json(raw) {
-            Err(MotosanError::ProviderError { message: msg, .. }) => {
-                assert!(msg.contains("error_during_execution"), "got: {msg}");
-                assert!(msg.contains("boom"), "got: {msg}");
-            }
-            other => panic!("expected ProviderError, got {other:?}"),
-        }
     }
 }

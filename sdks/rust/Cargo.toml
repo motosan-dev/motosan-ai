@@ -83,8 +83,13 @@ async-stream = { version = "0.3", optional = true }
 
 [dev-dependencies]
 serde_json = "1"
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }
 mockito = "1"
+# Live token-refresh smoke only (tests/live_chatgpt_codex_token_refresh.rs).
+# Dev-dep ONLY: the SDK itself stays decoupled from the oauth crates (F5).
+# codex-oauth re-exports motosan_ai_oauth::{Token, Error} and bakes in the
+# codex provider config, pulling motosan-ai-oauth in transitively.
+codex-oauth = { version = "0.1", path = "crates/codex-oauth" }
 
 [[example]]
 name = "chatgpt_codex_smoke"

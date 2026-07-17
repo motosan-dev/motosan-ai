@@ -1,21 +1,15 @@
 //! Subprocess lifecycle and flag wiring for the Codex CLI provider.
 //!
 //! This module owns the translation from [`CodexCliProvider`](super::CodexCliProvider)
-//! state to argv, plus the blocking [`invoke_cli`] path used by
-//! [`CodexCliProvider::chat`](super::CodexCliProvider::chat). The streaming path
-//! shares [`apply_common_args`] / [`common_args`] to stay in sync.
+//! state to argv, consumed by
+//! [`CodexCliProvider::stream`](super::CodexCliProvider::stream), which both
+//! `chat()` and `stream()` share.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
-
-use crate::error::MotosanError;
-use crate::types::Usage;
-
-use super::stream_json::{self, NdjsonAction};
 
 /// Sandbox policy for Codex CLI, forwarded as `--sandbox <mode>`.
 ///
@@ -119,8 +113,9 @@ pub struct SpawnConfig {
 /// conservative upper bound that still prevents runaway processes.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(600);
 
-/// Build the argv fragment shared between the blocking
-/// [`invoke_cli`] path and [`CodexCliProvider::stream`](super::CodexCliProvider::stream).
+/// Build the argv fragment consumed by
+/// [`CodexCliProvider::stream`](super::CodexCliProvider::stream), which both
+/// `chat()` and `stream()` share.
 ///
 /// Returns a `Vec<OsString>` rather than mutating a `Command` so the
 /// config-to-argv mapping is pure and unit-testable. Callers append the
@@ -237,13 +232,16 @@ pub(crate) fn model_to_forward(model: &str) -> Option<&str> {
     }
 }
 
-/// Assemble a ready-to-spawn [`Command`] for a blocking `codex exec` call.
+/// Assemble a ready-to-spawn [`Command`] for a `codex exec --json`
+/// invocation; used by
+/// [`CodexCliProvider::stream`](super::CodexCliProvider::stream), which
+/// `chat()` delegates to.
 ///
 /// Sets `--json --skip-git-repo-check`, applies the shared flags via
 /// [`apply_common_args`], forwards `-` so the prompt is read from stdin,
 /// and pipes all three std streams. `kill_on_drop` ensures the child is
 /// reaped if the future is cancelled mid-flight.
-fn build_command(config: &SpawnConfig) -> Command {
+pub(super) fn build_command(config: &SpawnConfig) -> Command {
     let mut cmd = Command::new(&config.binary_path);
     cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
     push_exec_subcommand(&mut cmd, config);
@@ -256,144 +254,6 @@ fn build_command(config: &SpawnConfig) -> Command {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
     cmd
-}
-
-/// Spawn `codex exec`, feed it `prompt` on stdin, and collect the turn.
-///
-/// Returns `(content, thinking, usage, session_id)` where:
-/// - `content` is the **last** `agent_message` item (Codex's final answer),
-/// - `thinking` is all prior `agent_message` items joined with blank lines
-///   (preamble + tool narration), or `None` if only one message was emitted,
-/// - `usage` is the token tally from `turn.completed`.
-///
-/// # Errors
-///
-/// Returns [`MotosanError::ProviderError`] if the subprocess fails to
-/// spawn, times out after [`DEFAULT_TIMEOUT`], exits non-zero, emits an
-/// `error` / `turn.failed` event, or the output cannot be parsed.
-pub async fn invoke_cli(
-    config: &SpawnConfig,
-    prompt: &str,
-) -> Result<(String, Option<String>, Usage, Option<String>), MotosanError> {
-    let mut cmd = build_command(config);
-
-    let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
-        message: format!("failed to spawn codex CLI: {e}"),
-        status_code: None,
-        retry_after: None,
-        request_id: None,
-    })?;
-
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(prompt.as_bytes())
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("failed to write to codex stdin: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?;
-    }
-
-    let result = match config.timeout {
-        Some(dur) => tokio::time::timeout(dur, child.wait_with_output())
-            .await
-            .map_err(|_| MotosanError::ProviderError {
-                message: format!("codex CLI timed out after {} seconds", dur.as_secs()),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("codex CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-        None => child
-            .wait_with_output()
-            .await
-            .map_err(|e| MotosanError::ProviderError {
-                message: format!("codex CLI process error: {e}"),
-                status_code: None,
-                retry_after: None,
-                request_id: None,
-            })?,
-    };
-
-    if !result.status.success() {
-        let stderr = String::from_utf8_lossy(&result.stderr);
-        return Err(MotosanError::ProviderError {
-            message: format!("codex CLI exited with {}: {}", result.status, stderr.trim()),
-            status_code: None,
-            retry_after: None,
-            request_id: None,
-        });
-    }
-
-    let stdout = String::from_utf8_lossy(&result.stdout);
-    parse_collected_stream(&stdout)
-}
-
-/// Parse accumulated JSONL output into `(content, thinking, usage, session_id)`.
-///
-/// `content` is the last `agent_message` item. Any earlier `agent_message`
-/// items become `thinking` (joined with blank lines). Codex often emits a
-/// preamble message before running tools and a separate final answer; this
-/// split matches how other providers expose reasoning vs final answer.
-fn parse_collected_stream(
-    raw: &str,
-) -> Result<(String, Option<String>, Usage, Option<String>), MotosanError> {
-    let mut agent_messages: Vec<String> = Vec::new();
-    let mut session_id: Option<String> = None;
-    let mut usage = Usage {
-        input_tokens: 0,
-        output_tokens: 0,
-        cache_creation_input_tokens: None,
-        cache_read_input_tokens: None,
-    };
-
-    for line in raw.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        match stream_json::parse_ndjson_line(line) {
-            Some(NdjsonAction::Text(event)) => agent_messages.push(event.content),
-            Some(NdjsonAction::SessionStarted(event)) if session_id.is_none() => {
-                session_id = event.session_id;
-            }
-            Some(NdjsonAction::SessionStarted(_)) => {}
-            Some(NdjsonAction::ToolCalls(_)) => {}
-            Some(NdjsonAction::Done {
-                usage: Some(event), ..
-            }) => {
-                if let Some(collected) = event.usage {
-                    usage = collected;
-                }
-            }
-            Some(NdjsonAction::Done { usage: None, .. }) => {}
-            Some(NdjsonAction::Error(msg)) => {
-                return Err(MotosanError::ProviderError {
-                    message: format!("codex CLI: {msg}"),
-                    status_code: None,
-                    retry_after: None,
-                    request_id: None,
-                });
-            }
-            None => {}
-        }
-    }
-
-    let content = agent_messages.pop().unwrap_or_default();
-    let thinking = if agent_messages.is_empty() {
-        None
-    } else {
-        Some(agent_messages.join("\n\n"))
-    };
-
-    Ok((content, thinking, usage, session_id))
 }
 
 #[cfg(test)]
@@ -766,79 +626,5 @@ mod tests {
         assert_eq!(model_to_forward("DEFAULT"), None);
         assert_eq!(model_to_forward(""), None);
         assert_eq!(model_to_forward("   "), None);
-    }
-
-    #[test]
-    fn last_agent_message_is_content_rest_is_thinking() {
-        let raw = concat!(
-            r#"{"type":"thread.started","thread_id":"t1"}"#,
-            "\n",
-            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"Let me think..."}}"#,
-            "\n",
-            r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Checking the docs."}}"#,
-            "\n",
-            r#"{"type":"item.completed","item":{"id":"i3","type":"agent_message","text":"pong"}}"#,
-            "\n",
-            r#"{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5,"cached_input_tokens":3}}"#,
-            "\n",
-        );
-        let (content, thinking, usage, _session_id) =
-            parse_collected_stream(raw).expect("should parse");
-        assert_eq!(content, "pong");
-        assert_eq!(
-            thinking.as_deref(),
-            Some("Let me think...\n\nChecking the docs.")
-        );
-        assert_eq!(usage.input_tokens, 10);
-        assert_eq!(usage.output_tokens, 5);
-        assert_eq!(usage.cache_read_input_tokens, Some(3));
-    }
-
-    #[test]
-    fn single_agent_message_has_no_thinking() {
-        let raw = concat!(
-            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"pong"}}"#,
-            "\n",
-            r#"{"type":"turn.completed"}"#,
-            "\n",
-        );
-        let (content, thinking, _, _session_id) =
-            parse_collected_stream(raw).expect("should parse");
-        assert_eq!(content, "pong");
-        assert_eq!(thinking, None);
-    }
-
-    #[test]
-    fn parse_collected_stream_captures_thread_id() {
-        let raw = concat!(
-            r#"{"type":"thread.started","thread_id":"th_xyz"}"#,
-            "\n",
-            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"pong"}}"#,
-            "\n",
-            r#"{"type":"turn.completed"}"#,
-            "\n",
-        );
-        let (content, _thinking, _usage, session_id) = parse_collected_stream(raw).expect("parse");
-        assert_eq!(content, "pong");
-        assert_eq!(session_id.as_deref(), Some("th_xyz"));
-    }
-
-    #[test]
-    fn parse_collected_stream_surfaces_error() {
-        let raw = r#"{"type":"error","message":"nope"}"#;
-        let err = parse_collected_stream(raw).unwrap_err();
-        let MotosanError::ProviderError { message: msg, .. } = err else {
-            panic!("expected ProviderError");
-        };
-        assert!(msg.contains("nope"));
-    }
-
-    #[test]
-    fn parse_collected_stream_ignores_blank_lines() {
-        let raw = "\n\n   \n";
-        let (content, thinking, _, _session_id) =
-            parse_collected_stream(raw).expect("should parse");
-        assert_eq!(content, "");
-        assert_eq!(thinking, None);
     }
 }
