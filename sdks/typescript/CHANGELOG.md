@@ -4,6 +4,15 @@ All notable changes to `@motosan-ai/sdk` TypeScript SDK are documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [Unreleased]
+
+### Added
+- `ChatGptCodexProvider` and `ClientBuilder.chatgptCodex` accept an async token
+  source: `accessToken: string | TokenSource` where `TokenSource = () => Promise<string>`
+  (exported from the package root). The source is resolved once per request
+  attempt, so a retry after 5xx/429 sends a freshly resolved Bearer token.
+  Plain-string tokens are unchanged. (F5)
+
 ## [0.14.0] - 2026-07-17
 
 ### Breaking

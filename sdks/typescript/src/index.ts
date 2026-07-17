@@ -8,9 +8,10 @@ export * from './providers/openai.js'
 export * from './providers/minimax.js'
 export * from './providers/ollama.js'
 export * from './providers/gemini.js'
-// chatgpt_codex: exports ChatGptCodexProvider + DEFAULT_CHATGPT_CODEX_MODEL.
+// chatgpt_codex: exports ChatGptCodexProvider + DEFAULT_CHATGPT_CODEX_URL + TokenSource.
 // `chatGptCodexErrorMessage` is @internal and NOT re-exported.
 export { ChatGptCodexProvider, DEFAULT_CHATGPT_CODEX_URL } from './providers/chatgpt_codex.js'
+export type { TokenSource } from './providers/chatgpt_codex.js'
 
 export { RetryPolicy } from './retry.js'
 export type { RetryPolicyOptions, RetryEvent } from './retry.js'
