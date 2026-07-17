@@ -131,8 +131,8 @@ end of a stream:
 
 | Provider family | Terminal event |
 |-----------------|----------------|
-| OpenAI | `data: [DONE]` SSE sentinel |
-| MiniMax | Python: `data: [DONE]` SSE sentinel (own OpenAI-compatible-wire adapter). Rust / TypeScript: `message_stop` — both delegate to the Anthropic adapter (Rust `build_minimax_provider` constructs an `AnthropicProvider`; TS `MinimaxProvider` wraps one), so the Anthropic rule applies |
+| OpenAI | `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices; `finish_reason` is the semantic terminal, `[DONE]` the transport epilogue) |
+| MiniMax | Python: `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices, as for OpenAI — own OpenAI-compatible-wire adapter). Rust / TypeScript: `message_stop` — both delegate to the Anthropic adapter (Rust `build_minimax_provider` constructs an `AnthropicProvider`; TS `MinimaxProvider` wraps one), so the Anthropic rule applies |
 | Anthropic | `message_stop` SSE event (the Python adapter additionally treats a stray `data: [DONE]` as terminal) |
 | Gemini, GeminiCodeAssist | final SSE chunk carrying `finishReason` (a trailing `[DONE]` is tolerated but not required) |
 | ChatGPT Codex | `response.completed` SSE event |
@@ -143,7 +143,10 @@ not the collectors. When the upstream byte/event stream ends (EOF)
 **without** the provider's terminal event, the adapter yields/throws
 the `IncompleteStream` error below. Adapters MUST NOT fabricate a
 synthetic `done` event and MUST NOT end the stream silently:
-truncation is always distinguishable from completion.
+truncation is always distinguishable from completion. (On the OpenAI
+wire the `done` event may be *emitted at EOF* when a `finish_reason`
+chunk — a real terminal event per the table above — already arrived;
+that is delivery of a received terminal, not fabrication.)
 
 Collectors are unchanged: they keep propagating adapter errors (the
 M1 fallible-stream contract) and keep the `stop_reason` heuristic
@@ -180,8 +183,13 @@ Anthropic wire — and equivalent defensive-EOF fabrication or
 silent-end paths elsewhere, e.g. the TypeScript Anthropic adapter's
 fallback `done` at EOF) is **deliberately retired**. Fabricating
 `done` on a truncated EOF made truncation indistinguishable from
-completion. The narrower invariant that survives: a stream that
-terminates *without error* emits exactly one terminal `done` event.
+completion. What is retired is precisely the NEITHER-signal
+fabrication: on the OpenAI wire an EOF after a `finish_reason`-bearing
+chunk is a *semantically complete* stream (per the terminal-event
+table above) and still emits `done` carrying the stashed stop reason —
+that path is NOT retired. The narrower invariant that survives: a
+stream that terminates *without error* emits exactly one terminal
+`done` event.
 
 ### Cancellation
 
