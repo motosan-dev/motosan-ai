@@ -60,6 +60,15 @@ impl GeminiProvider {
         self
     }
 
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
+        self
+    }
+
     fn generate_url(&self, req: &ChatRequest) -> String {
         let model = req.model.as_deref().unwrap_or(&self.model);
         format!("{}/models/{}:generateContent", self.base_url, model)

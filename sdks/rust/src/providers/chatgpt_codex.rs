@@ -60,6 +60,15 @@ impl ChatGptCodexProvider {
         self
     }
 
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
+        self
+    }
+
     /// Set the default reasoning effort (`low`/`medium`/`high`/…) used when a
     /// request omits `provider_options["reasoning_effort"]`. A per-request
     /// value always takes precedence. Pass `None` to leave the body's

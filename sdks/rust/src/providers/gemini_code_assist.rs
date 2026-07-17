@@ -73,6 +73,15 @@ impl GeminiCodeAssistProvider {
         self
     }
 
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
+        self
+    }
+
     fn stream_url(&self) -> String {
         format!("{}/v1internal:streamGenerateContent?alt=sse", self.base_url)
     }

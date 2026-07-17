@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use std::task::Poll;
 
+#[derive(Debug, Clone)]
 pub struct OllamaProvider {
     http: Client,
     model: String,
@@ -55,6 +56,15 @@ impl OllamaProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 

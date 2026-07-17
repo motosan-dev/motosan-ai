@@ -22,6 +22,7 @@ use std::pin::Pin;
 use std::task::Poll;
 use tokio_stream::StreamExt;
 
+#[derive(Debug, Clone)]
 pub struct AnthropicProvider {
     http: Client,
     api_key: String,
@@ -49,6 +50,15 @@ impl AnthropicProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 

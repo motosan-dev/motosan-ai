@@ -33,6 +33,7 @@ pub const DEFAULT_OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/comple
 /// Default Responses API endpoint for OpenAI.
 pub const DEFAULT_OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
+#[derive(Debug, Clone)]
 pub struct OpenAIProvider {
     http: Client,
     api_key: String,
@@ -80,6 +81,15 @@ impl OpenAIProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
