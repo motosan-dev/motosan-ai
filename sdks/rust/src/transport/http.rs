@@ -198,15 +198,26 @@ async fn observe_and_sleep(
 
 /// One retry engine for every HTTP provider (normative contract: specs/retry.md).
 ///
-/// Returns success and terminal non-success responses with the body untouched,
-/// leaving caller-side parsing and provider-specific error shaping intact.
-pub(crate) async fn send_with_retry(
+/// `build` is awaited at the top of EVERY attempt — including retries — so
+/// per-attempt credential resolution (`crate::auth::TokenSource`) sees a
+/// fresh token each time. A `build` error aborts immediately: it is a
+/// caller-side failure, not a network failure, and is never retried.
+///
+/// Returns success and terminal non-success responses with the body
+/// untouched, leaving caller-side parsing and provider-specific error
+/// shaping intact. `on_retry` observers fire only here (M2 choke point).
+pub(crate) async fn send_with_retry_async_build<F, Fut>(
     policy: &RetryPolicy,
-    build: impl Fn() -> reqwest::RequestBuilder,
-) -> Result<reqwest::Response, MotosanError> {
+    build: F,
+) -> Result<reqwest::Response, MotosanError>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<reqwest::RequestBuilder, MotosanError>>,
+{
     let mut attempt: u32 = 0;
     loop {
-        let response = match build().send().await {
+        let request = build().await?;
+        let response = match request.send().await {
             Ok(response) => response,
             Err(error) => {
                 if attempt < policy.max_retries && is_retryable_network_error(&error) {
@@ -233,6 +244,19 @@ pub(crate) async fn send_with_retry(
 
         return Ok(response);
     }
+}
+
+/// Sync-build convenience over [`send_with_retry_async_build`] — the single
+/// retry engine every HTTP provider shares (normative contract:
+/// specs/retry.md).
+pub(crate) async fn send_with_retry(
+    policy: &RetryPolicy,
+    build: impl Fn() -> reqwest::RequestBuilder,
+) -> Result<reqwest::Response, MotosanError> {
+    send_with_retry_async_build(policy, || {
+        std::future::ready(Ok::<_, MotosanError>(build()))
+    })
+    .await
 }
 
 /// Apply the opt-in total timeout to a blocking-chat request.
@@ -553,5 +577,90 @@ mod retry_conformance {
         assert_eq!(policy.max_delay_ms, 2000);
         assert!(policy.jitter);
         assert!(policy.respect_retry_after);
+    }
+}
+
+// Per-attempt async request construction (F5). The build future runs at the
+// top of EVERY attempt so credential lookups (crate::auth::TokenSource) are
+// re-resolved per retry. send_with_retry delegates here — single retry
+// engine, M2 choke-point decision intact.
+#[cfg(test)]
+mod async_build_engine {
+    use super::send_with_retry_async_build;
+    use crate::error::MotosanError;
+    use crate::retry::RetryPolicy;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn fast_retry(max: u32) -> RetryPolicy {
+        RetryPolicy::new()
+            .max_retries(max)
+            .base_delay_ms(0)
+            .max_delay_ms(0)
+            .jitter(false)
+    }
+
+    #[tokio::test]
+    async fn build_future_runs_once_per_attempt() {
+        let mut server = mockito::Server::new_async().await;
+        // Creation order + expect(1) saturation: attempt 1 -> 503, attempt 2
+        // -> 200 (same precedent as tests/chatgpt_codex.rs
+        // stream_fires_on_retry_via_shared_engine).
+        server
+            .mock("GET", "/probe")
+            .with_status(503)
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("GET", "/probe")
+            .with_status(200)
+            .expect(1)
+            .create_async()
+            .await;
+
+        let http = reqwest::Client::new();
+        let url = format!("{}/probe", server.url());
+        let builds = AtomicUsize::new(0);
+
+        let response = send_with_retry_async_build(&fast_retry(1), || {
+            let http = &http;
+            let url = &url;
+            let builds = &builds;
+            async move {
+                builds.fetch_add(1, Ordering::SeqCst);
+                Ok(http.get(url))
+            }
+        })
+        .await
+        .expect("second attempt succeeds");
+
+        assert_eq!(response.status().as_u16(), 200);
+        assert_eq!(builds.load(Ordering::SeqCst), 2, "one build per attempt");
+    }
+
+    #[tokio::test]
+    async fn build_error_short_circuits_without_retry() {
+        let builds = AtomicUsize::new(0);
+        let err = send_with_retry_async_build(&fast_retry(3), || {
+            let builds = &builds;
+            async move {
+                builds.fetch_add(1, Ordering::SeqCst);
+                Err::<reqwest::RequestBuilder, _>(MotosanError::Auth {
+                    message: "no token".into(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })
+            }
+        })
+        .await
+        .expect_err("build error propagates");
+
+        assert!(matches!(err, MotosanError::Auth { ref message, .. } if message == "no token"));
+        assert_eq!(
+            builds.load(Ordering::SeqCst),
+            1,
+            "build errors are not retried"
+        );
     }
 }
