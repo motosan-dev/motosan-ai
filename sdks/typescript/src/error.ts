@@ -12,6 +12,23 @@ export class NetworkError extends MotosanError {}
 export class StreamError extends MotosanError {}
 
 /**
+ * Error thrown when the upstream byte/event stream ends (EOF) without the
+ * provider's terminal event (Anthropic message_stop, OpenAI [DONE], Gemini
+ * finishReason, Ollama done:true, Codex response.completed). Message
+ * convention: `incomplete stream: <provider> ended without a terminal event`.
+ * Subclasses StreamError deliberately (migration softener): existing
+ * `instanceof StreamError` handlers keep catching truncation. Replaces the
+ * retired v0.10.1 "exactly one terminal done even when upstream closes
+ * without [DONE]" invariant (M3/E3; specs/types.md stream termination).
+ */
+export class IncompleteStreamError extends StreamError {
+  constructor(message: string) {
+    super(message)
+    this.name = 'IncompleteStreamError'
+  }
+}
+
+/**
  * Error thrown when a stream read operation times out.
  * Carries the timeout duration in seconds.
  */

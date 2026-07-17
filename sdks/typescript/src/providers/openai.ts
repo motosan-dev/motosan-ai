@@ -1,3 +1,4 @@
+import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_OPENAI_MODEL } from '../models.js'
@@ -425,20 +426,26 @@ export class OpenAIProvider {
       }
     }
 
-    // Defensive: EOF without [DONE] — emit terminal once.
+    // EOF without the [DONE] sentinel (M3, amended): a stashed finish_reason
+    // means the stream is SEMANTICALLY complete — [DONE] is only the
+    // transport epilogue — so emit the terminal done carrying it, open-tool
+    // flush included (mirrors the [DONE] branch; narrow survival of the
+    // pre-M3 EOF fabrication, ONLY when finish_reason was seen). EOF with
+    // NEITHER signal is truncation: the no-signal fabrication is retired.
     if (!doneEmitted) {
-      // If a tool is still open (no finish_reason/[DONE] closed it), flush it.
-      if (openToolIndex !== undefined) {
-        const openId = toolBuffer.get(openToolIndex)?.id
-        if (openId) {
-          yield toolCallEndWithId(openId)
+      if (pendingStopReason !== undefined) {
+        if (openToolIndex !== undefined) {
+          const openId = toolBuffer.get(openToolIndex)?.id
+          if (openId) {
+            yield toolCallEndWithId(openId)
+          }
+          openToolIndex = undefined
         }
-        openToolIndex = undefined
+        doneEmitted = true
+        yield doneWithStopReason(pendingStopReason)
+        return
       }
-      doneEmitted = true
-      yield pendingStopReason !== undefined
-        ? doneWithStopReason(pendingStopReason)
-        : doneEvent()
+      throw new IncompleteStreamError('incomplete stream: openai ended without a terminal event')
     }
   }
 }

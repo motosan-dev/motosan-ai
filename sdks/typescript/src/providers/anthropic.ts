@@ -1,4 +1,4 @@
-import { ProviderError, StreamError } from '../error.js'
+import { IncompleteStreamError, ProviderError, StreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
@@ -140,15 +140,18 @@ interface StreamState {
 export class AnthropicProvider {
   private readonly model: string
   private readonly baseUrl: string
+  private readonly providerName: string
   private retryPolicy: RetryPolicy
 
   constructor(
     private readonly apiKey: string,
     model?: string,
     baseUrl = 'https://api.anthropic.com',
+    providerName = 'anthropic',
   ) {
     this.model = model ?? DEFAULT_ANTHROPIC_MODEL
     this.baseUrl = baseUrl
+    this.providerName = providerName
     this.retryPolicy = RetryPolicy.default()
   }
 
@@ -360,12 +363,12 @@ export class AnthropicProvider {
       }
     }
 
-    // Defensive: terminate even if message_stop never arrived.
-    if (state.stopReason !== undefined) {
-      yield doneWithStopReason(state.stopReason)
-    } else {
-      yield doneEvent()
-    }
+    // EOF without message_stop: truncation, not completion (M3/E3 — the
+    // fabricated clean done is retired). A message_delta stop_reason alone
+    // is NOT terminal; only message_stop is.
+    throw new IncompleteStreamError(
+      `incomplete stream: ${this.providerName} ended without a terminal event`,
+    )
   }
 
   capabilities(): ProviderCapabilities {

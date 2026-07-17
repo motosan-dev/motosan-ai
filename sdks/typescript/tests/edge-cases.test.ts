@@ -7,7 +7,7 @@ import { validateRequest, fullCaps } from '../src/provider.js'
 import { serializeAnthropicRequest } from '../src/serialize/anthropic.js'
 import { serializeOpenAiRequest } from '../src/serialize/openai.js'
 import { serializeGeminiRequest } from '../src/serialize/gemini.js'
-import { MotosanError, ProviderError } from '../src/error.js'
+import { IncompleteStreamError, MotosanError, ProviderError } from '../src/error.js'
 import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_OPENAI_MODEL, DEFAULT_GEMINI_MODEL } from '../src/models.js'
 import type { StreamEvent } from '../src/types.js'
 
@@ -121,13 +121,23 @@ describe('edge cases', () => {
     })
   })
 
-  describe('mid-stream reset / partial success', () => {
-    // Anthropic & OpenAI fabricate a defensive `done` on EOF without a terminal
-    // event (anthropic.ts:386-391, openai.ts:460-474). Gemini deliberately does
-    // NOT (gemini.ts:262) and is already covered in providers-gemini.test.ts —
-    // so it is excluded here per the plan's Step-1 "add only the missing" rule.
+  describe('mid-stream truncation (M3/E3: EOF without a terminal event throws)', () => {
+    // M3 retired the v0.10.1 "fabricate a clean done at EOF" invariant for
+    // the NEITHER-signal case (anthropic.ts defensive tail removed;
+    // openai.ts EOF fabrication narrowed: it survives ONLY when a
+    // finish_reason was stashed — the semantic terminal, amended 2026-07-17).
+    async function drainErr(stream: AsyncIterable<StreamEvent>) {
+      const events: StreamEvent[] = []
+      let error: unknown
+      try {
+        for await (const evt of stream) events.push(evt)
+      } catch (e) {
+        error = e
+      }
+      return { events, error }
+    }
 
-    it('Anthropic: stream that ends without message_stop terminates silently with a partial response', async () => {
+    it('Anthropic: stream that ends without message_stop throws IncompleteStreamError', async () => {
       const transcript =
         'event: message_start\n' +
         'data: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n' +
@@ -139,52 +149,55 @@ describe('edge cases', () => {
       stubSseFetch(transcript)
 
       const provider = new AnthropicProvider('key', 'claude-3-5-sonnet-20241022')
-      const events: StreamEvent[] = []
-      for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
-        events.push(evt)
-      }
+      const { events, error } = await drainErr(provider.stream({ messages: [{ role: 'user', content: 'hi' }] }))
+      expect(error).toBeInstanceOf(IncompleteStreamError)
+      expect((error as Error).message).toBe('incomplete stream: anthropic ended without a terminal event')
       expect(events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content)).toEqual([
         'partial',
       ])
-      const last = events[events.length - 1]
-      expect(last.done).toBe(true)
+      expect(events.some((e) => e.done)).toBe(false)
 
-      // collectStream tolerates the drop and fabricates a terminal stopReason.
       stubSseFetch(transcript)
-      const resp = await collectStream(
-        provider.stream({ messages: [{ role: 'user', content: 'hi' }] }),
-      )
-      expect(resp.content).toBe('partial')
-      expect(Array.isArray(resp.toolCalls)).toBe(true)
-      expect(resp.toolCalls.length).toBe(0)
-      expect(resp.stopReason).toBe('end_turn') // fabricated: no tool calls
+      await expect(
+        collectStream(provider.stream({ messages: [{ role: 'user', content: 'hi' }] })),
+      ).rejects.toBeInstanceOf(IncompleteStreamError)
     })
 
-    it('OpenAI: stream that ends without [DONE]/finish_reason terminates silently with a partial response', async () => {
+    it('OpenAI: stream that ends without [DONE] throws IncompleteStreamError', async () => {
       const transcript =
         'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n'
       // No further chunks, no finish_reason, no [DONE] — dropped mid-flight.
       stubSseFetch(transcript)
 
       const provider = new OpenAIProvider('sk-test', 'gpt-4o')
+      const { events, error } = await drainErr(provider.stream({ messages: [{ role: 'user', content: 'hi' }] }))
+      expect(error).toBeInstanceOf(IncompleteStreamError)
+      expect((error as Error).message).toBe('incomplete stream: openai ended without a terminal event')
+      expect(events.some((e) => e.done)).toBe(false)
+
+      stubSseFetch(transcript)
+      await expect(
+        collectStream(provider.stream({ messages: [{ role: 'user', content: 'hi' }] })),
+      ).rejects.toBeInstanceOf(IncompleteStreamError)
+    })
+
+    it('OpenAI: finish_reason then EOF without [DONE] completes with the stashed stop reason (either signal suffices)', async () => {
+      // Amended M3 rule (2026-07-17): finish_reason is the SEMANTIC terminal;
+      // [DONE] is only the transport epilogue. This pins the narrow surviving
+      // path of the pre-M3 EOF fabrication (openai.ts pendingStopReason).
+      const transcript =
+        'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n' +
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n'
+      stubSseFetch(transcript)
+      const provider = new OpenAIProvider('sk-test', 'gpt-4o')
       const events: StreamEvent[] = []
       for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
         events.push(evt)
       }
-      expect(events.filter((e) => e.eventType === 'text' && !e.done).map((e) => e.content)).toEqual([
-        'partial',
-      ])
       const last = events[events.length - 1]
       expect(last.done).toBe(true)
-
-      stubSseFetch(transcript)
-      const resp = await collectStream(
-        provider.stream({ messages: [{ role: 'user', content: 'hi' }] }),
-      )
-      expect(resp.content).toBe('partial')
-      expect(Array.isArray(resp.toolCalls)).toBe(true)
-      expect(resp.toolCalls.length).toBe(0)
-      expect(resp.stopReason).toBe('end_turn')
+      expect(last.stopReason).toBe('max_tokens')
+      expect(events.filter((e) => e.done)).toHaveLength(1)
     })
   })
 

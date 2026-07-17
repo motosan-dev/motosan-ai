@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { StreamError } from '../src/error.js'
+import { IncompleteStreamError, StreamError } from '../src/error.js'
 import { AnthropicProvider } from '../src/providers/anthropic.js'
 import type { ChatRequest, StreamEvent } from '../src/types.js'
 
@@ -615,7 +615,7 @@ describe('AnthropicProvider beta headers (M4)', () => {
   })
 
   it('streamImpl also adds the MCP beta header', async () => {
-    // Return an empty SSE body so the generator completes without events.
+    // Return an empty SSE body so EOF is reached before a terminal event.
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: string, options?: RequestInit) => {
@@ -631,13 +631,17 @@ describe('AnthropicProvider beta headers (M4)', () => {
       }),
     )
     const provider = new AnthropicProvider('k', 'claude-sonnet-4-6')
-    const events: StreamEvent[] = []
-    for await (const e of provider.stream({
-      messages: [{ role: 'user', content: 'hi' }],
-      mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
-    })) {
-      events.push(e)
+    let error: unknown
+    try {
+      for await (const _ of provider.stream({
+        messages: [{ role: 'user', content: 'hi' }],
+        mcpServers: [{ type: 'url', url: 'https://m.example/sse', name: 'm' }],
+      }))
+        void _
+    } catch (e) {
+      error = e
     }
+    expect(error).toBeInstanceOf(IncompleteStreamError)
     expect(captured?.headers['anthropic-beta']).toBe('mcp-client-2025-11-20')
   })
 })

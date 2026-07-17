@@ -28,6 +28,7 @@ export class MinimaxProvider {
       apiKey,
       model ?? DEFAULT_MINIMAX_MODEL,
       baseUrl ?? DEFAULT_MINIMAX_BASE_URL,
+      'minimax',
     )
   }
 

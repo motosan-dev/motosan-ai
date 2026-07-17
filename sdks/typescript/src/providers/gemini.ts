@@ -1,3 +1,4 @@
+import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_GEMINI_MODEL } from '../models.js'
@@ -170,6 +171,7 @@ export class GeminiProvider {
     // doneWithStopReason) or stream EOF. NO defensive EOF done (gemini.rs:531;
     // contrast openai.ts:460-474). (sse.ts [DONE] is advisory and never
     // terminates — sse.ts:7-9,134-139.)
+    let sawTerminal = false
     for await (const evt of parseSse(responseBody)) {
       const data = evt.data
 
@@ -217,9 +219,13 @@ export class GeminiProvider {
       // done LAST, only when finishReason present — the ONLY terminator
       // (gemini.rs:513-523).
       if (finishReason !== undefined) {
+        sawTerminal = true
         yield doneWithStopReason(mapFinishReason(finishReason, hasToolCalls))
       }
     }
-    // EOF: generator ends naturally. NO fabricated done (gemini.rs:531).
+    // EOF without any finishReason: truncation, not completion (M3/E2).
+    if (!sawTerminal) {
+      throw new IncompleteStreamError('incomplete stream: gemini ended without a terminal event')
+    }
   }
 }
