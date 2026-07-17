@@ -130,15 +130,7 @@ pub struct Client {
     chatgpt_codex_reasoning_effort: Option<String>,
     built: BuiltProvider,
     /// Shared HTTP transport. `reqwest::Client` clones share one connection pool.
-    #[cfg(any(
-        feature = "anthropic",
-        feature = "openai",
-        feature = "minimax",
-        feature = "ollama",
-        feature = "gemini",
-        feature = "gemini-code-assist",
-        feature = "chatgpt-codex",
-    ))]
+    #[cfg(feature = "_http")]
     http: reqwest::Client,
 }
 
@@ -223,13 +215,6 @@ impl Client {
     /// This is a convenience wrapper around [`stream`](Self::stream) +
     /// [`collect_stream`](crate::stream::collect_stream) that removes the
     /// boilerplate of manually consuming stream events.
-    #[cfg(any(
-        feature = "anthropic",
-        feature = "openai",
-        feature = "minimax",
-        feature = "ollama_native",
-        feature = "gemini",
-    ))]
     pub async fn stream_collect(
         &self,
         messages: Vec<Message>,
@@ -247,13 +232,6 @@ impl Client {
     /// Like [`stream_collect`](Self::stream_collect) but accepts an already-
     /// built request for full control over system prompt, tools, temperature,
     /// etc.
-    #[cfg(any(
-        feature = "anthropic",
-        feature = "openai",
-        feature = "minimax",
-        feature = "ollama_native",
-        feature = "gemini",
-    ))]
     pub async fn stream_collect_with(
         &self,
         request: ChatRequest,
@@ -287,15 +265,7 @@ impl Client {
 
     async fn dispatch_stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
         let raw = self.dispatch_stream_inner(request).await?;
-        #[cfg(any(
-            feature = "anthropic",
-            feature = "openai",
-            feature = "minimax",
-            feature = "ollama_native",
-            feature = "gemini",
-            feature = "gemini-code-assist",
-            feature = "chatgpt-codex",
-        ))]
+        #[cfg(feature = "_http")]
         if self.provider.uses_http_transport() {
             return Ok(Box::pin(ReadTimeoutStream::new(
                 raw,
@@ -1024,15 +994,7 @@ impl ClientBuilder {
             total: self.total_timeout,
         };
 
-        #[cfg(any(
-            feature = "anthropic",
-            feature = "openai",
-            feature = "minimax",
-            feature = "ollama",
-            feature = "gemini",
-            feature = "gemini-code-assist",
-            feature = "chatgpt-codex",
-        ))]
+        #[cfg(feature = "_http")]
         let http = reqwest::Client::builder()
             .connect_timeout(timeouts.connect)
             .build()
@@ -1091,15 +1053,7 @@ impl ClientBuilder {
             #[cfg(feature = "chatgpt-codex")]
             chatgpt_codex_reasoning_effort: self.chatgpt_codex_reasoning_effort,
             built: BuiltProvider::Disabled("uninitialized"),
-            #[cfg(any(
-                feature = "anthropic",
-                feature = "openai",
-                feature = "minimax",
-                feature = "ollama",
-                feature = "gemini",
-                feature = "gemini-code-assist",
-                feature = "chatgpt-codex",
-            ))]
+            #[cfg(feature = "_http")]
             http,
         };
         let built = client.construct_built_provider();
@@ -1111,15 +1065,7 @@ impl ClientBuilder {
 /// Stream wrapper that terminates the stream if no event arrives within the
 /// configured read timeout. This prevents the client from hanging indefinitely
 /// when a provider stops sending SSE events mid-stream.
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
+#[cfg(feature = "_http")]
 struct ReadTimeoutStream {
     inner: BoxStream,
     timeout: Duration,
@@ -1127,15 +1073,7 @@ struct ReadTimeoutStream {
     done: bool,
 }
 
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
+#[cfg(feature = "_http")]
 impl ReadTimeoutStream {
     fn new(inner: BoxStream, timeout: Duration) -> Self {
         Self {
@@ -1147,15 +1085,7 @@ impl ReadTimeoutStream {
     }
 }
 
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
+#[cfg(feature = "_http")]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = Result<StreamEvent, MotosanError>;
 
@@ -1392,13 +1322,7 @@ mod think_stripper_stream_tests {
         assert!(wrapped.next().await.is_none());
     }
 
-    #[cfg(any(
-        feature = "anthropic",
-        feature = "openai",
-        feature = "minimax",
-        feature = "ollama_native",
-        feature = "gemini",
-    ))]
+    #[cfg(feature = "_http")]
     #[tokio::test]
     async fn read_timeout_yields_error_once_then_ends() {
         let raw: BoxStream = Box::pin(tokio_stream::pending());

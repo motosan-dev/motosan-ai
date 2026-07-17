@@ -37,15 +37,7 @@ pub enum Provider {
     OpenAiChatGpt,
 }
 
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
+#[cfg(feature = "_http")]
 impl Provider {
     /// True when the provider speaks HTTP through the shared reqwest client.
     pub(crate) fn uses_http_transport(&self) -> bool {
