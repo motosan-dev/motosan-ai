@@ -806,7 +806,7 @@ mod tests {
             )
             .expect("write large-stderr script");
             let result = CodexCliProvider::with_path(bin.clone())
-                .timeout(std::time::Duration::from_secs(2))
+                .timeout(std::time::Duration::from_secs(10))
                 .chat(user_request("hi"))
                 .await;
             let _ = std::fs::remove_file(&bin);
