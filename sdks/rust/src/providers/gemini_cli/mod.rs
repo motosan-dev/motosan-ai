@@ -240,24 +240,27 @@ impl GeminiCliProvider {
         }
     }
 
-    /// Send a chat request by invoking the `gemini` CLI as a subprocess.
+    /// Send a chat request by delegating to [`Self::stream`] and collecting
+    /// the events with [`crate::stream::collect_stream`].
+    ///
+    /// Both paths share one `gemini -p "" -o stream-json` spawn/parse
+    /// pipeline, so `content`, `thinking`, `tool_calls`, `usage`,
+    /// `session_id`, and `stop_reason` are identical by construction. A
+    /// successfully completed CLI turn always reports
+    /// [`StopReason::EndTurn`]: [`ChatResponse::tool_calls`] records the
+    /// tools the CLI already ran — never a request for the caller to
+    /// execute them.
+    ///
+    /// Documented parity exception: `model` is backfilled from the request /
+    /// provider configuration because stream events carry no model name.
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
-        let system_prompt = request.system.clone().or(msg_system);
-        let stdin_payload = merge_system_into_prompt(system_prompt.as_deref(), &user_prompt);
-
-        let config = self.build_spawn_config(request.model);
-        let (text, usage, session_id) = spawn::invoke_cli(&config, &stdin_payload).await?;
-
-        Ok(ChatResponse {
-            content: text,
-            thinking: None,
-            tool_calls: vec![],
-            model: config.model.unwrap_or_default(),
-            usage,
-            stop_reason: StopReason::EndTurn,
-            session_id,
-        })
+        let configured_model = request.model.clone().or_else(|| self.model.clone());
+        let stream = self.stream(request).await?;
+        let mut resp = crate::stream::collect_stream(stream).await?;
+        if resp.model.is_empty() {
+            resp.model = configured_model.unwrap_or_default();
+        }
+        Ok(resp)
     }
 
     /// Stream a chat request via `gemini -p "" -o stream-json`.
@@ -266,7 +269,6 @@ impl GeminiCliProvider {
     /// items parsed from the NDJSON events Gemini CLI emits on stdout.
     pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
         use tokio::io::{AsyncWriteExt, BufReader};
-        use tokio::process::Command;
 
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
         let system_prompt = request.system.clone().or(msg_system);
@@ -274,16 +276,7 @@ impl GeminiCliProvider {
 
         let config = self.build_spawn_config(request.model);
 
-        let mut cmd = Command::new(&config.binary_path);
-        if let Some(dir) = &config.cwd {
-            cmd.current_dir(dir);
-        }
-        cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
-        cmd.args(spawn::common_args(&config));
-        cmd.kill_on_drop(true);
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        let mut cmd = spawn::build_command(&config);
 
         let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
             message: format!("failed to spawn gemini CLI: {e}"),
@@ -341,8 +334,6 @@ where
 
     Box::pin(async_stream::stream! {
         let mut lines = reader.lines();
-        let mut saw_tool_call = false;
-
         loop {
             let next = match read_timeout {
                 Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
@@ -380,7 +371,6 @@ where
                     yield Ok(event);
                 }
                 Some(stream_json::NdjsonAction::ToolCalls(events)) => {
-                    saw_tool_call = true;
                     for event in events {
                         yield Ok(event);
                     }
@@ -391,7 +381,7 @@ where
                     if let Some(usage_event) = usage {
                         yield Ok(usage_event);
                     }
-                    yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                    yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                     break;
                 }
                 Some(stream_json::NdjsonAction::Error(msg)) => {
@@ -582,6 +572,140 @@ impl super::ProviderImpl for GeminiCliProvider {
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// F4 parity: one fake-CLI transcript through `chat()` and through
+    /// `collect_stream(stream())` must agree on content / thinking /
+    /// tool_calls / stop_reason / usage / session_id. `model` is the one
+    /// documented exception: `chat()` backfills it from provider config.
+    #[cfg(unix)]
+    mod chat_stream_parity {
+        use super::*;
+        use crate::types::StopReason;
+
+        const TRANSCRIPT: &str = concat!(
+            r#"{"type":"init","session_id":"sess_9"}"#,
+            "\n",
+            r#"{"type":"message","role":"assistant","content":"Sure, ","delta":true}"#,
+            "\n",
+            r#"{"type":"tool_use","tool_id":"read_1","tool_name":"read_file","parameters":{"file_path":"Cargo.toml"}}"#,
+            "\n",
+            r#"{"type":"message","role":"assistant","content":"done.","delta":true}"#,
+            "\n",
+            r#"{"type":"result","status":"success","stats":{"input_tokens":9,"output_tokens":4,"cached":1}}"#,
+        );
+
+        fn parity_request(prompt: &str) -> ChatRequest {
+            ChatRequest {
+                messages: vec![Message {
+                    role: Role::User,
+                    content: prompt.to_string(),
+                    content_blocks: vec![],
+                    tool_call_id: None,
+                    tool_calls: vec![],
+                    cache: false,
+                }],
+                model: None,
+                system: None,
+                system_blocks: None,
+                system_cache: false,
+                temperature: None,
+                max_tokens: None,
+                tools: None,
+                tool_choice: None,
+                provider_options: None,
+                mcp_servers: None,
+                mcp_tool_configs: None,
+                thinking: None,
+                stop_sequences: None,
+            }
+        }
+
+        /// Write an executable fake `gemini` that ignores its argv, drains
+        /// stdin, and plays back `body` on stdout.
+        fn write_fake_cli(test_name: &str, body: &str) -> std::path::PathBuf {
+            use std::io::Write;
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!(
+                "motosan-fake-gemini-{test_name}-{}",
+                std::process::id()
+            ));
+            let mut f = std::fs::File::create(&path).expect("create fake CLI");
+            write!(
+                f,
+                "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{body}\nNDJSON\n"
+            )
+            .expect("write fake CLI");
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake CLI");
+            path
+        }
+
+        #[tokio::test]
+        async fn chat_equals_collected_stream_and_reports_end_turn() {
+            let bin = write_fake_cli("parity", TRANSCRIPT);
+            let provider = || GeminiCliProvider::with_path(bin.clone()).model("gemini-test");
+
+            let chat_resp = provider()
+                .chat(parity_request("hi"))
+                .await
+                .expect("chat should succeed");
+            let stream = provider()
+                .stream(parity_request("hi"))
+                .await
+                .expect("stream should start");
+            let collected = crate::stream::collect_stream(stream)
+                .await
+                .expect("collect should succeed");
+            let _ = std::fs::remove_file(&bin);
+
+            // F4: chat()'s tool_calls = the executed-tool record from the CLI.
+            assert_eq!(
+                chat_resp.tool_calls.len(),
+                1,
+                "chat() must surface the CLI's executed-tool record"
+            );
+            assert_eq!(chat_resp.tool_calls[0].id, "read_1");
+            assert_eq!(chat_resp.tool_calls[0].name, "read_file");
+            assert_eq!(
+                chat_resp.tool_calls[0].input,
+                serde_json::json!({"file_path": "Cargo.toml"})
+            );
+            assert_eq!(chat_resp.tool_calls, collected.tool_calls);
+
+            // F4: a completed CLI turn ALWAYS reports end_turn.
+            assert_eq!(chat_resp.stop_reason, StopReason::EndTurn);
+            assert_eq!(collected.stop_reason, StopReason::EndTurn);
+
+            assert_eq!(chat_resp.content, "Sure, done.");
+            assert_eq!(chat_resp.content, collected.content);
+            assert_eq!(chat_resp.thinking, None);
+            assert_eq!(chat_resp.thinking, collected.thinking);
+            assert_eq!(chat_resp.usage.input_tokens, 9);
+            assert_eq!(chat_resp.usage.output_tokens, 4);
+            assert_eq!(chat_resp.usage.cache_read_input_tokens, Some(1));
+            assert_eq!(chat_resp.usage, collected.usage);
+            assert_eq!(chat_resp.session_id.as_deref(), Some("sess_9"));
+            assert_eq!(chat_resp.session_id, collected.session_id);
+
+            // Documented F4 parity exception: model backfill from config.
+            assert_eq!(chat_resp.model, "gemini-test");
+            assert_eq!(collected.model, "");
+        }
+
+        #[tokio::test]
+        async fn chat_times_out_via_stream_read_timeout() {
+            let bin = write_fake_cli("stall", "");
+            std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").expect("write stall script");
+            let provider = GeminiCliProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_millis(50));
+            let result = provider.chat(parity_request("hi")).await;
+            let _ = std::fs::remove_file(&bin);
+            match result {
+                Err(crate::error::MotosanError::StreamReadTimeout(_)) => {}
+                other => panic!("expected StreamReadTimeout, got {other:?}"),
+            }
+        }
+    }
 
     /// Compile-time + runtime check that `GeminiCliProvider` can be
     /// coerced into `Box<dyn ProviderImpl>` alongside the HTTP and

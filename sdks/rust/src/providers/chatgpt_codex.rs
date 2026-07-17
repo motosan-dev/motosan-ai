@@ -337,8 +337,9 @@ struct ChatGptCodexStreamAdapter {
     /// matching `response.output_item.done` can close the same id.
     seen_tool_ids: HashSet<String>,
     /// Set once any `function_call` item is observed, so `response.completed`
-    /// resolves to `ToolUse` (mirrors the gated `cli_terminal_stop_reason`
-    /// helper, which `chatgpt-codex` is not in scope to reach from here).
+    /// resolves to `ToolUse`. Unlike the CLI backends (always `EndTurn` per
+    /// F4 — their tools run inside the CLI), chatgpt-codex is an HTTP
+    /// provider whose caller must execute the requested tools.
     saw_tool_call: bool,
     /// A fatal stream error to surface on the next `poll_next` (top-level
     /// `error` / `response.failed`).

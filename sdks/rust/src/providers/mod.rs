@@ -11,9 +11,6 @@ pub(crate) use crate::transport::http::{
     extract_request_id, map_http_error, parse_retry_after, send_with_retry, ChatResponseBuilder,
 };
 
-#[cfg(feature = "_cli")]
-pub(crate) use crate::transport::cli::cli_terminal_stop_reason;
-
 #[derive(Debug, Clone, Copy)]
 pub enum Provider {
     Anthropic,
