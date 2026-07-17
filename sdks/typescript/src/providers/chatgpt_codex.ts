@@ -52,9 +52,17 @@ export function chatGptCodexErrorMessage(chunk: any): string {
 }
 
 /**
+ * A caller-supplied async bearer-token source, consulted once per request
+ * attempt. Each retry re-resolves it, so a refreshed OAuth access token is
+ * picked up mid-retry.
+ */
+export type TokenSource = () => Promise<string>
+
+/**
  * No-api-key OAuth-Bearer HTTP provider over the OpenAI Responses API.
  * Constructor `(accessToken, accountId, model?, baseUrl?)` mirrors Python
- * `ChatGptCodexProvider.__init__`. Text-only capabilities.
+ * `ChatGptCodexProvider.__init__`; `accessToken` is a static string or an
+ * async `TokenSource` resolved once per attempt. Text-only capabilities.
  */
 export class ChatGptCodexProvider {
   private readonly model: string
@@ -63,7 +71,7 @@ export class ChatGptCodexProvider {
   private _reasoningEffort?: string
 
   constructor(
-    private readonly accessToken: string,
+    private readonly accessToken: string | TokenSource,
     private readonly accountId: string,
     model?: string,
     baseUrl: string = DEFAULT_CHATGPT_CODEX_URL,
@@ -98,9 +106,14 @@ export class ChatGptCodexProvider {
     return textOnly()
   }
 
-  private headers(): Record<string, string> {
+  /** Resolve the bearer token for one attempt: static string, or one TokenSource call. */
+  private async resolveToken(): Promise<string> {
+    return typeof this.accessToken === 'function' ? this.accessToken() : this.accessToken
+  }
+
+  private headers(token: string): Record<string, string> {
     return {
-      authorization: `Bearer ${this.accessToken}`,
+      authorization: `Bearer ${token}`,
       'chatgpt-account-id': this.accountId,
       originator: CHATGPT_CODEX_ORIGINATOR,
       'openai-beta': 'responses=experimental',
@@ -222,15 +235,16 @@ export class ChatGptCodexProvider {
   ): AsyncGenerator<StreamEvent> {
     const model = request.model ?? this.model
     const body = this.buildResponsesBody(request, model)
-    const headers = this.headers()
 
     // Retry ONLY the initial fetch via the shared engine (same guard as the
     // other providers: nothing is retried after the first emitted event).
+    // Headers are rebuilt inside the attempt closure so a TokenSource is
+    // re-resolved on every attempt while the shared retry engine stays intact.
     const responseBody = await withRetry(
       this.retryPolicy,
       async () =>
-        attemptWithCancellation(opts?.callerSignal, () =>
-          postStream(this.baseUrl, headers, body, {
+        attemptWithCancellation(opts?.callerSignal, async () =>
+          postStream(this.baseUrl, this.headers(await this.resolveToken()), body, {
             signal: opts?.signal,
             preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
           }),

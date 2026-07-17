@@ -17,7 +17,7 @@ import { MinimaxProvider } from './providers/minimax.js'
 import { OllamaProvider } from './providers/ollama.js'
 import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
 import { GeminiProvider } from './providers/gemini.js'
-import { ChatGptCodexProvider } from './providers/chatgpt_codex.js'
+import { ChatGptCodexProvider, type TokenSource } from './providers/chatgpt_codex.js'
 import { DEFAULT_OLLAMA_MODEL } from './models.js'
 import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
 
@@ -101,7 +101,7 @@ export class ClientBuilder {
   protected _ollamaThink?: string
   protected _ollamaKeepAlive?: string
   protected _ollamaNumCtx?: number
-  protected _chatgptAccessToken?: string
+  protected _chatgptAccessToken?: string | TokenSource
   protected _chatgptAccountId?: string
   protected _chatgptReasoningEffort?: string
 
@@ -210,12 +210,14 @@ export class ClientBuilder {
 
   /**
    * Configure the no-api-key ChatGPT-Codex provider with a caller-supplied OAuth
-   * `accessToken` + `accountId`. Optional `model` overrides the default
-   * (`gpt-5.5`); `opts.reasoningEffort` sets the provider-default reasoning
-   * effort (per-request `providerOptions.reasoning_effort` still wins).
+   * `accessToken` + `accountId`. `accessToken` is a static string or an async
+   * `TokenSource` resolved once per request attempt, so a retry can pick up a
+   * refreshed token. Optional `model` overrides the default (`gpt-5.5`);
+   * `opts.reasoningEffort` sets the provider-default reasoning effort
+   * (per-request `providerOptions.reasoning_effort` still wins).
    */
   chatgptCodex(
-    accessToken: string,
+    accessToken: string | TokenSource,
     accountId: string,
     model?: string,
     opts?: { reasoningEffort?: string },

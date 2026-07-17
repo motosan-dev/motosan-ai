@@ -585,6 +585,53 @@ describe('ClientBuilder.chatgptCodex', () => {
   })
 })
 
+describe('ClientBuilder.chatgptCodex token source (F5)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('accepts an async token source and resolves it per attempt through Client.chat()', async () => {
+    let tokenCalls = 0
+    const source = async (): Promise<string> => {
+      tokenCalls += 1
+      return `tok-${tokenCalls}`
+    }
+    const authHeaders: string[] = []
+    let fetches = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, options?: RequestInit) => {
+        fetches += 1
+        const headers = (options?.headers as Record<string, string>) ?? {}
+        authHeaders.push(headers.authorization ?? '')
+        return fetches === 1
+          ? new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 500 })
+          : new Response(
+              'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+              { status: 200, headers: { 'content-type': 'text/event-stream' } },
+            )
+      }),
+    )
+
+    const client = new ClientBuilder()
+      .chatgptCodex(source, 'acct')
+      .retryPolicy(
+        new RetryPolicy({
+          maxRetries: 2,
+          baseDelayMs: 0,
+          maxDelayMs: 0,
+          jitter: false,
+          respectRetryAfter: false,
+        }),
+      )
+      .build()
+    const resp = await client.chat({ messages: [{ role: 'user', content: 'hi' }] })
+
+    expect(resp.stopReason).toBe('end_turn')
+    expect(fetches).toBe(2)
+    expect(tokenCalls).toBe(2)
+    expect(authHeaders).toEqual(['Bearer tok-1', 'Bearer tok-2'])
+  })
+})
+
 describe('ClientBuilder Ollama api-key-not-required seam', () => {
   beforeEach(() => {
     delete process.env.OLLAMA_API_KEY

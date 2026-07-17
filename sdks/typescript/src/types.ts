@@ -112,8 +112,9 @@ export type StopReason =
   | 'other'
 
 /**
- * The kind of a streaming event. `thinking_delta`/`thinking_done` are emitted
- * by Anthropic only; `collectStream` concatenates them into `ChatResponse.thinking`.
+ * The kind of a streaming event. Anthropic emits `thinking_delta` and
+ * `thinking_done`; ChatGPT Codex emits `thinking_delta` reasoning deltas.
+ * `collectStream` concatenates them into `ChatResponse.thinking`.
  */
 export type StreamEventType =
   | 'text'

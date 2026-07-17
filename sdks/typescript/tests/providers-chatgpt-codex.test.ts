@@ -541,3 +541,73 @@ describe('ChatGptCodexProvider HTTP', () => {
     ).rejects.toBeInstanceOf(NetworkError)
   })
 })
+
+// ---------------------------------------------------------------------------
+// F5 — per-attempt TokenSource resolution
+// ---------------------------------------------------------------------------
+
+describe('ChatGptCodexProvider token source (F5)', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  const OK_SSE = 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+
+  function immediateRetry(): RetryPolicy {
+    return new RetryPolicy({
+      maxRetries: 2,
+      baseDelayMs: 0,
+      maxDelayMs: 0,
+      jitter: false,
+      respectRetryAfter: false,
+    })
+  }
+
+  function fetch500Then200(authHeaders: string[]): () => number {
+    let fetches = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, options?: RequestInit) => {
+        fetches += 1
+        const headers = (options?.headers as Record<string, string>) ?? {}
+        authHeaders.push(headers.authorization ?? '')
+        return fetches === 1
+          ? new Response(JSON.stringify({ error: { message: 'overloaded' } }), { status: 500 })
+          : new Response(OK_SSE, {
+              status: 200,
+              headers: { 'content-type': 'text/event-stream' },
+            })
+      }),
+    )
+    return () => fetches
+  }
+
+  it('mock fetch 500-then-200 makes exactly 2 fetches and sends Bearer tok-2 on the retry', async () => {
+    let tokenCalls = 0
+    const source = async (): Promise<string> => {
+      tokenCalls += 1
+      return `tok-${tokenCalls}`
+    }
+    const authHeaders: string[] = []
+    const fetchCount = fetch500Then200(authHeaders)
+
+    const prov = new ChatGptCodexProvider(source, 'acct').withRetryPolicy(immediateRetry())
+    for await (const _ of prov.stream(REQ)) {
+      /* drain */
+    }
+
+    expect(fetchCount()).toBe(2)
+    expect(tokenCalls).toBe(2)
+    expect(authHeaders).toEqual(['Bearer tok-1', 'Bearer tok-2'])
+  })
+
+  it('plain string accessToken compatibility regression keeps the same Bearer token', async () => {
+    const authHeaders: string[] = []
+    const fetchCount = fetch500Then200(authHeaders)
+
+    const prov = new ChatGptCodexProvider('static-tok', 'acct').withRetryPolicy(immediateRetry())
+    const resp = await prov.chat(REQ)
+
+    expect(resp.stopReason).toBe('end_turn')
+    expect(fetchCount()).toBe(2)
+    expect(authHeaders).toEqual(['Bearer static-tok', 'Bearer static-tok'])
+  })
+})
