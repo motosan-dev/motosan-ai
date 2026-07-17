@@ -12,8 +12,8 @@ import { IncompleteStreamError, StreamError } from '../error.js'
 import { postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { textOnly, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   collectStream,
   doneWithStopReason,
@@ -205,18 +205,21 @@ export class ChatGptCodexProvider {
     return body
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const model = request.model ?? this.model
-    const response = await collectStream(this.stream(request))
+    const response = await collectStream(this.stream(request, opts))
     if (!response.model) response.model = model
     return response
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
-  private async *streamImpl(request: ChatRequest): AsyncGenerator<StreamEvent> {
+  private async *streamImpl(
+    request: ChatRequest,
+    opts?: ProviderRequestOptions,
+  ): AsyncGenerator<StreamEvent> {
     const model = request.model ?? this.model
     const body = this.buildResponsesBody(request, model)
     const headers = this.headers()
@@ -225,7 +228,13 @@ export class ChatGptCodexProvider {
     // other providers: nothing is retried after the first emitted event).
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(this.baseUrl, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.baseUrl, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 

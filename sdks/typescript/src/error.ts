@@ -29,6 +29,18 @@ export class IncompleteStreamError extends StreamError {
 }
 
 /**
+ * Thrown when the CALLER's AbortSignal aborts a request. NEVER retried
+ * (specs/retry.md transport table). Fetch-internal AbortError/TimeoutError
+ * with no caller signal aborted (e.g. AbortSignal.timeout) stay retryable.
+ */
+export class CancelledError extends MotosanError {
+  constructor(message = 'request cancelled by caller') {
+    super(message)
+    this.name = 'CancelledError'
+  }
+}
+
+/**
  * Error thrown when a stream read operation times out.
  * Carries the timeout duration in seconds.
  */
@@ -105,8 +117,11 @@ export function isRetryableNetworkError(error: unknown): boolean {
     return false
   }
 
-  // AbortError (fetch cancelled/timed out at fetch level)
-  if (error.name === 'AbortError') {
+  // AbortError / TimeoutError: fetch cancelled or timed out at fetch level.
+  // undici rejects with signal.reason — a TimeoutError DOMException for
+  // AbortSignal.timeout. Caller-signal aborts are translated to
+  // CancelledError BEFORE classification and never reach this predicate.
+  if (error.name === 'AbortError' || error.name === 'TimeoutError') {
     return true
   }
 

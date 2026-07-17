@@ -2,8 +2,8 @@ import { IncompleteStreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseNdjson } from '../http/ndjson.js'
 import { DEFAULT_OLLAMA_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { textOnly, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
   doneEvent,
   textEvent,
@@ -219,11 +219,17 @@ export class OllamaProvider {
     return out
   }
 
-  async chat(req: ChatRequest): Promise<ChatResponse> {
+  async chat(req: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const body = this.buildRequestBody(req, false)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(this.endpoint(), {}, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(this.endpoint(), {}, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -274,17 +280,23 @@ export class OllamaProvider {
     }
   }
 
-  stream(req: ChatRequest): BoxStream {
-    return this.streamImpl(req)
+  stream(req: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(req, opts)
   }
 
-  private async *streamImpl(req: ChatRequest) {
+  private async *streamImpl(req: ChatRequest, opts?: ProviderRequestOptions) {
     const body = this.buildRequestBody(req, true)
 
     // Retry ONLY the initial postStream fetch via the shared engine.
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(this.endpoint(), {}, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.endpoint(), {}, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 

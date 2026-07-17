@@ -1,4 +1,4 @@
-import { isRetryableNetworkError, isRetryableStatus } from './error.js'
+import { CancelledError, isRetryableNetworkError, isRetryableStatus } from './error.js'
 
 /** Fired via RetryPolicy.onRetry before each retry sleep (D7). */
 export interface RetryEvent {
@@ -145,6 +145,9 @@ export async function withRetry<T>(
  * `{ retryable: false }`.
  */
 export function classifyForRetry(errOrStatus: unknown): RetryClassification {
+  if (errOrStatus instanceof CancelledError) {
+    return { retryable: false }
+  }
   if (typeof errOrStatus === 'number') {
     return { retryable: isRetryableStatus(errOrStatus) }
   }
@@ -159,4 +162,23 @@ export function classifyForRetry(errOrStatus: unknown): RetryClassification {
     }
   }
   return { retryable: false }
+}
+
+/**
+ * Run one request attempt; if it fails while the CALLER's signal is aborted,
+ * throw CancelledError (classified non-retryable) instead of the raw abort
+ * (E6: the provider request catch tests callerSignal.aborted).
+ */
+export async function attemptWithCancellation<T>(
+  callerSignal: AbortSignal | undefined,
+  op: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await op()
+  } catch (error) {
+    if (callerSignal?.aborted) {
+      throw new CancelledError()
+    }
+    throw error
+  }
 }

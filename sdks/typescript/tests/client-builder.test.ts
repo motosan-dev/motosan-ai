@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Client, ClientBuilder } from '../src/client.js'
-import { ConfigError, UnsupportedFeatureError } from '../src/error.js'
+import { ConfigError, StreamReadTimeoutError, UnsupportedFeatureError } from '../src/error.js'
 import { dispatchChat, readTimeoutStream } from '../src/provider.js'
 import { RetryPolicy } from '../src/retry.js'
 import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
@@ -229,18 +229,15 @@ describe('readTimeoutStream', () => {
     vi.useRealTimers()
   })
 
-  it('silently terminates a stalled stream without throwing', async () => {
+  it('throws StreamReadTimeoutError on a stalled stream (silent-end retired in M3)', async () => {
     const stalled = (async function* () {
       await new Promise(() => {})
       yield { content: 'never', done: false, eventType: 'text' as const }
     })()
 
-    const wrapped = readTimeoutStream(stalled, 0.05)
-    const results: unknown[] = []
-    for await (const event of wrapped) {
-      results.push(event)
-    }
-    expect(results.length).toBe(0)
+    await expect(async () => {
+      for await (const _ of readTimeoutStream(stalled, 0.05)) void _
+    }).rejects.toThrow(StreamReadTimeoutError)
   })
 
   it('clears the pending timeout before yielding an event', async () => {
@@ -285,13 +282,11 @@ describe('readTimeoutStream', () => {
       },
     }
 
-    const results: unknown[] = []
-    for await (const event of readTimeoutStream(stalled, 0.05)) {
-      results.push(event)
-    }
+    await expect(async () => {
+      for await (const _ of readTimeoutStream(stalled, 0.05)) void _
+    }).rejects.toThrow(StreamReadTimeoutError)
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(results).toEqual([])
     expect(returnSpy).toHaveBeenCalledOnce()
   })
 
@@ -306,12 +301,10 @@ describe('readTimeoutStream', () => {
       },
     }
 
-    const results: unknown[] = []
-    for await (const event of readTimeoutStream(stalled, 0.05)) {
-      results.push(event)
-    }
+    await expect(async () => {
+      for await (const _ of readTimeoutStream(stalled, 0.05)) void _
+    }).rejects.toThrow(StreamReadTimeoutError)
 
-    expect(results).toEqual([])
     expect(returnSpy).toHaveBeenCalledOnce()
   })
 

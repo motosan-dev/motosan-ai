@@ -2,8 +2,8 @@ import { IncompleteStreamError, ProviderError, StreamError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { DEFAULT_ANTHROPIC_MODEL } from '../models.js'
 import { parseSse } from '../http/sse.js'
-import { fullCaps, type ProviderCapabilities } from '../provider.js'
-import { classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { fullCaps, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeAnthropicRequest } from '../serialize/anthropic.js'
 import {
   doneEvent,
@@ -193,14 +193,20 @@ export class AnthropicProvider {
     return this.headers(beta ? { 'anthropic-beta': beta } : {})
   }
 
-  async chat(request: ChatRequest): Promise<ChatResponse> {
+  async chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse> {
     const model = request.model ?? this.model
     const serialized = serializeAnthropicRequest(request, model)
     const body = isSetupToken(this.apiKey) ? withOAuthSystemIdentity(serialized) : serialized
     const headers = this.requestHeaders(request, body)
     const payload = await withRetry(
       this.retryPolicy,
-      async () => postJson<any>(`${this.baseUrl}/v1/messages`, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<any>(`${this.baseUrl}/v1/messages`, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
@@ -236,11 +242,11 @@ export class AnthropicProvider {
     }
   }
 
-  stream(request: ChatRequest): BoxStream {
-    return this.streamImpl(request)
+  stream(request: ChatRequest, opts?: ProviderRequestOptions): BoxStream {
+    return this.streamImpl(request, opts)
   }
 
-  private async *streamImpl(request: ChatRequest) {
+  private async *streamImpl(request: ChatRequest, opts?: ProviderRequestOptions) {
     const model = request.model ?? this.model
     const serialized = {
       ...serializeAnthropicRequest(request, model),
@@ -254,7 +260,13 @@ export class AnthropicProvider {
     // has been returned").
     const responseBody = await withRetry(
       this.retryPolicy,
-      async () => postStream(`${this.baseUrl}/v1/messages`, headers, body),
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(`${this.baseUrl}/v1/messages`, headers, body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
       classifyForRetry,
     )
 
