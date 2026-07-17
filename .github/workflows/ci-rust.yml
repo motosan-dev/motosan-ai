@@ -28,6 +28,10 @@ jobs:
         run: cargo clippy --all-features --all-targets -- -D warnings
       - name: Cargo test
         run: cargo test --all-features
+      - name: Install cargo-hack
+        uses: taiki-e/install-action@cargo-hack
+      - name: Cargo hack (each feature)
+        run: cargo hack check --each-feature --no-dev-deps
 
   rust-msrv-no-features:
     runs-on: ubuntu-latest

@@ -20,14 +20,6 @@ pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>
 /// let response = motosan_ai::collect_stream(stream).await?;
 /// println!("{}", response.content);
 /// ```
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-    feature = "chatgpt-codex",
-))]
 pub async fn collect_stream(
     mut stream: BoxStream,
 ) -> Result<crate::types::ChatResponse, MotosanError> {
@@ -155,13 +147,6 @@ pub async fn collect_stream(
 }
 
 #[cfg(test)]
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native",
-    feature = "gemini",
-))]
 mod thinking_collect_tests {
     use super::*;
     use crate::types::StreamEvent;

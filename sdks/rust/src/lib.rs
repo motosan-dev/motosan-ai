@@ -5,6 +5,7 @@ pub mod providers;
 pub mod retry;
 pub mod stream;
 pub mod think_stripper;
+pub(crate) mod transport;
 pub mod types;
 
 #[cfg(feature = "claude-code")]
@@ -31,12 +32,6 @@ pub use models::{
 pub use motosan_agent_primitives::ToolSchema;
 pub use providers::Provider;
 pub use retry::{RetryCause, RetryEvent, RetryPolicy};
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama_native"
-))]
 pub use stream::collect_stream;
 pub use stream::{BoxStream, StreamEvent};
 pub use types::{

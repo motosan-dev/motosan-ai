@@ -14,62 +14,40 @@ categories = ["api-bindings", "asynchronous"]
 
 [features]
 default = []
-anthropic = [
-  "dep:reqwest",
-  "dep:chrono",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
-openai = [
-  "dep:reqwest",
-  "dep:chrono",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
+
+# ---- internal umbrella features --------------------------------------------
+# Underscore prefix = private convention (sqlx `_rt-tokio` precedent).
+# Internal implementation detail, NOT covered by semver. Never enable directly.
+_http = ["dep:reqwest", "dep:chrono", "dep:eventsource-stream", "dep:tokio"]
+_cli = ["dep:tokio", "dep:async-stream"]
+
+# ---- public provider features -----------------------------------------------
+anthropic = ["_http"]
+openai = ["_http"]
 minimax = ["anthropic"]
-ollama = ["openai", "dep:reqwest", "dep:tokio", "dep:tokio-stream", "dep:bytes"]
+ollama = ["openai", "dep:bytes"]
 # Retained as an alias for backwards compatibility. The `ollama_native(true)`
 # runtime flag still controls explicit routing — see ClientBuilder::ollama_native.
 # As of 0.15.0 the OllamaProvider (/api/chat) is also auto-selected whenever
 # ollama_think / ollama_keep_alive / ollama_num_ctx is set, regardless of this
 # feature, because Ollama's OpenAI-compat endpoint silently drops those fields.
 ollama_native = ["ollama"]
-claude-code = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
-codex-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
-gemini-cli = ["dep:tokio", "dep:tokio-stream", "dep:async-stream"]
-gemini = [
-  "dep:reqwest",
-  "dep:chrono",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
-gemini-code-assist = [
-  "gemini",
-  "dep:reqwest",
-  "dep:chrono",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
-# Self-contained ChatGPT-backend Responses transport. Shares nothing with
-# Gemini, so it mirrors gemini-code-assist's `dep:` set WITHOUT the `gemini`
-# feature itself.
-chatgpt-codex = [
-  "dep:reqwest",
-  "dep:chrono",
-  "dep:eventsource-stream",
-  "dep:tokio-stream",
-  "dep:tokio",
-]
+# Canonical dash spelling; docs teach this one. `ollama_native` stays forever.
+ollama-native = ["ollama_native"]
+gemini = ["_http"]
+gemini-code-assist = ["gemini"]
+# Self-contained ChatGPT-backend Responses transport. Shares nothing with Gemini.
+chatgpt-codex = ["_http"]
+claude-code = ["_cli"]
+codex-cli = ["_cli"]
+gemini-cli = ["_cli"]
 full = [
   "anthropic",
   "openai",
   "minimax",
   "ollama",
   "ollama_native",
+  "ollama-native",
   "gemini",
   "gemini-code-assist",
   "chatgpt-codex",
@@ -95,7 +73,7 @@ reqwest = { version = "0.12", optional = true, features = [
   "rustls-tls",
 ] }
 eventsource-stream = { version = "0.2", optional = true }
-tokio-stream = { version = "0.1", optional = true }
+tokio-stream = "0.1"
 tokio = { version = "1", optional = true, features = [
   "time",
   "process",
@@ -106,7 +84,6 @@ async-stream = { version = "0.3", optional = true }
 [dev-dependencies]
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
-tokio-stream = "0.1"
 mockito = "1"
 
 [[example]]
