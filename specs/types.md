@@ -122,7 +122,52 @@ Passing unsupported content returns `Err(UnsupportedFeature)` before any network
 
 ## StreamEventType
 
-`text` | `tool_call_start` | `tool_call_args` | `tool_call_end` | `usage` | `done`
+`text` | `tool_call_start` | `tool_call_args` | `tool_call_end` | `usage` | `thinking_delta` | `thinking_done`
+
+Seven values, identical across the SDKs (Rust enum `StreamEventType`,
+Python `StreamEventType` StrEnum, TypeScript `StreamEventType` string
+union). There is **no** `done` event type: stream termination is
+signalled by the `done: bool` **field** on `StreamEvent`, never by
+`event_type` (terminal events carry the default `event_type`, `text`).
+The set may grow additively as providers gain richer thinking wire
+formats; consumers matching on `event_type` should keep a fallback arm.
+
+### Thinking events
+
+`thinking_delta` carries a partial extended-thinking delta in
+`content`, emitted while the model reasons before its final answer.
+`thinking_done` marks the end of a thinking block and carries the
+**full concatenated thinking text** in `content`; it is preceded by
+zero or more `thinking_delta` events for the same block and always
+precedes the `text` events of the final answer. Collectors
+(`collect_stream` / `_stream_collect` / `collectStream`) assemble
+`ChatResponse.thinking` with the `thinking_done` payload taking
+priority; concatenated `thinking_delta` content is the fallback for
+providers that never emit `thinking_done`.
+
+### Emitters
+
+| SDK | Provider | `thinking_delta` | `thinking_done` |
+|-----|----------|------------------|-----------------|
+| Rust | Anthropic | ✅ | ✅ — emitted even for an empty thinking block |
+| Rust | ChatGPT Codex | ✅ (reasoning + reasoning-summary deltas) | ❌ |
+| Python | Anthropic | ✅ (0.18.0+) | ✅ (0.18.0+) — mirrors Rust, incl. empty blocks |
+| Python | ChatGPT Codex | ✅ (0.18.0+) | ❌ |
+| TypeScript | Anthropic | ✅ | ✅ — suppressed for an empty thinking block |
+| TypeScript | ChatGPT Codex | ✅ (reasoning + reasoning-summary deltas) | ❌ |
+
+No other provider emits thinking events. The empty-block divergence
+(Rust/Python emit `thinking_done` with empty `content`; TypeScript
+emits nothing) is documented reality, not a bug to fix.
+
+**Python migration note (0.18.0, BREAKING).** Pre-0.18.0 the Python
+Anthropic and ChatGPT Codex adapters emitted the **untyped string**
+`event_type="thinking"` — not a `StreamEventType` member — and never
+emitted `thinking_done`. 0.18.0 replaces `"thinking"` with
+`thinking_delta` (both providers) and adds `thinking_done`
+(Anthropic). Consumers matching `"thinking"` break and must migrate.
+`StreamEvent.event_type` stays annotated `str` (StrEnum members are
+`str`).
 
 ## Stream termination contract
 
@@ -207,6 +252,57 @@ stream that terminates *without error* emits exactly one terminal
   `asyncio.CancelledError` through the SDK, and `httpx` closes the
   underlying connection. The SDK neither swallows nor converts
   `CancelledError`.
+
+## CLI backend chat/stream contract
+
+Applies to the six CLI-spawning backends: Rust
+`sdks/rust/src/providers/claude_code/`, `codex_cli/`, `gemini_cli/`
+and Python `sdks/python/motosan_ai/providers/claude_code.py`,
+`codex_cli.py`, `gemini_cli.py`. TypeScript has no CLI backends.
+Normative from Rust 0.25.0 / Python 0.18.0 (BREAKING — see CHANGELOG).
+
+- **`stop_reason` is always `end_turn`.** A successfully completed CLI
+  turn reports `stop_reason = end_turn` on **both** the `chat()` and
+  the `stream()` path. CLI backends never report `tool_use`: their
+  tools are executed internally by the CLI process, and `tool_use`
+  means "the caller must execute tools" — something a CLI backend
+  never requests. (The pre-0.25.0 / pre-0.18.0 behavior — `tool_use`
+  whenever the transcript contained a tool call — made agent loops
+  re-execute already-executed tools.)
+- **`ChatResponse.tool_calls` is a record, not a request.** For a CLI
+  backend it lists the tools the CLI already executed during the turn;
+  callers MUST NOT execute them.
+- **`chat()` ≡ collect(`stream()`).** Every CLI backend implements
+  `chat()` by collecting its own `stream()` (Rust `collect_stream`,
+  Python `_stream_collect`), so `content` / `thinking` / `tool_calls`
+  / `stop_reason` / `usage` / `session_id` parity holds by
+  construction. The single documented parity exception: `chat()` may
+  backfill `ChatResponse.model` from provider config when the
+  collected value is empty.
+- CLI backends perform no transport-level retry — see
+  [`retry.md` § CLI backends](./retry.md#cli-backends).
+
+## Token sources (ChatGPT Codex)
+
+The ChatGPT Codex provider authenticates with a short-lived OAuth
+bearer token. Each SDK exposes a **token source** seam so long-running
+processes can supply a fresh token without rebuilding the client; the
+token is resolved **once per retry attempt** — a retried request never
+reuses a token fetched for an earlier attempt. Introduced in Rust
+0.25.0 / Python 0.18.0 / TypeScript 0.15.0.
+
+| SDK | Seam |
+|-----|------|
+| Rust | `pub trait TokenSource` in ungated `src/auth.rs` — `async fn access_token(&self) -> Result<String, MotosanError>` — plus `StaticTokenSource(String)` for fixed tokens. `ChatGptCodexProvider` stores `Arc<dyn TokenSource>`; `new()` keeps its `access_token: String` signature (wraps `StaticTokenSource`); `with_token_source` and `ClientBuilder::chatgpt_codex_token_source(Arc<dyn TokenSource>)` inject a dynamic source. The per-attempt fetch runs inside the shared retry engine via its async-build variant (see [`retry.md` § One retry engine per SDK](./retry.md#one-retry-engine-per-sdk)) |
+| Python | `token_source: Callable[[], Awaitable[str]] \| None = None` on `ChatGptCodexProvider` and `Client.chatgpt_codex()`; at least one of `access_token` / `token_source` is required (`ConfigError` when neither is given; when both are set, `token_source` wins — matching Rust); when a source is set, the bearer token is resolved at the top of every retry attempt |
+| TypeScript | constructor `accessToken: string \| (() => Promise<string>)`; a function value is awaited once per attempt |
+
+- The SDKs never depend on the OAuth crates
+  (`sdks/rust/crates/anthropic-oauth`, `codex-oauth`,
+  `motosan-ai-oauth`): a refreshing token source is caller-supplied
+  glue built on top of them.
+- Token material MUST NOT appear in `Debug` / `repr` / log output;
+  the Rust provider implements a custom `Debug` that redacts it.
 
 ## MotosanError (Rust)
 

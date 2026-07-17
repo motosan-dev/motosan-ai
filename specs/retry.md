@@ -171,6 +171,8 @@ per-provider loops are non-conformant.
 | Python | `with_retry(fn, policy=…)` in `sdks/python/motosan_ai/retry.py` | `client.py` threads one `RetryPolicy` through both chat and stream paths; stream backoff uses the shared policy math |
 | TypeScript | `withRetry(policy, op, classify)` in `sdks/typescript/src/retry.ts` | classification via `isRetryableStatus` / `isRetryableNetworkError` |
 
+The Rust `build` closure runs once per attempt; from 0.25.0 the engine also exposes `send_with_retry_async_build` — with `send_with_retry` as a thin delegating wrapper over it — so the per-attempt build step may be `async`, e.g. to consult a `TokenSource` for a fresh bearer token (see [`types.md` § Token sources](./types.md#token-sources-chatgpt-codex)).
+
 ## Error metadata
 
 HTTP-mapped errors carry `status_code`, `retry_after`, and `request_id`,
