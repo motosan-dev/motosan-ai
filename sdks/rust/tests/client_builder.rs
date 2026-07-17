@@ -115,6 +115,116 @@ async fn builder_anthropic_base_url_is_forwarded_to_http_request() {
     mock.assert_async().await;
 }
 
+#[cfg(feature = "anthropic")]
+#[tokio::test]
+async fn built_client_serves_sequential_requests_from_one_provider() {
+    // 0.24.0 build-once smoke: ClientBuilder::build() constructs the provider a
+    // single time and dispatch borrows it. Two sequential chat() calls against
+    // one mockito server prove the pre-built provider serves repeated requests.
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/messages")
+        .match_header("x-api-key", "test-key")
+        .with_status(200)
+        .with_body(
+            serde_json::json!({
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "ok"}]
+            })
+            .to_string(),
+        )
+        .expect(2)
+        .create_async()
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::Anthropic)
+        .api_key("test-key")
+        .anthropic_base_url(server.url())
+        .build()
+        .expect("build client");
+
+    let first = client
+        .chat(vec![Message::user("one")])
+        .await
+        .expect("first chat");
+    let second = client
+        .chat(vec![Message::user("two")])
+        .await
+        .expect("second chat");
+    assert_eq!(first.content, "ok");
+    assert_eq!(second.content, "ok");
+    mock.assert_async().await;
+}
+
+#[cfg(feature = "gemini-code-assist")]
+#[tokio::test]
+async fn prebuilt_gemini_code_assist_applies_client_builder_retry_policy() {
+    // Regression guard (0.24.0): ClientBuilder::retry_policy was silently
+    // discarded when a pre-built GeminiCodeAssistProvider was attached. The
+    // pre-built provider carries a zero-retry policy; the builder sets one
+    // fast retry. Fixed: builder policy wins -> the 503 is retried and chat
+    // succeeds. Old behavior: zero-retry wins -> chat() errors on the 503.
+    use motosan_ai::providers::gemini_code_assist::GeminiCodeAssistProvider;
+
+    let mut server = mockito::Server::new_async().await;
+    let failed = server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex("streamGenerateContent".into()),
+        )
+        .with_status(503)
+        .with_body(r#"{"error":{"message":"overloaded"}}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    let sse = serde_json::json!({"response": {"candidates": [{"content": {"parts":
+        [{"text": "recovered"}], "role": "model"}, "finishReason": "STOP"}],
+        "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3}}});
+    let recovered = server
+        .mock(
+            "POST",
+            mockito::Matcher::Regex("streamGenerateContent".into()),
+        )
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(format!("data: {sse}\n\n"))
+        .expect(1)
+        .create_async()
+        .await;
+
+    let client = Client::builder()
+        .provider(Provider::GeminiCodeAssist)
+        .gemini_code_assist(
+            GeminiCodeAssistProvider::new("ya29.fake", "my-project", None, Some(server.url()))
+                .with_retry_policy(
+                    RetryPolicy::new()
+                        .max_retries(0)
+                        .base_delay_ms(0)
+                        .max_delay_ms(0),
+                ),
+        )
+        .retry_policy(
+            RetryPolicy::new()
+                .max_retries(1)
+                .base_delay_ms(1)
+                .max_delay_ms(5)
+                .jitter(false),
+        )
+        .build()
+        .expect("build client");
+
+    let response = client
+        .chat(vec![Message::user("hi")])
+        .await
+        .expect("builder retry_policy must be applied to the pre-built provider");
+    assert_eq!(response.content, "recovered");
+    failed.assert_async().await;
+    recovered.assert_async().await;
+}
+
 #[cfg(feature = "minimax")]
 #[tokio::test]
 async fn builder_accepts_minimax_base_url_override() {

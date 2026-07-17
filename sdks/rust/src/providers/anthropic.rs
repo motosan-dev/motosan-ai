@@ -3,8 +3,8 @@ const DEFAULT_MAX_TOKENS: u32 = 8192;
 use crate::error::MotosanError;
 use crate::models::DEFAULT_ANTHROPIC_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -20,13 +20,17 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
+use tokio_stream::StreamExt;
 
+#[derive(Debug, Clone)]
 pub struct AnthropicProvider {
     http: Client,
     api_key: String,
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
     capabilities: ProviderCapabilities,
 }
 
@@ -42,12 +46,28 @@ impl AnthropicProvider {
             model: model.unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
             capabilities: ProviderCapabilities::full(),
         }
     }
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -458,7 +478,9 @@ impl ProviderImpl for AnthropicProvider {
         // Redirect to stream path and collect the full response.
         if is_oauth {
             let stream = self.stream(req).await?;
-            let mut response = crate::stream::collect_stream(stream).await?;
+            let mut response =
+                crate::providers::collect_stream_with_total_timeout(stream, self.total_timeout)
+                    .await?;
             response.model = self.model.clone();
             return Ok(response);
         }
@@ -474,7 +496,7 @@ impl ProviderImpl for AnthropicProvider {
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
             let request = Self::apply_beta_header(request, has_mcp, is_oauth, adaptive_thinking);
-            self.apply_auth(request)
+            apply_total_timeout(self.apply_auth(request), self.total_timeout)
         })
         .await?;
 
@@ -824,13 +846,17 @@ impl ProviderImpl for AnthropicProvider {
             ));
         }
 
-        let raw_stream = response.bytes_stream().eventsource();
+        let raw_stream = response
+            .bytes_stream()
+            .chain(tokio_stream::once(Ok("\n".into())))
+            .eventsource();
         let adapter = AnthropicStreamAdapter {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
             current_tool_id: None,
             current_stop_reason: None,
             current_thinking_buf: None,
+            saw_terminal: false,
         };
 
         Ok(Box::pin(adapter))
@@ -866,6 +892,8 @@ struct AnthropicStreamAdapter {
     /// open this accumulator (we don't surface redacted content as
     /// thinking deltas).
     current_thinking_buf: Option<String>,
+    /// True once `message_stop` (or a terminal error) has been yielded.
+    saw_terminal: bool,
 }
 
 impl Stream for AnthropicStreamAdapter {
@@ -1085,6 +1113,7 @@ impl Stream for AnthropicStreamAdapter {
                             continue;
                         }
                         "message_stop" => {
+                            self.saw_terminal = true;
                             let done = match self.current_stop_reason.take() {
                                 Some(reason) => StreamEvent::done_with_stop_reason(reason),
                                 None => StreamEvent::done(),
@@ -1092,6 +1121,7 @@ impl Stream for AnthropicStreamAdapter {
                             return Poll::Ready(Some(Ok(done)));
                         }
                         "error" => {
+                            self.saw_terminal = true;
                             let err_type =
                                 payload["error"]["type"].as_str().unwrap_or("unknown_error");
                             let message = payload["error"]["message"]
@@ -1105,9 +1135,18 @@ impl Stream for AnthropicStreamAdapter {
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "anthropic ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -1131,6 +1170,7 @@ mod tests {
             current_tool_id: None,
             current_stop_reason: None,
             current_thinking_buf: None,
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");

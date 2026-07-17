@@ -4,7 +4,7 @@ use crate::providers::{
     ProviderImpl,
 };
 use crate::retry::RetryPolicy;
-use crate::stream::{collect_stream, BoxStream};
+use crate::stream::BoxStream;
 use crate::types::{
     ChatRequest, ChatResponse, ProviderCapabilities, Role, StopReason, StreamEvent, Usage,
 };
@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 /// Default endpoint for the ChatGPT-backend Responses API.
 const CHATGPT_CODEX_URL: &str = "https://chatgpt.com/backend-api/codex/responses";
@@ -30,6 +31,7 @@ pub struct ChatGptCodexProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
     /// Default reasoning effort emitted as `reasoning.effort` when a request
     /// does not carry a per-request `provider_options["reasoning_effort"]`.
     /// `None` leaves the `reasoning` object off the body entirely. The string
@@ -51,12 +53,28 @@ impl ChatGptCodexProvider {
             model: model.into(),
             base_url: base_url.unwrap_or_else(|| CHATGPT_CODEX_URL.to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
             reasoning_effort: None,
         }
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -245,7 +263,8 @@ impl ProviderImpl for ChatGptCodexProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let stream = self.stream(req).await?;
-        let mut response = collect_stream(stream).await?;
+        let mut response =
+            crate::providers::collect_stream_with_total_timeout(stream, self.total_timeout).await?;
         if response.model.is_empty() {
             response.model = model;
         }
@@ -283,6 +302,7 @@ impl ProviderImpl for ChatGptCodexProvider {
             seen_tool_ids: HashSet::new(),
             saw_tool_call: false,
             error: None,
+            saw_terminal: false,
         };
         Ok(Box::pin(adapter))
     }
@@ -323,6 +343,7 @@ struct ChatGptCodexStreamAdapter {
     /// A fatal stream error to surface on the next `poll_next` (top-level
     /// `error` / `response.failed`).
     error: Option<String>,
+    saw_terminal: bool,
 }
 
 impl ChatGptCodexStreamAdapter {
@@ -473,6 +494,7 @@ impl ChatGptCodexStreamAdapter {
                 };
                 self.pending
                     .push_back(StreamEvent::done_with_stop_reason(stop_reason));
+                self.saw_terminal = true;
             }
 
             // Fatal stream errors -> surfaced as Err on the next poll.
@@ -514,6 +536,7 @@ impl Stream for ChatGptCodexStreamAdapter {
             return Poll::Ready(Some(Ok(ev)));
         }
         if let Some(msg) = self.error.take() {
+            self.saw_terminal = true;
             return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
         }
 
@@ -534,14 +557,24 @@ impl Stream for ChatGptCodexStreamAdapter {
                         return Poll::Ready(Some(Ok(first)));
                     }
                     if let Some(msg) = self.error.take() {
+                        self.saw_terminal = true;
                         return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
                     }
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "chatgpt-codex ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -747,6 +780,7 @@ mod tests {
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
+                saw_terminal: false,
             }
         }
 
@@ -925,6 +959,7 @@ mod tests {
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
+                saw_terminal: false,
             };
 
             let item = adapter.next().await.expect("one item");

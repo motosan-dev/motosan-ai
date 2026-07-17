@@ -1,8 +1,8 @@
 use crate::error::MotosanError;
 use crate::models::DEFAULT_OPENAI_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum OpenAIAuthStyle {
@@ -33,6 +34,7 @@ pub const DEFAULT_OPENAI_CHAT_URL: &str = "https://api.openai.com/v1/chat/comple
 /// Default Responses API endpoint for OpenAI.
 pub const DEFAULT_OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
+#[derive(Debug, Clone)]
 pub struct OpenAIProvider {
     http: Client,
     api_key: String,
@@ -46,6 +48,7 @@ pub struct OpenAIProvider {
     auth_style: OpenAIAuthStyle,
     responses_fallback: bool,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl OpenAIProvider {
@@ -65,6 +68,7 @@ impl OpenAIProvider {
             auth_style: OpenAIAuthStyle::Bearer,
             responses_fallback: false,
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
@@ -80,6 +84,21 @@ impl OpenAIProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -245,7 +264,10 @@ impl OpenAIProvider {
         }
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(self.http.post(&self.responses_url).json(&body))
+            apply_total_timeout(
+                self.apply_auth(self.http.post(&self.responses_url).json(&body)),
+                self.total_timeout,
+            )
         })
         .await?;
 
@@ -494,7 +516,10 @@ impl ProviderImpl for OpenAIProvider {
         let body = OpenAIRequestBuilder::new(req, self.model.clone()).build();
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(self.http.post(&self.chat_url).json(&body))
+            apply_total_timeout(
+                self.apply_auth(self.http.post(&self.chat_url).json(&body)),
+                self.total_timeout,
+            )
         })
         .await?;
 
@@ -655,9 +680,11 @@ struct OpenAIStreamAdapter {
     /// terminal `done` event when the `[DONE]` sentinel arrives — this
     /// avoids emitting two `done` events per stream.
     pending_stop_reason: Option<StopReason>,
-    /// Whether we have already emitted a terminal `done` event. Prevents
-    /// the EOF fallback from emitting a second one when the upstream
-    /// stream closes cleanly after the `[DONE]` sentinel.
+    /// Whether a terminal outcome was already yielded ([DONE] parsed, an
+    /// error surfaced, or the EOF arm resolved). The EOF arm combines this
+    /// with `pending_stop_reason` to decide done(stash) — finish_reason is
+    /// the semantic terminal — vs IncompleteStream when NEITHER signal
+    /// arrived.
     done_emitted: bool,
 }
 
@@ -844,18 +871,23 @@ impl Stream for OpenAIStreamAdapter {
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
                 Poll::Ready(None) => {
-                    // End of upstream stream. Guarantee the consumer always
-                    // sees exactly one terminal `done` event, even when the
-                    // provider closes the connection without sending
-                    // `[DONE]` and without any `finish_reason` chunk (some
-                    // non-conformant proxies do this).
+                    // M3 (amended 2026-07-17): upstream closed without the
+                    // `[DONE]` transport epilogue. A stashed finish_reason
+                    // is the SEMANTIC terminal — the stream is complete, so
+                    // emit the terminal done carrying it (narrow survival
+                    // of the pre-0.24 EOF flush, ONLY when finish_reason
+                    // was seen). EOF with NEITHER signal is truncation: a
+                    // typed error, never a fabricated done.
                     if !self.done_emitted {
                         self.done_emitted = true;
-                        let done = match self.pending_stop_reason.take() {
-                            Some(reason) => StreamEvent::done_with_stop_reason(reason),
-                            None => StreamEvent::done(),
-                        };
-                        return Poll::Ready(Some(Ok(done)));
+                        if let Some(reason) = self.pending_stop_reason.take() {
+                            return Poll::Ready(Some(Ok(StreamEvent::done_with_stop_reason(
+                                reason,
+                            ))));
+                        }
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "openai ended without a terminal event".to_string(),
+                        ))));
                     }
                     return Poll::Ready(None);
                 }

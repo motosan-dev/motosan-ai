@@ -6,6 +6,93 @@ use crate::think_stripper::ThinkStripper;
 use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventType};
 use std::time::Duration;
 
+pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Unified timeout model:
+/// - `connect`: TCP/TLS connect deadline on the shared reqwest client.
+/// - `read_idle`: max gap between HTTP stream chunks before
+///   `MotosanError::StreamReadTimeout`.
+/// - `total`: opt-in wall-clock budget per blocking `chat()` attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TimeoutConfig {
+    pub(crate) connect: Duration,
+    pub(crate) read_idle: Duration,
+    pub(crate) total: Option<Duration>,
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            connect: DEFAULT_CONNECT_TIMEOUT,
+            read_idle: DEFAULT_READ_IDLE_TIMEOUT,
+            total: None,
+        }
+    }
+}
+
+/// The provider selected and fully constructed at `ClientBuilder::build()`
+/// time. Dispatch borrows this instead of rebuilding per request.
+#[derive(Debug, Clone)]
+enum BuiltProvider {
+    #[cfg(feature = "anthropic")]
+    Anthropic(crate::providers::anthropic::AnthropicProvider),
+    #[cfg(feature = "openai")]
+    OpenAI(crate::providers::openai::OpenAIProvider),
+    #[cfg(feature = "minimax")]
+    Minimax(crate::providers::anthropic::AnthropicProvider),
+    #[cfg(feature = "ollama")]
+    OllamaCompat(crate::providers::openai::OpenAIProvider),
+    #[cfg(feature = "ollama")]
+    OllamaNative(crate::providers::ollama::OllamaProvider),
+    #[cfg(feature = "claude-code")]
+    ClaudeCode(crate::providers::claude_code::ClaudeCodeProvider),
+    #[cfg(feature = "codex-cli")]
+    CodexCli(crate::providers::codex_cli::CodexCliProvider),
+    #[cfg(feature = "gemini-cli")]
+    GeminiCli(crate::providers::gemini_cli::GeminiCliProvider),
+    #[cfg(feature = "gemini")]
+    Gemini(crate::providers::gemini::GeminiProvider),
+    #[cfg(feature = "gemini-code-assist")]
+    GeminiCodeAssist(crate::providers::gemini_code_assist::GeminiCodeAssistProvider),
+    #[cfg(feature = "chatgpt-codex")]
+    ChatGptCodex(crate::providers::chatgpt_codex::ChatGptCodexProvider),
+    /// Selected provider's cargo feature is not enabled.
+    Disabled(&'static str),
+}
+
+impl BuiltProvider {
+    fn as_impl(&self) -> Result<&dyn crate::providers::ProviderImpl, MotosanError> {
+        match self {
+            #[cfg(feature = "anthropic")]
+            BuiltProvider::Anthropic(p) => Ok(p),
+            #[cfg(feature = "openai")]
+            BuiltProvider::OpenAI(p) => Ok(p),
+            #[cfg(feature = "minimax")]
+            BuiltProvider::Minimax(p) => Ok(p),
+            #[cfg(feature = "ollama")]
+            BuiltProvider::OllamaCompat(p) => Ok(p),
+            #[cfg(feature = "ollama")]
+            BuiltProvider::OllamaNative(p) => Ok(p),
+            #[cfg(feature = "claude-code")]
+            BuiltProvider::ClaudeCode(p) => Ok(p),
+            #[cfg(feature = "codex-cli")]
+            BuiltProvider::CodexCli(p) => Ok(p),
+            #[cfg(feature = "gemini-cli")]
+            BuiltProvider::GeminiCli(p) => Ok(p),
+            #[cfg(feature = "gemini")]
+            BuiltProvider::Gemini(p) => Ok(p),
+            #[cfg(feature = "gemini-code-assist")]
+            BuiltProvider::GeminiCodeAssist(p) => Ok(p),
+            #[cfg(feature = "chatgpt-codex")]
+            BuiltProvider::ChatGptCodex(p) => Ok(p),
+            BuiltProvider::Disabled(feature) => Err(MotosanError::Config(format!(
+                "{feature} feature is not enabled"
+            ))),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct Client {
@@ -24,7 +111,7 @@ pub struct Client {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
-    stream_read_timeout: Option<Duration>,
+    timeouts: TimeoutConfig,
     /// Pre-built Claude Code provider instance used when `provider ==
     /// Provider::ClaudeCode`. Configured via [`ClientBuilder::claude_code`].
     /// If `None`, a default [`ClaudeCodeProvider::new`] is used at dispatch
@@ -65,6 +152,18 @@ pub struct Client {
     /// via [`ClientBuilder::chatgpt_codex_reasoning_effort`].
     #[cfg(feature = "chatgpt-codex")]
     chatgpt_codex_reasoning_effort: Option<String>,
+    built: BuiltProvider,
+    /// Shared HTTP transport. `reqwest::Client` clones share one connection pool.
+    #[cfg(any(
+        feature = "anthropic",
+        feature = "openai",
+        feature = "minimax",
+        feature = "ollama",
+        feature = "gemini",
+        feature = "gemini-code-assist",
+        feature = "chatgpt-codex",
+    ))]
+    http: reqwest::Client,
 }
 
 impl Client {
@@ -88,8 +187,16 @@ impl Client {
         &self.retry_policy
     }
 
-    pub fn stream_read_timeout(&self) -> Option<Duration> {
-        self.stream_read_timeout
+    pub fn connect_timeout(&self) -> Duration {
+        self.timeouts.connect
+    }
+
+    pub fn read_idle_timeout(&self) -> Duration {
+        self.timeouts.read_idle
+    }
+
+    pub fn total_timeout(&self) -> Option<Duration> {
+        self.timeouts.total
     }
 
     pub fn openai_auth_header(&self) -> Option<&str> {
@@ -197,181 +304,9 @@ impl Client {
     }
 
     async fn dispatch_chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        match self.provider {
-            Provider::Anthropic => {
-                #[cfg(feature = "anthropic")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_anthropic_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "anthropic"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("anthropic"))
-                }
-            }
-            Provider::OpenAI => {
-                #[cfg(feature = "openai")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_openai_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "openai"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("openai"))
-                }
-            }
-            Provider::Minimax => {
-                #[cfg(feature = "minimax")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_minimax_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "minimax"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("minimax"))
-                }
-            }
-            Provider::Ollama => {
-                #[cfg(feature = "ollama")]
-                {
-                    use crate::providers::ProviderImpl;
-                    // Auto-route to OllamaProvider (native /api/chat) when
-                    // ollama_native is explicitly enabled OR any of the
-                    // Ollama-specific tuning fields is set, since the
-                    // OpenAI-compat /v1/chat/completions endpoint silently
-                    // drops keep_alive / options.num_ctx / think
-                    // server-side. Otherwise stay on the OpenAI-compat
-                    // path for backwards compatibility.
-                    //
-                    // Capability trade-off: OllamaProvider is text-only
-                    // (no image capability) while the OpenAI-compat path
-                    // declares with_image(). Auto-switching strips image
-                    // capability — the wrapped validate_request error
-                    // below tells the caller WHY their image input
-                    // stopped working.
-                    let needs_native = self.ollama_native
-                        || self.ollama_keep_alive.is_some()
-                        || self.ollama_num_ctx.is_some()
-                        || self.ollama_think.is_some();
-                    if needs_native {
-                        let p = self.build_ollama_native_provider();
-                        p.validate_request(&request).map_err(|e| match e {
-                            MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
-                                "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
-                                 because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
-                                 and the native endpoint is text-only. Either remove the tuning field(s) to \
-                                 stay on the OpenAI-compat path (which supports images), or remove the image \
-                                 input."
-                            )),
-                            other => other,
-                        })?;
-                        p.chat(request).await
-                    } else {
-                        let p = self.build_ollama_provider();
-                        p.validate_request(&request)?;
-                        p.chat(request).await
-                    }
-                }
-                #[cfg(not(feature = "ollama"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("ollama"))
-                }
-            }
-            Provider::ClaudeCode => {
-                #[cfg(feature = "claude-code")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_claude_code_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "claude-code"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("claude-code"))
-                }
-            }
-            Provider::CodexCli => {
-                #[cfg(feature = "codex-cli")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_codex_cli_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "codex-cli"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("codex-cli"))
-                }
-            }
-            Provider::GeminiCli => {
-                #[cfg(feature = "gemini-cli")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_cli_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "gemini-cli"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini-cli"))
-                }
-            }
-            Provider::Gemini => {
-                #[cfg(feature = "gemini")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "gemini"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini"))
-                }
-            }
-            Provider::GeminiCodeAssist => {
-                #[cfg(feature = "gemini-code-assist")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_code_assist_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "gemini-code-assist"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini-code-assist"))
-                }
-            }
-            Provider::OpenAiChatGpt => {
-                #[cfg(feature = "chatgpt-codex")]
-                {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_chatgpt_codex_provider();
-                    p.validate_request(&request)?;
-                    p.chat(request).await
-                }
-                #[cfg(not(feature = "chatgpt-codex"))]
-                {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("chatgpt-codex"))
-                }
-            }
-        }
+        let provider = self.built.as_impl()?;
+        self.validate_for_dispatch(provider, &request)?;
+        provider.chat(request).await
     }
 
     async fn dispatch_stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
@@ -382,195 +317,159 @@ impl Client {
             feature = "minimax",
             feature = "ollama_native",
             feature = "gemini",
+            feature = "gemini-code-assist",
+            feature = "chatgpt-codex",
         ))]
-        if let Some(timeout) = self.stream_read_timeout {
-            return Ok(Box::pin(ReadTimeoutStream::new(raw, timeout)));
+        if self.provider.uses_http_transport() {
+            return Ok(Box::pin(ReadTimeoutStream::new(
+                raw,
+                self.timeouts.read_idle,
+            )));
         }
         Ok(raw)
     }
 
     async fn dispatch_stream_inner(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
+        let provider = self.built.as_impl()?;
+        self.validate_for_dispatch(provider, &request)?;
+        provider.stream(request).await
+    }
+
+    fn validate_for_dispatch(
+        &self,
+        provider: &dyn crate::providers::ProviderImpl,
+        request: &ChatRequest,
+    ) -> Result<(), MotosanError> {
+        // Same auto-switch capability trade-off message as the pre-0.24
+        // dispatch arms: chat and stream must never split on this.
+        #[cfg(feature = "ollama")]
+        if matches!(self.built, BuiltProvider::OllamaNative(_)) {
+            return provider.validate_request(request).map_err(|e| match e {
+                MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
+                    "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
+                     because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
+                     and the native endpoint is text-only. Either remove the tuning field(s) to \
+                     stay on the OpenAI-compat path (which supports images), or remove the image \
+                     input."
+                )),
+                other => other,
+            });
+        }
+
+        provider.validate_request(request)
+    }
+
+    fn construct_built_provider(&self) -> BuiltProvider {
         match self.provider {
             Provider::Anthropic => {
                 #[cfg(feature = "anthropic")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_anthropic_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::Anthropic(self.build_anthropic_provider())
                 }
                 #[cfg(not(feature = "anthropic"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("anthropic"))
+                    BuiltProvider::Disabled("anthropic")
                 }
             }
             Provider::OpenAI => {
                 #[cfg(feature = "openai")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_openai_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::OpenAI(self.build_openai_provider())
                 }
                 #[cfg(not(feature = "openai"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("openai"))
+                    BuiltProvider::Disabled("openai")
                 }
             }
             Provider::Minimax => {
                 #[cfg(feature = "minimax")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_minimax_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::Minimax(self.build_minimax_provider())
                 }
                 #[cfg(not(feature = "minimax"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("minimax"))
+                    BuiltProvider::Disabled("minimax")
                 }
             }
             Provider::Ollama => {
                 #[cfg(feature = "ollama")]
                 {
-                    use crate::providers::ProviderImpl;
-                    // Same auto-switch + capability trade-off as
-                    // dispatch_chat — keep the routing condition
-                    // identical so chat and stream are never split.
                     let needs_native = self.ollama_native
                         || self.ollama_keep_alive.is_some()
                         || self.ollama_num_ctx.is_some()
                         || self.ollama_think.is_some();
                     if needs_native {
-                        let p = self.build_ollama_native_provider();
-                        p.validate_request(&request).map_err(|e| match e {
-                            MotosanError::UnsupportedFeature(msg) => MotosanError::UnsupportedFeature(format!(
-                                "{msg} — Provider::Ollama was auto-routed to the native /api/chat endpoint \
-                                 because one of ollama_keep_alive / ollama_num_ctx / ollama_think is set, \
-                                 and the native endpoint is text-only. Either remove the tuning field(s) to \
-                                 stay on the OpenAI-compat path (which supports images), or remove the image \
-                                 input."
-                            )),
-                            other => other,
-                        })?;
-                        p.stream(request).await
+                        BuiltProvider::OllamaNative(self.build_ollama_native_provider())
                     } else {
-                        let p = self.build_ollama_provider();
-                        p.validate_request(&request)?;
-                        p.stream(request).await
+                        BuiltProvider::OllamaCompat(self.build_ollama_provider())
                     }
                 }
                 #[cfg(not(feature = "ollama"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("ollama"))
+                    BuiltProvider::Disabled("ollama")
                 }
             }
             Provider::ClaudeCode => {
                 #[cfg(feature = "claude-code")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_claude_code_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::ClaudeCode(self.build_claude_code_provider())
                 }
                 #[cfg(not(feature = "claude-code"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("claude-code"))
+                    BuiltProvider::Disabled("claude-code")
                 }
             }
             Provider::CodexCli => {
                 #[cfg(feature = "codex-cli")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_codex_cli_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::CodexCli(self.build_codex_cli_provider())
                 }
                 #[cfg(not(feature = "codex-cli"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("codex-cli"))
+                    BuiltProvider::Disabled("codex-cli")
                 }
             }
             Provider::GeminiCli => {
                 #[cfg(feature = "gemini-cli")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_cli_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::GeminiCli(self.build_gemini_cli_provider())
                 }
                 #[cfg(not(feature = "gemini-cli"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini-cli"))
+                    BuiltProvider::Disabled("gemini-cli")
                 }
             }
             Provider::Gemini => {
                 #[cfg(feature = "gemini")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::Gemini(self.build_gemini_provider())
                 }
                 #[cfg(not(feature = "gemini"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini"))
+                    BuiltProvider::Disabled("gemini")
                 }
             }
             Provider::GeminiCodeAssist => {
                 #[cfg(feature = "gemini-code-assist")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_gemini_code_assist_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::GeminiCodeAssist(self.build_gemini_code_assist_provider())
                 }
                 #[cfg(not(feature = "gemini-code-assist"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("gemini-code-assist"))
+                    BuiltProvider::Disabled("gemini-code-assist")
                 }
             }
             Provider::OpenAiChatGpt => {
                 #[cfg(feature = "chatgpt-codex")]
                 {
-                    use crate::providers::ProviderImpl;
-                    let p = self.build_chatgpt_codex_provider();
-                    p.validate_request(&request)?;
-                    p.stream(request).await
+                    BuiltProvider::ChatGptCodex(self.build_chatgpt_codex_provider())
                 }
                 #[cfg(not(feature = "chatgpt-codex"))]
                 {
-                    let _ = request;
-                    Err(Self::feature_not_enabled("chatgpt-codex"))
+                    BuiltProvider::Disabled("chatgpt-codex")
                 }
             }
         }
-    }
-
-    #[cfg(any(
-        not(feature = "anthropic"),
-        not(feature = "openai"),
-        not(feature = "minimax"),
-        not(feature = "ollama"),
-        not(feature = "ollama_native"),
-        not(feature = "claude-code"),
-        not(feature = "codex-cli"),
-        not(feature = "gemini-cli"),
-        not(feature = "gemini"),
-        not(feature = "gemini-code-assist"),
-        not(feature = "chatgpt-codex"),
-    ))]
-    fn feature_not_enabled(provider: &str) -> MotosanError {
-        MotosanError::Config(format!("{provider} feature is not enabled"))
     }
 
     #[cfg(feature = "anthropic")]
@@ -581,6 +480,8 @@ impl Client {
             self.anthropic_base_url.clone(),
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
+        .with_http_client(self.http.clone())
     }
 
     #[cfg(feature = "openai")]
@@ -596,7 +497,9 @@ impl Client {
         let mut provider = OpenAIProvider::new(self.api_key.clone(), self.model.clone())
             .with_auth_style(auth_style)
             .with_responses_fallback(self.openai_responses_fallback)
-            .with_retry_policy(self.retry_policy.clone());
+            .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
+            .with_http_client(self.http.clone());
 
         if let Some(ref url) = self.openai_chat_url {
             provider = provider.with_chat_url(url.clone());
@@ -628,6 +531,8 @@ impl Client {
         )
         .with_capabilities(ProviderCapabilities::text_only())
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
+        .with_http_client(self.http.clone())
     }
 
     #[cfg(feature = "ollama")]
@@ -650,6 +555,8 @@ impl Client {
             .with_chat_url(chat_url)
             .with_auth_style(OpenAIAuthStyle::Bearer)
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
+            .with_http_client(self.http.clone())
     }
 
     #[cfg(feature = "ollama")]
@@ -663,6 +570,8 @@ impl Client {
             .with_keep_alive(self.ollama_keep_alive.clone())
             .with_num_ctx(self.ollama_num_ctx)
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
+            .with_http_client(self.http.clone())
     }
 
     #[cfg(feature = "claude-code")]
@@ -691,6 +600,8 @@ impl Client {
             None,
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
+        .with_http_client(self.http.clone())
     }
 
     #[cfg(feature = "gemini-code-assist")]
@@ -707,7 +618,9 @@ impl Client {
                 self.model.clone(),
                 None,
             )
-            .with_retry_policy(self.retry_policy.clone()),
+            .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
+            .with_http_client(self.http.clone()),
         }
     }
 
@@ -758,6 +671,8 @@ impl Client {
             None,
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
+        .with_http_client(self.http.clone())
         .with_reasoning_effort(self.chatgpt_codex_reasoning_effort.clone())
     }
 }
@@ -779,7 +694,9 @@ pub struct ClientBuilder {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: Option<RetryPolicy>,
-    stream_read_timeout_secs: Option<u64>,
+    connect_timeout: Option<Duration>,
+    read_idle_timeout: Option<Duration>,
+    total_timeout: Option<Duration>,
     #[cfg(feature = "claude-code")]
     claude_code: Option<crate::providers::claude_code::ClaudeCodeProvider>,
     #[cfg(feature = "codex-cli")]
@@ -959,8 +876,30 @@ impl ClientBuilder {
         self
     }
 
+    /// TCP/TLS connect deadline for the shared HTTP client. Default: 10s.
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Max idle gap between HTTP stream chunks before the stream yields
+    /// `MotosanError::StreamReadTimeout`. Default: 120s.
+    pub fn read_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.read_idle_timeout = Some(timeout);
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt. Default: off.
+    /// Never applied to streams.
+    pub fn total_timeout(mut self, timeout: Duration) -> Self {
+        self.total_timeout = Some(timeout);
+        self
+    }
+
+    /// Superseded alias for [`read_idle_timeout`](Self::read_idle_timeout).
+    #[deprecated(since = "0.24.0", note = "use read_idle_timeout(Duration)")]
     pub fn stream_read_timeout_secs(mut self, secs: u64) -> Self {
-        self.stream_read_timeout_secs = Some(secs);
+        self.read_idle_timeout = Some(Duration::from_secs(secs));
         self
     }
 
@@ -1103,7 +1042,42 @@ impl ClientBuilder {
             }
         }
 
-        Ok(Client {
+        let timeouts = TimeoutConfig {
+            connect: self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
+            read_idle: self.read_idle_timeout.unwrap_or(DEFAULT_READ_IDLE_TIMEOUT),
+            total: self.total_timeout,
+        };
+
+        #[cfg(any(
+            feature = "anthropic",
+            feature = "openai",
+            feature = "minimax",
+            feature = "ollama",
+            feature = "gemini",
+            feature = "gemini-code-assist",
+            feature = "chatgpt-codex",
+        ))]
+        let http = reqwest::Client::builder()
+            .connect_timeout(timeouts.connect)
+            .build()
+            .map_err(|e| MotosanError::Config(format!("failed to build HTTP client: {e}")))?;
+
+        let retry_policy_override = self.retry_policy.clone();
+        let retry_policy = retry_policy_override.clone().unwrap_or_default();
+
+        #[cfg(feature = "gemini-code-assist")]
+        let mut gemini_code_assist = match (self.gemini_code_assist, retry_policy_override.as_ref())
+        {
+            (Some(provider), Some(policy)) => Some(provider.with_retry_policy(policy.clone())),
+            (provider, _) => provider,
+        };
+        #[cfg(feature = "gemini-code-assist")]
+        if timeouts.total.is_some() {
+            gemini_code_assist =
+                gemini_code_assist.map(|provider| provider.with_total_timeout(timeouts.total));
+        }
+
+        let mut client = Client {
             provider,
             api_key,
             model: self.model,
@@ -1120,8 +1094,8 @@ impl ClientBuilder {
             ollama_think: self.ollama_think,
             ollama_keep_alive: self.ollama_keep_alive,
             ollama_num_ctx: self.ollama_num_ctx,
-            retry_policy: self.retry_policy.unwrap_or_default(),
-            stream_read_timeout: self.stream_read_timeout_secs.map(Duration::from_secs),
+            retry_policy,
+            timeouts,
             #[cfg(feature = "claude-code")]
             claude_code: self.claude_code,
             #[cfg(feature = "codex-cli")]
@@ -1129,7 +1103,7 @@ impl ClientBuilder {
             #[cfg(feature = "gemini-cli")]
             gemini_cli: self.gemini_cli,
             #[cfg(feature = "gemini-code-assist")]
-            gemini_code_assist: self.gemini_code_assist,
+            gemini_code_assist,
             #[cfg(feature = "gemini-code-assist")]
             gemini_code_assist_project_id: self.gemini_code_assist_project_id,
             #[cfg(feature = "chatgpt-codex")]
@@ -1140,7 +1114,21 @@ impl ClientBuilder {
             chatgpt_codex_model: self.chatgpt_codex_model,
             #[cfg(feature = "chatgpt-codex")]
             chatgpt_codex_reasoning_effort: self.chatgpt_codex_reasoning_effort,
-        })
+            built: BuiltProvider::Disabled("uninitialized"),
+            #[cfg(any(
+                feature = "anthropic",
+                feature = "openai",
+                feature = "minimax",
+                feature = "ollama",
+                feature = "gemini",
+                feature = "gemini-code-assist",
+                feature = "chatgpt-codex",
+            ))]
+            http,
+        };
+        let built = client.construct_built_provider();
+        client.built = built;
+        Ok(client)
     }
 }
 
@@ -1153,6 +1141,8 @@ impl ClientBuilder {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 struct ReadTimeoutStream {
     inner: BoxStream,
@@ -1167,6 +1157,8 @@ struct ReadTimeoutStream {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 impl ReadTimeoutStream {
     fn new(inner: BoxStream, timeout: Duration) -> Self {
@@ -1185,6 +1177,8 @@ impl ReadTimeoutStream {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = Result<StreamEvent, MotosanError>;

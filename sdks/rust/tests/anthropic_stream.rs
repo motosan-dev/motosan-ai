@@ -52,6 +52,43 @@ async fn anthropic_stream_emits_content_and_done_event() {
 }
 
 #[tokio::test]
+async fn anthropic_stream_eof_without_message_stop_yields_incomplete_stream() {
+    let mut server = mockito::Server::new_async().await;
+    let sse_body = concat!(
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"par\"}}\n\n",
+    );
+    server
+        .mock("POST", "/v1/messages")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse_body)
+        .create_async()
+        .await;
+    let provider = AnthropicProvider::new("test-key", None, Some(server.url()));
+    let request = ChatRequest::builder().message(Message::user("hi")).build();
+    let mut stream = provider.stream(request).await.expect("stream");
+    let mut saw_done = false;
+    let mut last_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ev) => saw_done |= ev.done,
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(!saw_done, "must not fabricate a done event on truncation");
+    match last_err.expect("EOF without message_stop must yield an error") {
+        motosan_ai::MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "anthropic ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn anthropic_stream_ignores_unknown_and_malformed_events() {
     let mut server = mockito::Server::new_async().await;
     let sse_body = concat!(

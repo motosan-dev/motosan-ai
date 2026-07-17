@@ -1,8 +1,8 @@
 use crate::error::MotosanError;
 use crate::models::DEFAULT_OLLAMA_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -14,7 +14,9 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
+#[derive(Debug, Clone)]
 pub struct OllamaProvider {
     http: Client,
     model: String,
@@ -23,6 +25,7 @@ pub struct OllamaProvider {
     keep_alive: Option<String>,
     num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl OllamaProvider {
@@ -35,6 +38,7 @@ impl OllamaProvider {
             keep_alive: None,
             num_ctx: None,
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
@@ -55,6 +59,21 @@ impl OllamaProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -248,7 +267,10 @@ impl ProviderImpl for OllamaProvider {
         let body = self.build_request_body(&req, false);
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.http.post(self.endpoint()).json(&body)
+            apply_total_timeout(
+                self.http.post(self.endpoint()).json(&body),
+                self.total_timeout,
+            )
         })
         .await?;
 
@@ -390,6 +412,7 @@ impl ProviderImpl for OllamaProvider {
         let adapter = OllamaStreamAdapter {
             inner: Box::pin(ndjson_stream),
             pending: std::collections::VecDeque::new(),
+            saw_terminal: false,
         };
 
         Ok(Box::pin(adapter))
@@ -401,6 +424,7 @@ impl ProviderImpl for OllamaProvider {
 struct OllamaStreamAdapter {
     inner: Pin<Box<dyn Stream<Item = Result<String, MotosanError>> + Send>>,
     pending: std::collections::VecDeque<StreamEvent>,
+    saw_terminal: bool,
 }
 
 impl Stream for OllamaStreamAdapter {
@@ -427,6 +451,7 @@ impl Stream for OllamaStreamAdapter {
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     if done {
+                        self.saw_terminal = true;
                         return Poll::Ready(Some(Ok(StreamEvent::done())));
                     }
 
@@ -474,9 +499,18 @@ impl Stream for OllamaStreamAdapter {
                 Poll::Ready(Some(Err(e))) => {
                     // Inner NdjsonStream already yields a typed MotosanError; pass it
                     // through unchanged (re-wrapping would double the "stream error:" prefix).
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(e)));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "ollama ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -557,6 +591,7 @@ mod tests {
         let mut adapter = OllamaStreamAdapter {
             inner: Box::pin(inner),
             pending: std::collections::VecDeque::new(),
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");

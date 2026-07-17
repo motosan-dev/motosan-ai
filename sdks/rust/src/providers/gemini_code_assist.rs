@@ -8,7 +8,7 @@ use crate::providers::{
     ProviderImpl,
 };
 use crate::retry::RetryPolicy;
-use crate::stream::{collect_stream, BoxStream};
+use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason, StreamEvent, Usage};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::Poll;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -49,6 +49,7 @@ pub struct GeminiCodeAssistProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl GeminiCodeAssistProvider {
@@ -65,11 +66,27 @@ impl GeminiCodeAssistProvider {
             model: model.unwrap_or_else(|| DEFAULT_GEMINI_CODE_ASSIST_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| GEMINI_CODE_ASSIST_BASE_URL.to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -111,7 +128,8 @@ impl ProviderImpl for GeminiCodeAssistProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let stream = self.stream(req).await?;
-        let mut response = collect_stream(stream).await?;
+        let mut response =
+            crate::providers::collect_stream_with_total_timeout(stream, self.total_timeout).await?;
         if response.model.is_empty() {
             response.model = model;
         }
@@ -146,6 +164,7 @@ impl ProviderImpl for GeminiCodeAssistProvider {
             inner: Box::pin(sse),
             pending: VecDeque::new(),
             seen_tool_ids: std::collections::HashSet::new(),
+            saw_terminal: false,
         };
         Ok(Box::pin(adapter))
     }
@@ -165,6 +184,7 @@ struct CodeAssistStreamAdapter {
     pending: VecDeque<StreamEvent>,
     /// Track tool call IDs we've seen to detect duplicates (API may reuse IDs).
     seen_tool_ids: std::collections::HashSet<String>,
+    saw_terminal: bool,
 }
 
 impl Stream for CodeAssistStreamAdapter {
@@ -277,6 +297,7 @@ impl Stream for CodeAssistStreamAdapter {
 
                     // Terminal event
                     if let Some(reason) = finish_reason {
+                        self.saw_terminal = true;
                         let stop_reason = match reason {
                             "STOP" if has_tool_calls => StopReason::ToolUse,
                             "STOP" => StopReason::EndTurn,
@@ -294,9 +315,18 @@ impl Stream for CodeAssistStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "gemini-code-assist ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -410,6 +440,7 @@ mod tests {
                 inner: Box::pin(inner),
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
+                saw_terminal: false,
             };
 
             let item = adapter.next().await.expect("one item");
@@ -423,6 +454,7 @@ mod tests {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
+                saw_terminal: false,
             };
             let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let text: String = events
@@ -442,6 +474,7 @@ mod tests {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
+                saw_terminal: false,
             };
             let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let start = events
@@ -458,6 +491,7 @@ mod tests {
                 inner: make_sse(json),
                 pending: VecDeque::new(),
                 seen_tool_ids: std::collections::HashSet::new(),
+                saw_terminal: false,
             };
             let events: Vec<_> = (&mut adapter).collect::<Result<Vec<_>, _>>().await.unwrap();
             let start = events

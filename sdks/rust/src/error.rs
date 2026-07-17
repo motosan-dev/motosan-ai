@@ -39,6 +39,12 @@ pub enum MotosanError {
     Stream(String),
     #[error("stream read timeout: no data received within {0} seconds")]
     StreamReadTimeout(u64),
+    /// Upstream byte/event stream ended without the provider terminal event
+    /// (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices /
+    /// `message_stop` / `finishReason` / `response.completed` / `"done":true`).
+    /// Payload: `"<provider> ended without a terminal event"`.
+    #[error("incomplete stream: {0}")]
+    IncompleteStream(String),
     #[error("unsupported feature: {0}")]
     UnsupportedFeature(String),
 }
@@ -130,6 +136,10 @@ mod tests {
                 "stream read timeout: no data received within 5 seconds",
             ),
             (
+                MotosanError::IncompleteStream("openai ended without a terminal event".into()),
+                "incomplete stream: openai ended without a terminal event",
+            ),
+            (
                 MotosanError::UnsupportedFeature("u".into()),
                 "unsupported feature: u",
             ),
@@ -159,6 +169,7 @@ mod tests {
             MotosanError::Network("n".into()),
             MotosanError::Stream("s".into()),
             MotosanError::StreamReadTimeout(5),
+            MotosanError::IncompleteStream("i".into()),
             MotosanError::UnsupportedFeature("u".into()),
         ];
         for err in errors {

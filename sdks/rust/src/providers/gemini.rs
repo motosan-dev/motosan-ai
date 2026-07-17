@@ -3,8 +3,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::MotosanError;
 use crate::models::DEFAULT_GEMINI_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 const DEFAULT_MAX_TOKENS: u32 = 8192;
 const BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -38,6 +39,7 @@ pub struct GeminiProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl GeminiProvider {
@@ -52,11 +54,27 @@ impl GeminiProvider {
             model: model.unwrap_or_else(|| DEFAULT_GEMINI_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| BASE_URL.to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
+        self
+    }
+
+    /// Replace the internal `reqwest::Client` with a caller-supplied one.
+    /// `ClientBuilder::build()` uses this to hand every HTTP provider one
+    /// shared, connect-timeout-configured client so all providers share a
+    /// single connection pool instead of each constructing their own.
+    pub fn with_http_client(mut self, http: Client) -> Self {
+        self.http = http;
         self
     }
 
@@ -322,12 +340,15 @@ impl ProviderImpl for GeminiProvider {
         let body = Self::build_request(&req);
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(
-                self.http
-                    .post(&url)
-                    .header("content-type", "application/json"),
+            apply_total_timeout(
+                self.apply_auth(
+                    self.http
+                        .post(&url)
+                        .header("content-type", "application/json"),
+                )
+                .json(&body),
+                self.total_timeout,
             )
-            .json(&body)
         })
         .await?;
 
@@ -379,6 +400,7 @@ impl ProviderImpl for GeminiProvider {
         let adapter = GeminiStreamAdapter {
             inner: Box::pin(sse),
             pending: VecDeque::new(),
+            saw_terminal: false,
         };
         Ok(Box::pin(adapter))
     }
@@ -396,6 +418,7 @@ struct GeminiStreamAdapter {
         >,
     >,
     pending: VecDeque<StreamEvent>,
+    saw_terminal: bool,
 }
 
 impl Stream for GeminiStreamAdapter {
@@ -479,6 +502,7 @@ impl Stream for GeminiStreamAdapter {
                     }
 
                     if let Some(reason) = finish_reason {
+                        self.saw_terminal = true;
                         let stop_reason = match reason {
                             "STOP" if has_tool_calls => StopReason::ToolUse,
                             "STOP" => StopReason::EndTurn,
@@ -496,9 +520,18 @@ impl Stream for GeminiStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "gemini ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -541,6 +574,7 @@ mod tests {
         let mut adapter = GeminiStreamAdapter {
             inner: Box::pin(inner),
             pending: VecDeque::new(),
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");
