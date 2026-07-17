@@ -9,7 +9,14 @@ import respx
 from motosan_ai import Client, Provider
 from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import StreamError
-from motosan_ai.types import ChatRequest, Message, StopReason, StreamEvent, Usage
+from motosan_ai.types import (
+    ChatRequest,
+    Message,
+    StopReason,
+    StreamEvent,
+    StreamEventType,
+    Usage,
+)
 
 
 async def _events_to_iter(events):
@@ -157,6 +164,51 @@ async def test_collect_thinking_content_concatenated():
     resp = await collect_stream(_events_to_iter(events))
     assert resp.thinking == "reasoning step 1 step 2"
     assert resp.content == "answer"
+
+
+@pytest.mark.asyncio
+async def test_collect_thinking_done_takes_priority():
+    # Mirrors Rust stream.rs: ThinkingDone carries the authoritative full
+    # text and wins over the delta accumulator at assembly.
+    events = [
+        StreamEvent(content="a", done=False, event_type=StreamEventType.thinking_delta),
+        StreamEvent(content="b", done=False, event_type=StreamEventType.thinking_delta),
+        StreamEvent(
+            content="ab-final",
+            done=False,
+            event_type=StreamEventType.thinking_done,
+        ),
+        StreamEvent(content="answer", done=False),
+        StreamEvent(content="", done=True, stop_reason=StopReason.end_turn),
+    ]
+    resp = await collect_stream(_events_to_iter(events))
+    assert resp.thinking == "ab-final"
+    assert resp.content == "answer"
+
+
+@pytest.mark.asyncio
+async def test_collect_thinking_deltas_only_concatenated():
+    # No thinking_done (e.g. chatgpt_codex): concatenated deltas are the
+    # fallback.
+    events = [
+        StreamEvent(content="a", done=False, event_type=StreamEventType.thinking_delta),
+        StreamEvent(content="b", done=False, event_type=StreamEventType.thinking_delta),
+        StreamEvent(content="", done=True, stop_reason=StopReason.end_turn),
+    ]
+    resp = await collect_stream(_events_to_iter(events))
+    assert resp.thinking == "ab"
+
+
+@pytest.mark.asyncio
+async def test_collect_empty_thinking_done_yields_none():
+    # Explicit empty thinking block -> treat as none (Rust parity,
+    # stream.rs assembly match arm Some(_) => None).
+    events = [
+        StreamEvent(content="", done=False, event_type=StreamEventType.thinking_done),
+        StreamEvent(content="", done=True, stop_reason=StopReason.end_turn),
+    ]
+    resp = await collect_stream(_events_to_iter(events))
+    assert resp.thinking is None
 
 
 def _sse(*events):
