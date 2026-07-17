@@ -2,17 +2,16 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
-## [Unreleased]
+## [0.17.0] - 2026-07-17
 
 ### Breaking
-- **Streaming:** HTTP provider streams that end without the provider's terminal event (`message_stop` / `[DONE]`-or-`finish_reason` on the OpenAI wire / `finishReason` / `response.completed` / `{"done": true}`) now raise `IncompleteStreamError` instead of ending silently as if complete - truncation is no longer indistinguishable from completion. `IncompleteStreamError` subclasses `StreamError` deliberately (migration softener): existing `except StreamError` handlers keep catching it; catch `IncompleteStreamError` to handle truncation specifically. Not retried (mid-stream errors are never retried, per `specs/retry.md`). CLI providers unchanged - child-process death already raises `StreamError` (M1); child death is not HTTP truncation.
-- **OpenAI-wire streaming (openai, minimax):** per the amended terminal-event contract (`specs/types.md`), a stream completes on `data: [DONE]` OR a `finish_reason`-bearing chunk - either suffices (`finish_reason` is the semantic terminal, `[DONE]` the transport epilogue). openai stashes the finish_reason-derived `stop_reason` and emits it with the terminal done event at `[DONE]` or, failing that, at EOF; minimax emits its usual no-stop_reason done at EOF after a finish_reason chunk. Truncation with NEITHER signal raises `IncompleteStreamError`. Mirrors the Rust 0.24.0 adapter.
+- Stream EOF semantics: an HTTP provider stream that ends without the provider's terminal event now raises `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of ending as if the turn had completed. OpenAI-wire streams (openai, minimax) complete on `[DONE]` or a `finish_reason`-bearing chunk — either suffices; truncation with neither signal raises. Anthropic requires `message_stop`; Gemini / chatgpt-codex require their terminal frames. `IncompleteStreamError` subclasses `StreamError`, so existing `except StreamError:` handlers keep working unchanged; catch `IncompleteStreamError` first to treat truncation specially.
 
 ### Added
-- Unified timeout model (E4): `Client(..., connect_timeout: float = 10.0, read_idle_timeout: float = 120.0, total_timeout: float | None = None)` threaded into every HTTP provider as `httpx.Timeout(connect=connect_timeout, read=read_idle_timeout, write=read_idle_timeout, pool=connect_timeout)`. `total_timeout` (opt-in) bounds `chat()`/`chat_with()` wall clock including retries; it never applies to streams.
-- `StreamReadTimeoutError` (`MotosanError` subclass; mirrors Rust `StreamReadTimeout` / TS `StreamReadTimeoutError`): a streaming body idle past `read_idle_timeout` raises it. Never retried - mid-stream retry would replay already-yielded deltas.
-- Client lifecycle (E8): `await client.aclose()` and `async with Client(...) as client:`; every provider gains `aclose()` (no-op for CLI providers).
-- `cli_timeout` facade kwarg (keyword-only on `Client`; trailing parameter on `Client.codex_cli()`/`Client.gemini_cli()` - pass it by keyword): threads to `CodexCliClient`/`GeminiCliClient` `.timeout()`; `cli_timeout=None` maps to `.no_timeout()`.
+- `Client(..., connect_timeout=10.0, read_idle_timeout=120.0, total_timeout=None)` is threaded into every HTTP provider as `httpx.Timeout(connect=connect_timeout, read=read_idle_timeout, write=read_idle_timeout, pool=connect_timeout)`; `total_timeout` applies to blocking `chat()` / `chat_with()` only, never silently to streams.
+- `StreamReadTimeoutError` (`MotosanError` subclass; mirrors Rust `StreamReadTimeout` / TypeScript `StreamReadTimeoutError`): a streaming body idle past `read_idle_timeout` raises it. Never retried — mid-stream retry would replay already-yielded deltas.
+- `Client.aclose()` and `async with Client(...) as client:` close every provider `AsyncClient`.
+- `cli_timeout` facade kwarg (keyword-only on `Client`; trailing parameter on `Client.codex_cli()` / `Client.gemini_cli()` — pass it by keyword): threads to `CodexCliClient` / `GeminiCliClient` `.timeout()`; `cli_timeout=None` maps to `.no_timeout()`.
 
 ### Changed
 - **MiniMax timeout unified**: the hardcoded `httpx.AsyncClient(timeout=30)` outlier now uses the shared model (connect 10s, read/write 120s) - requests that previously failed at 30s idle now wait 120s.

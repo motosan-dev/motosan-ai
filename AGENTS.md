@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.23.0 · Python v0.16.0 (PyPI) · TypeScript v0.13.0 (npm)
+Rust v0.24.0 · Python v0.17.0 (PyPI) · TypeScript v0.14.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
@@ -11,6 +11,8 @@ Python 0.14.0 and TypeScript 0.11.0 add the **chatgpt-codex** provider — a nat
 The M1 reliability releases: retry survives non-JSON 5xx bodies, mid-stream error frames, Claude Code terminal error results, and CLI child-process death surface as errors, parallel tool-call `index` and chatgpt-codex `item_id`→`call_id` are handled correctly, Rust/TypeScript streamed usage merges by replacement, Python streamed tool turns report the tool-use stop reason, and the TypeScript SSE reader cancels on abort and accepts CRLF.
 
 Rust 0.23.0 / Python 0.16.0 / TypeScript 0.13.0 are the M2 retry releases: errors carry structured metadata (`status_code` / `retry_after` / `request_id`; Rust HTTP variants become struct variants — **breaking**), retry classification is status-based (408/409/429/>=500 plus transport errors), Retry-After honors integer-seconds and HTTP-date capped at 60 s, full jitter replaces the deterministic LCG, `RetryPolicy` gains an `on_retry` observer (and lands in Python as a dataclass threaded through chat and stream), Rust providers share one `send_with_retry` helper, and `specs/retry.md` is the normative cross-SDK retry contract (with one conformance suite per SDK).
+
+Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 are the M3 stream-contract + timeout releases: a stream that ends without the provider's terminal event raises a typed error (Rust `MotosanError::IncompleteStream` — **breaking** enum addition; Python `IncompleteStreamError(StreamError)`; TypeScript `IncompleteStreamError extends StreamError`), retiring the v0.10.1 fabricated-terminal-`done` invariant for the neither-signal case (OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk — either suffices; only EOF with neither errors); one timeout model (connect 10 s / read-idle 120 s / total opt-in) lands on all three builders; Rust builds the provider once with a shared `reqwest::Client`; TypeScript gains per-request `AbortSignal` + `CancelledError` (never retried) and a `readTimeoutStream` that actually throws; Python gains `Client.aclose()` / async context manager.
 
 ## Current Rust Tool Schema Note
 

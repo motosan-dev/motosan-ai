@@ -2,9 +2,10 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.16.0 · TypeScript 0.13.0 · Rust 0.23.0
+- Python 0.17.0 · TypeScript 0.14.0 · Rust 0.24.0
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - Python 0.14.0 / TypeScript 0.11.0: **chatgpt-codex** provider — native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python `Client.chatgpt_codex(...)`, TypeScript `Client.builder().chatgptCodex(...)`.
+- Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 (M3): **breaking** stream termination — EOF without the provider terminal event (OpenAI wire: `[DONE]` or a `finish_reason` chunk, either suffices) raises Rust `MotosanError::IncompleteStream` / Python `IncompleteStreamError(StreamError)` / TypeScript `IncompleteStreamError extends StreamError`; one timeout model (connect 10 s / read-idle 120 s / total opt-in) on all builders; Rust build-once shared `reqwest::Client`; TypeScript per-request `AbortSignal` + `CancelledError` (never retried); Python `Client.aclose()` / `async with`.
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -21,7 +22,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.23.0", features = ["anthropic"] }
+motosan-ai = { version = "0.24.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient):
@@ -451,12 +452,16 @@ event.stop_reason          — StopReason on the terminal `done` event (Optional
                              • None on done events for providers that don't report a reason
 ```
 
-Each provider stream emits **exactly one** `done` event — guaranteed since
-v0.10.1 even when the upstream provider closes the connection without `[DONE]`
-and without a `finish_reason` chunk (some non-conformant proxies do this). If
-the provider reports a stop reason, it lands on that event. `collect_stream`
-honors the explicit `stop_reason` and only falls back to its tool-calls
-heuristic when none was reported.
+A stream is complete only when the provider sends its terminal event (OpenAI
+`[DONE]` or a final `finish_reason` chunk — either suffices, Anthropic
+`message_stop`, Gemini / chatgpt-codex terminal frames). Since rust-0.24.0 /
+python-0.17.0 / ts-0.14.0, EOF without any such event is a typed error — Rust
+`MotosanError::IncompleteStream`, Python `IncompleteStreamError` (subclass of
+`StreamError`), TypeScript `IncompleteStreamError extends StreamError` — message
+`"incomplete stream: <provider> ended without a terminal event"`. If the
+provider reports a stop reason it lands on the terminal event; `collect_stream`
+honors it and falls back to the tool-calls heuristic only on a real terminal
+event that lacks a reason.
 
 ### Event Sequence for Tool Calls
 
@@ -920,7 +925,7 @@ Python, Rust, and TypeScript SDKs are versioned and released **independently**.
 |--------------|-----------------------|-----------------------|
 | Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
 | Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
-| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.13.0`          |
+| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.14.0`          |
 | motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | `motosan-ai-oauth-v0.2.0` |
 | codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
 | anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |

@@ -2,6 +2,36 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.24.0 / python-0.17.0 / ts-0.14.0] — 2026-07-17
+
+M3 stream-termination + timeout/lifecycle release. **Breaking for all three SDKs**: a stream that ends without the provider's terminal event is now a typed error, not a fabricated clean `done`.
+
+### Breaking
+
+- **Stream termination contract** (Rust · Python · TypeScript): when the upstream byte/event stream ends without the provider terminal event (OpenAI-wire: `[DONE]` or a `finish_reason`-bearing chunk — either suffices; Anthropic `message_stop`; Gemini / chatgpt-codex terminal frames), the stream adapter yields a typed error — message `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a terminal `done`. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (`finish_reason` is the semantic terminal; a stream whose finish_reason arrived is complete even if the connection drops before `[DONE]`); truncation with neither signal raises the error. This retires the v0.10.1 fabricated-`done` invariant for that neither-signal case. Collectors keep propagating errors and keep the stop-reason heuristic only for a real terminal event that lacks a reason. See `specs/types.md` § stream termination.
+- **`MotosanError::IncompleteStream(String)`** (Rust): new enum variant — breaking for exhaustive matches. Migration example in `sdks/rust/CHANGELOG.md`.
+- **Migration softeners** (Python · TypeScript): Python `IncompleteStreamError` subclasses `StreamError`; TypeScript `IncompleteStreamError extends StreamError`, so existing `except StreamError:` / `instanceof StreamError` handlers keep catching truncation.
+- **Caller cancellation classification** (TypeScript): a request aborted by a caller-supplied `AbortSignal` throws `CancelledError extends MotosanError` and is never retried; fetch-internal aborts with no caller signal aborted remain retryable.
+
+### Added
+
+- **One timeout model** (Rust · Python · TypeScript): connect = 10 s default, read-idle = 120 s default, total = off by default (opt-in; blocking `chat()` only, never silently applied to streams). Rust exposes `ClientBuilder::connect_timeout(Duration)`, `.read_idle_timeout(Duration)`, and `.total_timeout(Duration)`; Python exposes `Client(..., connect_timeout=10.0, read_idle_timeout=120.0, total_timeout=None)`; TypeScript exposes `ClientBuilder.timeouts({ connectMs?, readIdleMs?, totalMs? })`.
+- **Python client lifecycle** (Python): `Client.aclose()` and `async with Client(...)` close every provider `httpx.AsyncClient`; `cli_timeout` threads the CLI `.timeout()` / `.no_timeout()` knobs through the `Client` facade.
+- **Specs and conformance** (all SDKs): `specs/types.md` now defines the stream-termination contract and retired fabricated-`done` invariant; `specs/retry.md` documents `CancelledError` and non-retryable read-idle timeout behavior; Rust, Python, and TypeScript add M3 conformance tests for stream truncation and read-idle timeout.
+
+### Changed
+
+- **Rust build-once providers** (Rust): `ClientBuilder::build()` constructs the provider once with one shared `reqwest::Client` configured with `connect_timeout`; `dispatch_chat` / `dispatch_stream` no longer rebuild the provider and connection pool per request. `read_idle_timeout` supersedes the deprecated `stream_read_timeout_secs` alias.
+- **Python MiniMax timeout outlier** (Python): the hardcoded 30 s `httpx` timeout joins the shared timeout model.
+- **TypeScript runtime floor** (TypeScript): `engines.node` is now `>=20.3`, matching the `AbortSignal.any` / `AbortSignal.timeout` APIs used by the timeout and cancellation model.
+
+### Fixed
+
+- **`readTimeoutStream` throws** (TypeScript): idle expiry now throws `StreamReadTimeoutError` instead of silently ending the stream; read-idle default 120 s is wired through providers.
+- **`gemini_code_assist` retry policy** (Rust): the pre-built provider path applies `ClientBuilder::retry_policy` instead of silently discarding it.
+
+Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/python/CHANGELOG.md`](sdks/python/CHANGELOG.md), [`sdks/typescript/CHANGELOG.md`](sdks/typescript/CHANGELOG.md).
+
 ## [rust-0.23.0 / python-0.16.0 / ts-0.13.0] — 2026-07-16
 
 M2 retry release — structured error metadata, status-based retry classification, one retry engine per SDK, and a normative retry spec. **Breaking for Rust** (`MotosanError` enum shape); additive for Python and TypeScript.

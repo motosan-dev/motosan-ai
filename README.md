@@ -26,16 +26,16 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.23.0 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.16.0 |
-| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.13.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.24.0 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.17.0 |
+| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.14.0 |
 
 ## Install
 
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.23.0", features = ["anthropic"] }
+motosan-ai = { version = "0.24.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native | full
 #           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
 ```
@@ -48,7 +48,7 @@ pip install "motosan-ai[full]"   # all Python HTTP providers
 ```
 
 ```bash
-# TypeScript / Node (ESM, Node >= 18)
+# TypeScript / Node (ESM, Node >= 20.3)
 npm install @motosan-ai/sdk
 ```
 
@@ -229,14 +229,14 @@ use tokio_stream::StreamExt;
 let client = Client::builder()
     .provider(Provider::Anthropic)
     .api_key(std::env::var("ANTHROPIC_API_KEY")?)
-    .stream_read_timeout_secs(30)
+    .read_idle_timeout(std::time::Duration::from_secs(30))
     .build()?;
 
 let mut stream = client.stream(vec![Message::user("Hello")]).await?;
 while let Some(event) = stream.next().await {
     if event.done {
         // Terminal event carries the provider-reported stop reason when available.
-        // Streams emit exactly one `done` event, even on non-conformant proxies.
+        // EOF without a terminal event is Err(MotosanError::IncompleteStream), not a done event.
         if let Some(reason) = event.stop_reason {
             eprintln!("\n[done: {reason:?}]");
         }

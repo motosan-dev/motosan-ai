@@ -20,7 +20,7 @@ are tree-shaken via ESM (only what you import lands in your bundle).
 
 ## Requirements
 
-- **Node >= 18** (the SDK uses native `fetch`, `ReadableStream`, and `TextDecoder`, stable from Node 18).
+- **Node >= 20.3** (the SDK uses `AbortSignal.any` / `AbortSignal.timeout` for timeout and cancellation composition).
 - An **ESM project** — set `"type": "module"` in your `package.json`, or use `.mjs` files.
 - One provider credential (env var or passed to `.apiKey(...)`):
 
@@ -204,15 +204,16 @@ for await (const event of client.stream({ messages: [user('Write a haiku about r
 }
 ```
 
-Each provider stream emits **exactly one** terminal `done` event, even when the upstream provider closes
-the connection without a sentinel and without a finish-reason chunk. `event.stopReason` carries the
-provider's reported reason when present.
+A stream is complete only when the provider sends its terminal event (OpenAI `[DONE]` or a final
+`finish_reason` chunk — either suffices, Anthropic `message_stop`, Gemini / chatgpt-codex terminal
+frames). Since v0.14.0, if the upstream closes without any such event the stream throws
+`IncompleteStreamError` (subclass of `StreamError`) — `"incomplete stream: <provider> ended without a
+terminal event"`. `event.stopReason` carries the provider's reported reason when present.
 
-> **Mid-stream partial success (important):** if a transport error occurs *after* the stream has started,
-> the stream terminates **silently** — it does NOT throw mid-stream. The events yielded so far form a
-> partial, success-looking response (and `collectStream` will return a `ChatResponse` with a fabricated
-> `stopReason`). Retries apply only to the *initial* fetch, never mid-stream (see Retry). If you need
-> strict completeness, inspect `usage`/`stopReason` on the terminal event.
+> **Mid-stream failures:** provider `error` frames and transport faults reject the stream (since 0.12.0),
+> and truncation (EOF without a terminal event) rejects with `IncompleteStreamError` (since 0.14.0).
+> Retries apply only to the *initial* fetch, never mid-stream (see Retry). Aborting via your own
+> `AbortSignal` throws `CancelledError` and is never retried.
 
 ### Streaming → assembled response
 
@@ -482,8 +483,8 @@ Automated via `publish-typescript.yml` on a `ts-v*` tag push → npm.
 
 ```bash
 # Bump sdks/typescript/package.json version + CHANGELOG, then:
-git tag ts-v0.13.0
-git push origin ts-v0.13.0
+git tag ts-v0.14.0
+git push origin ts-v0.14.0
 ```
 
 The Rust, Python, and TypeScript SDKs are versioned and released independently.
