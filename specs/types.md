@@ -294,7 +294,7 @@ reuses a token fetched for an earlier attempt. Introduced in Rust
 | SDK | Seam |
 |-----|------|
 | Rust | `pub trait TokenSource` in ungated `src/auth.rs` — `async fn access_token(&self) -> Result<String, MotosanError>` — plus `StaticTokenSource(String)` for fixed tokens. `ChatGptCodexProvider` stores `Arc<dyn TokenSource>`; `new()` keeps its `access_token: String` signature (wraps `StaticTokenSource`); `with_token_source` and `ClientBuilder::chatgpt_codex_token_source(Arc<dyn TokenSource>)` inject a dynamic source. The per-attempt fetch runs inside the shared retry engine via its async-build variant (see [`retry.md` § One retry engine per SDK](./retry.md#one-retry-engine-per-sdk)) |
-| Python | `token_source: Callable[[], Awaitable[str]] \| None = None` on `ChatGptCodexProvider` and `Client.chatgpt_codex()`; exactly one of `access_token` / `token_source` is required; when set, the bearer token is resolved at the top of every retry attempt |
+| Python | `token_source: Callable[[], Awaitable[str]] \| None = None` on `ChatGptCodexProvider` and `Client.chatgpt_codex()`; at least one of `access_token` / `token_source` is required (`ConfigError` when neither is given; when both are set, `token_source` wins — matching Rust); when a source is set, the bearer token is resolved at the top of every retry attempt |
 | TypeScript | constructor `accessToken: string \| (() => Promise<string>)`; a function value is awaited once per attempt |
 
 - The SDKs never depend on the OAuth crates
