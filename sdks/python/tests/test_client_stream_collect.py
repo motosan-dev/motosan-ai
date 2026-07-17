@@ -156,8 +156,12 @@ async def test_collect_default_stop_reason_when_done_lacks_one():
 @pytest.mark.asyncio
 async def test_collect_thinking_content_concatenated():
     events = [
-        StreamEvent(content="reasoning step 1", done=False, event_type="thinking"),
-        StreamEvent(content=" step 2", done=False, event_type="thinking"),
+        StreamEvent(
+            content="reasoning step 1",
+            done=False,
+            event_type=StreamEventType.thinking_delta,
+        ),
+        StreamEvent(content=" step 2", done=False, event_type=StreamEventType.thinking_delta),
         StreamEvent(content="answer", done=False),
         StreamEvent(content="", done=True),
     ]
@@ -205,6 +209,18 @@ async def test_collect_empty_thinking_done_yields_none():
     # stream.rs assembly match arm Some(_) => None).
     events = [
         StreamEvent(content="", done=False, event_type=StreamEventType.thinking_done),
+        StreamEvent(content="", done=True, stop_reason=StopReason.end_turn),
+    ]
+    resp = await collect_stream(_events_to_iter(events))
+    assert resp.thinking is None
+
+
+@pytest.mark.asyncio
+async def test_collect_ignores_legacy_thinking_string():
+    # BREAKING (M4/F3): the ad-hoc "thinking" event_type is gone from the
+    # stream vocabulary; collect_stream must not accumulate it.
+    events = [
+        StreamEvent(content="legacy", done=False, event_type="thinking"),
         StreamEvent(content="", done=True, stop_reason=StopReason.end_turn),
     ]
     resp = await collect_stream(_events_to_iter(events))

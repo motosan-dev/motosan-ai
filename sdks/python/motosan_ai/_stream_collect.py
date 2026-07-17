@@ -12,11 +12,13 @@ from motosan_ai.types import ChatResponse, StopReason, StreamEvent, ToolCall, Us
 async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     """Collect a stream into one ChatResponse.
 
-    Handles text, thinking, tool-call start/args/end, usage, and terminal
-    stop_reason events. Malformed streamed tool arguments are treated as an
-    empty object to match provider collector behavior. A mid-stream provider
-    error (StreamError / NetworkError / ProviderError) raised by ``events``
-    propagates out of this function uncollected.
+    Handles text, thinking_delta/thinking_done, tool-call start/args/end,
+    usage, and terminal stop_reason events. thinking_done text takes
+    priority over concatenated thinking_delta fallback. Malformed streamed
+    tool arguments are treated as an empty object to match provider
+    collector behavior. A mid-stream provider error (StreamError /
+    NetworkError / ProviderError) raised by ``events`` propagates out of
+    this function uncollected.
     """
     content = ""
     tool_calls: list[ToolCall] = []
@@ -43,11 +45,6 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
             session_id = event.session_id
         if event.event_type == "text" and event.content:
             content += event.content
-        elif event.event_type == "thinking" and event.content:
-            # Legacy ad-hoc event; kept for one commit so provider
-            # migration lands green. Removed in the last step of this
-            # task (M4/F3 BREAKING).
-            thinking_delta_buf += event.content
         elif event.event_type == "thinking_delta" and event.content:
             thinking_delta_buf += event.content
         elif event.event_type == "thinking_done":
