@@ -3,8 +3,8 @@ const DEFAULT_MAX_TOKENS: u32 = 8192;
 use crate::error::MotosanError;
 use crate::models::DEFAULT_ANTHROPIC_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -20,6 +20,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 use tokio_stream::StreamExt;
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,7 @@ pub struct AnthropicProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
     capabilities: ProviderCapabilities,
 }
 
@@ -44,12 +46,19 @@ impl AnthropicProvider {
             model: model.unwrap_or_else(|| DEFAULT_ANTHROPIC_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| "https://api.anthropic.com".to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
             capabilities: ProviderCapabilities::full(),
         }
     }
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
         self
     }
 
@@ -469,7 +478,9 @@ impl ProviderImpl for AnthropicProvider {
         // Redirect to stream path and collect the full response.
         if is_oauth {
             let stream = self.stream(req).await?;
-            let mut response = crate::stream::collect_stream(stream).await?;
+            let mut response =
+                crate::providers::collect_stream_with_total_timeout(stream, self.total_timeout)
+                    .await?;
             response.model = self.model.clone();
             return Ok(response);
         }
@@ -485,7 +496,7 @@ impl ProviderImpl for AnthropicProvider {
                 .header("anthropic-version", "2023-06-01")
                 .json(&body);
             let request = Self::apply_beta_header(request, has_mcp, is_oauth, adaptive_thinking);
-            self.apply_auth(request)
+            apply_total_timeout(self.apply_auth(request), self.total_timeout)
         })
         .await?;
 

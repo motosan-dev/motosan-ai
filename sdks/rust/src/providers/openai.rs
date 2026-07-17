@@ -1,8 +1,8 @@
 use crate::error::MotosanError;
 use crate::models::DEFAULT_OPENAI_MODEL;
 use crate::providers::{
-    extract_error_message, extract_request_id, map_http_error, parse_retry_after, send_with_retry,
-    ChatResponseBuilder, ProviderImpl,
+    apply_total_timeout, extract_error_message, extract_request_id, map_http_error,
+    parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
 use crate::stream::BoxStream;
@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::task::Poll;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub enum OpenAIAuthStyle {
@@ -47,6 +48,7 @@ pub struct OpenAIProvider {
     auth_style: OpenAIAuthStyle,
     responses_fallback: bool,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl OpenAIProvider {
@@ -66,6 +68,7 @@ impl OpenAIProvider {
             auth_style: OpenAIAuthStyle::Bearer,
             responses_fallback: false,
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
@@ -81,6 +84,12 @@ impl OpenAIProvider {
 
     pub fn with_retry_policy(mut self, retry_policy: RetryPolicy) -> Self {
         self.retry_policy = retry_policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
         self
     }
 
@@ -255,7 +264,10 @@ impl OpenAIProvider {
         }
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(self.http.post(&self.responses_url).json(&body))
+            apply_total_timeout(
+                self.apply_auth(self.http.post(&self.responses_url).json(&body)),
+                self.total_timeout,
+            )
         })
         .await?;
 
@@ -504,7 +516,10 @@ impl ProviderImpl for OpenAIProvider {
         let body = OpenAIRequestBuilder::new(req, self.model.clone()).build();
 
         let response = send_with_retry(&self.retry_policy, || {
-            self.apply_auth(self.http.post(&self.chat_url).json(&body))
+            apply_total_timeout(
+                self.apply_auth(self.http.post(&self.chat_url).json(&body)),
+                self.total_timeout,
+            )
         })
         .await?;
 

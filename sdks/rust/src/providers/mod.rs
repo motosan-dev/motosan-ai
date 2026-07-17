@@ -75,6 +75,25 @@ pub enum Provider {
     OpenAiChatGpt,
 }
 
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+impl Provider {
+    /// True when the provider speaks HTTP through the shared reqwest client.
+    pub(crate) fn uses_http_transport(&self) -> bool {
+        !matches!(
+            self,
+            Provider::ClaudeCode | Provider::CodexCli | Provider::GeminiCli
+        )
+    }
+}
+
 #[async_trait]
 pub trait ProviderImpl: Send + Sync {
     fn capabilities(&self) -> ProviderCapabilities {
@@ -461,6 +480,50 @@ pub(crate) async fn send_with_retry(
         }
 
         return Ok(response);
+    }
+}
+
+/// Apply the opt-in total timeout to a blocking-chat request.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "openai",
+    feature = "minimax",
+    feature = "ollama_native",
+    feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+pub(crate) fn apply_total_timeout(
+    rb: reqwest::RequestBuilder,
+    total: Option<Duration>,
+) -> reqwest::RequestBuilder {
+    match total {
+        Some(timeout) => rb.timeout(timeout),
+        None => rb,
+    }
+}
+
+/// Total-timeout wrapper for providers whose `chat()` is stream+collect.
+#[cfg(any(
+    feature = "anthropic",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
+))]
+pub(crate) async fn collect_stream_with_total_timeout(
+    stream: BoxStream,
+    total: Option<Duration>,
+) -> Result<ChatResponse, MotosanError> {
+    match total {
+        Some(timeout) => {
+            match tokio::time::timeout(timeout, crate::stream::collect_stream(stream)).await {
+                Ok(result) => result,
+                Err(_) => Err(MotosanError::Network(format!(
+                    "total timeout: chat did not complete within {}s",
+                    timeout.as_secs()
+                ))),
+            }
+        }
+        None => crate::stream::collect_stream(stream).await,
     }
 }
 

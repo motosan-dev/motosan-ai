@@ -8,7 +8,7 @@ use crate::providers::{
     ProviderImpl,
 };
 use crate::retry::RetryPolicy;
-use crate::stream::{collect_stream, BoxStream};
+use crate::stream::BoxStream;
 use crate::types::{ChatRequest, ChatResponse, StopReason, StreamEvent, Usage};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::task::Poll;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 static TOOL_CALL_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -49,6 +49,7 @@ pub struct GeminiCodeAssistProvider {
     model: String,
     base_url: String,
     retry_policy: RetryPolicy,
+    total_timeout: Option<Duration>,
 }
 
 impl GeminiCodeAssistProvider {
@@ -65,11 +66,18 @@ impl GeminiCodeAssistProvider {
             model: model.unwrap_or_else(|| DEFAULT_GEMINI_CODE_ASSIST_MODEL.to_string()),
             base_url: base_url.unwrap_or_else(|| GEMINI_CODE_ASSIST_BASE_URL.to_string()),
             retry_policy: RetryPolicy::default(),
+            total_timeout: None,
         }
     }
 
     pub fn with_retry_policy(mut self, policy: RetryPolicy) -> Self {
         self.retry_policy = policy;
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt.
+    pub fn with_total_timeout(mut self, total: Option<Duration>) -> Self {
+        self.total_timeout = total;
         self
     }
 
@@ -120,7 +128,8 @@ impl ProviderImpl for GeminiCodeAssistProvider {
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
         let model = req.model.clone().unwrap_or_else(|| self.model.clone());
         let stream = self.stream(req).await?;
-        let mut response = collect_stream(stream).await?;
+        let mut response =
+            crate::providers::collect_stream_with_total_timeout(stream, self.total_timeout).await?;
         if response.model.is_empty() {
             response.model = model;
         }

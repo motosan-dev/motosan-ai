@@ -6,16 +6,30 @@ use crate::think_stripper::ThinkStripper;
 use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventType};
 use std::time::Duration;
 
-#[cfg(any(
-    feature = "anthropic",
-    feature = "openai",
-    feature = "minimax",
-    feature = "ollama",
-    feature = "gemini",
-    feature = "gemini-code-assist",
-    feature = "chatgpt-codex",
-))]
-const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const DEFAULT_READ_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Unified timeout model:
+/// - `connect`: TCP/TLS connect deadline on the shared reqwest client.
+/// - `read_idle`: max gap between HTTP stream chunks before
+///   `MotosanError::StreamReadTimeout`.
+/// - `total`: opt-in wall-clock budget per blocking `chat()` attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct TimeoutConfig {
+    pub(crate) connect: Duration,
+    pub(crate) read_idle: Duration,
+    pub(crate) total: Option<Duration>,
+}
+
+impl Default for TimeoutConfig {
+    fn default() -> Self {
+        Self {
+            connect: DEFAULT_CONNECT_TIMEOUT,
+            read_idle: DEFAULT_READ_IDLE_TIMEOUT,
+            total: None,
+        }
+    }
+}
 
 /// The provider selected and fully constructed at `ClientBuilder::build()`
 /// time. Dispatch borrows this instead of rebuilding per request.
@@ -97,7 +111,7 @@ pub struct Client {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: RetryPolicy,
-    stream_read_timeout: Option<Duration>,
+    timeouts: TimeoutConfig,
     /// Pre-built Claude Code provider instance used when `provider ==
     /// Provider::ClaudeCode`. Configured via [`ClientBuilder::claude_code`].
     /// If `None`, a default [`ClaudeCodeProvider::new`] is used at dispatch
@@ -173,8 +187,16 @@ impl Client {
         &self.retry_policy
     }
 
-    pub fn stream_read_timeout(&self) -> Option<Duration> {
-        self.stream_read_timeout
+    pub fn connect_timeout(&self) -> Duration {
+        self.timeouts.connect
+    }
+
+    pub fn read_idle_timeout(&self) -> Duration {
+        self.timeouts.read_idle
+    }
+
+    pub fn total_timeout(&self) -> Option<Duration> {
+        self.timeouts.total
     }
 
     pub fn openai_auth_header(&self) -> Option<&str> {
@@ -295,9 +317,14 @@ impl Client {
             feature = "minimax",
             feature = "ollama_native",
             feature = "gemini",
+            feature = "gemini-code-assist",
+            feature = "chatgpt-codex",
         ))]
-        if let Some(timeout) = self.stream_read_timeout {
-            return Ok(Box::pin(ReadTimeoutStream::new(raw, timeout)));
+        if self.provider.uses_http_transport() {
+            return Ok(Box::pin(ReadTimeoutStream::new(
+                raw,
+                self.timeouts.read_idle,
+            )));
         }
         Ok(raw)
     }
@@ -453,6 +480,7 @@ impl Client {
             self.anthropic_base_url.clone(),
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
         .with_http_client(self.http.clone())
     }
 
@@ -470,6 +498,7 @@ impl Client {
             .with_auth_style(auth_style)
             .with_responses_fallback(self.openai_responses_fallback)
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
             .with_http_client(self.http.clone());
 
         if let Some(ref url) = self.openai_chat_url {
@@ -502,6 +531,7 @@ impl Client {
         )
         .with_capabilities(ProviderCapabilities::text_only())
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
         .with_http_client(self.http.clone())
     }
 
@@ -525,6 +555,7 @@ impl Client {
             .with_chat_url(chat_url)
             .with_auth_style(OpenAIAuthStyle::Bearer)
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
             .with_http_client(self.http.clone())
     }
 
@@ -539,6 +570,7 @@ impl Client {
             .with_keep_alive(self.ollama_keep_alive.clone())
             .with_num_ctx(self.ollama_num_ctx)
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
             .with_http_client(self.http.clone())
     }
 
@@ -568,6 +600,7 @@ impl Client {
             None,
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
         .with_http_client(self.http.clone())
     }
 
@@ -586,6 +619,7 @@ impl Client {
                 None,
             )
             .with_retry_policy(self.retry_policy.clone())
+            .with_total_timeout(self.timeouts.total)
             .with_http_client(self.http.clone()),
         }
     }
@@ -637,6 +671,7 @@ impl Client {
             None,
         )
         .with_retry_policy(self.retry_policy.clone())
+        .with_total_timeout(self.timeouts.total)
         .with_http_client(self.http.clone())
         .with_reasoning_effort(self.chatgpt_codex_reasoning_effort.clone())
     }
@@ -659,7 +694,9 @@ pub struct ClientBuilder {
     ollama_keep_alive: Option<String>,
     ollama_num_ctx: Option<u32>,
     retry_policy: Option<RetryPolicy>,
-    stream_read_timeout_secs: Option<u64>,
+    connect_timeout: Option<Duration>,
+    read_idle_timeout: Option<Duration>,
+    total_timeout: Option<Duration>,
     #[cfg(feature = "claude-code")]
     claude_code: Option<crate::providers::claude_code::ClaudeCodeProvider>,
     #[cfg(feature = "codex-cli")]
@@ -839,8 +876,30 @@ impl ClientBuilder {
         self
     }
 
+    /// TCP/TLS connect deadline for the shared HTTP client. Default: 10s.
+    pub fn connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = Some(timeout);
+        self
+    }
+
+    /// Max idle gap between HTTP stream chunks before the stream yields
+    /// `MotosanError::StreamReadTimeout`. Default: 120s.
+    pub fn read_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.read_idle_timeout = Some(timeout);
+        self
+    }
+
+    /// Opt-in wall-clock budget per blocking `chat()` attempt. Default: off.
+    /// Never applied to streams.
+    pub fn total_timeout(mut self, timeout: Duration) -> Self {
+        self.total_timeout = Some(timeout);
+        self
+    }
+
+    /// Superseded alias for [`read_idle_timeout`](Self::read_idle_timeout).
+    #[deprecated(since = "0.24.0", note = "use read_idle_timeout(Duration)")]
     pub fn stream_read_timeout_secs(mut self, secs: u64) -> Self {
-        self.stream_read_timeout_secs = Some(secs);
+        self.read_idle_timeout = Some(Duration::from_secs(secs));
         self
     }
 
@@ -983,6 +1042,12 @@ impl ClientBuilder {
             }
         }
 
+        let timeouts = TimeoutConfig {
+            connect: self.connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT),
+            read_idle: self.read_idle_timeout.unwrap_or(DEFAULT_READ_IDLE_TIMEOUT),
+            total: self.total_timeout,
+        };
+
         #[cfg(any(
             feature = "anthropic",
             feature = "openai",
@@ -993,7 +1058,7 @@ impl ClientBuilder {
             feature = "chatgpt-codex",
         ))]
         let http = reqwest::Client::builder()
-            .connect_timeout(DEFAULT_CONNECT_TIMEOUT)
+            .connect_timeout(timeouts.connect)
             .build()
             .map_err(|e| MotosanError::Config(format!("failed to build HTTP client: {e}")))?;
 
@@ -1001,10 +1066,16 @@ impl ClientBuilder {
         let retry_policy = retry_policy_override.clone().unwrap_or_default();
 
         #[cfg(feature = "gemini-code-assist")]
-        let gemini_code_assist = match (self.gemini_code_assist, retry_policy_override.as_ref()) {
+        let mut gemini_code_assist = match (self.gemini_code_assist, retry_policy_override.as_ref())
+        {
             (Some(provider), Some(policy)) => Some(provider.with_retry_policy(policy.clone())),
             (provider, _) => provider,
         };
+        #[cfg(feature = "gemini-code-assist")]
+        if timeouts.total.is_some() {
+            gemini_code_assist =
+                gemini_code_assist.map(|provider| provider.with_total_timeout(timeouts.total));
+        }
 
         let mut client = Client {
             provider,
@@ -1024,7 +1095,7 @@ impl ClientBuilder {
             ollama_keep_alive: self.ollama_keep_alive,
             ollama_num_ctx: self.ollama_num_ctx,
             retry_policy,
-            stream_read_timeout: self.stream_read_timeout_secs.map(Duration::from_secs),
+            timeouts,
             #[cfg(feature = "claude-code")]
             claude_code: self.claude_code,
             #[cfg(feature = "codex-cli")]
@@ -1070,6 +1141,8 @@ impl ClientBuilder {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 struct ReadTimeoutStream {
     inner: BoxStream,
@@ -1084,6 +1157,8 @@ struct ReadTimeoutStream {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 impl ReadTimeoutStream {
     fn new(inner: BoxStream, timeout: Duration) -> Self {
@@ -1102,6 +1177,8 @@ impl ReadTimeoutStream {
     feature = "minimax",
     feature = "ollama_native",
     feature = "gemini",
+    feature = "gemini-code-assist",
+    feature = "chatgpt-codex",
 ))]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = Result<StreamEvent, MotosanError>;

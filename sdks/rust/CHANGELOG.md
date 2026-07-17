@@ -6,6 +6,10 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ### Breaking
 - **Truncated streams now error instead of ending cleanly.** Every HTTP stream adapter (openai, anthropic, gemini, gemini-code-assist, chatgpt-codex, ollama) yields `Err(MotosanError::IncompleteStream("<provider> ended without a terminal event"))` when the upstream connection closes without the provider terminal event (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices / `message_stop` / `finishReason` / `response.completed` / `"done":true`). OpenAI amendment: `finish_reason` is the semantic terminal — EOF after a stashed finish_reason still emits `done(stop_reason)` and completes cleanly; only EOF with NEITHER signal errors. The v0.10.1 invariant "exactly one terminal done event even when upstream closes without `[DONE]`" is retired for that neither-signal case. New `MotosanError::IncompleteStream(String)` variant — enum addition breaks exhaustive matches.
+- **Timeout API cleanup.** `Client::stream_read_timeout()` getter is removed; `ClientBuilder::stream_read_timeout_secs` is deprecated in favor of `read_idle_timeout(Duration)`. HTTP streams now enforce a 120s default read-idle deadline; idle expiry yields `MotosanError::StreamReadTimeout` and is never retried mid-stream.
+
+### Added
+- Unified timeout model: `ClientBuilder::connect_timeout(Duration)` (default 10s on the shared reqwest client), `.read_idle_timeout(Duration)` (default 120s), and `.total_timeout(Duration)` (default off; bounds each blocking `chat()` attempt, never streams; expiry surfaces as retryable `MotosanError::Network`).
 
 ## [0.23.0] - 2026-07-16
 
