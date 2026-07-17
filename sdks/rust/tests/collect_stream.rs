@@ -15,6 +15,24 @@ fn boxed_stream(events: Vec<StreamEvent>) -> motosan_ai::BoxStream {
 }
 
 #[tokio::test]
+async fn collect_stream_propagates_incomplete_stream_error() {
+    let stream: motosan_ai::BoxStream = Box::pin(tokio_stream::iter(vec![
+        Ok(StreamEvent::text("par")),
+        Err(motosan_ai::MotosanError::IncompleteStream(
+            "openai ended without a terminal event".to_string(),
+        )),
+    ]));
+    let err = collect_stream(stream)
+        .await
+        .expect_err("truncation must not collect into a ChatResponse");
+    assert!(matches!(
+        err,
+        motosan_ai::MotosanError::IncompleteStream(msg)
+            if msg == "openai ended without a terminal event"
+    ));
+}
+
+#[tokio::test]
 async fn collect_stream_returns_err_on_failing_stream() {
     let stream: motosan_ai::BoxStream = Box::pin(tokio_stream::iter(vec![Err(
         motosan_ai::MotosanError::Stream("boom".to_string()),

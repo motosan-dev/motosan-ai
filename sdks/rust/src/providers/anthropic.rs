@@ -20,6 +20,7 @@ use reqwest::Client;
 use serde_json::{json, Value};
 use std::pin::Pin;
 use std::task::Poll;
+use tokio_stream::StreamExt;
 
 pub struct AnthropicProvider {
     http: Client,
@@ -824,13 +825,17 @@ impl ProviderImpl for AnthropicProvider {
             ));
         }
 
-        let raw_stream = response.bytes_stream().eventsource();
+        let raw_stream = response
+            .bytes_stream()
+            .chain(tokio_stream::once(Ok("\n".into())))
+            .eventsource();
         let adapter = AnthropicStreamAdapter {
             inner: Box::pin(raw_stream),
             pending: std::collections::VecDeque::new(),
             current_tool_id: None,
             current_stop_reason: None,
             current_thinking_buf: None,
+            saw_terminal: false,
         };
 
         Ok(Box::pin(adapter))
@@ -866,6 +871,8 @@ struct AnthropicStreamAdapter {
     /// open this accumulator (we don't surface redacted content as
     /// thinking deltas).
     current_thinking_buf: Option<String>,
+    /// True once `message_stop` (or a terminal error) has been yielded.
+    saw_terminal: bool,
 }
 
 impl Stream for AnthropicStreamAdapter {
@@ -1085,6 +1092,7 @@ impl Stream for AnthropicStreamAdapter {
                             continue;
                         }
                         "message_stop" => {
+                            self.saw_terminal = true;
                             let done = match self.current_stop_reason.take() {
                                 Some(reason) => StreamEvent::done_with_stop_reason(reason),
                                 None => StreamEvent::done(),
@@ -1092,6 +1100,7 @@ impl Stream for AnthropicStreamAdapter {
                             return Poll::Ready(Some(Ok(done)));
                         }
                         "error" => {
+                            self.saw_terminal = true;
                             let err_type =
                                 payload["error"]["type"].as_str().unwrap_or("unknown_error");
                             let message = payload["error"]["message"]
@@ -1105,9 +1114,18 @@ impl Stream for AnthropicStreamAdapter {
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "anthropic ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -1131,6 +1149,7 @@ mod tests {
             current_tool_id: None,
             current_stop_reason: None,
             current_thinking_buf: None,
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");

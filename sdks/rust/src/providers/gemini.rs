@@ -379,6 +379,7 @@ impl ProviderImpl for GeminiProvider {
         let adapter = GeminiStreamAdapter {
             inner: Box::pin(sse),
             pending: VecDeque::new(),
+            saw_terminal: false,
         };
         Ok(Box::pin(adapter))
     }
@@ -396,6 +397,7 @@ struct GeminiStreamAdapter {
         >,
     >,
     pending: VecDeque<StreamEvent>,
+    saw_terminal: bool,
 }
 
 impl Stream for GeminiStreamAdapter {
@@ -479,6 +481,7 @@ impl Stream for GeminiStreamAdapter {
                     }
 
                     if let Some(reason) = finish_reason {
+                        self.saw_terminal = true;
                         let stop_reason = match reason {
                             "STOP" if has_tool_calls => StopReason::ToolUse,
                             "STOP" => StopReason::EndTurn,
@@ -496,9 +499,18 @@ impl Stream for GeminiStreamAdapter {
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "gemini ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -541,6 +553,7 @@ mod tests {
         let mut adapter = GeminiStreamAdapter {
             inner: Box::pin(inner),
             pending: VecDeque::new(),
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");

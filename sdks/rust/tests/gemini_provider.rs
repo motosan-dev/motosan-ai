@@ -27,6 +27,49 @@ fn fast_retry() -> RetryPolicy {
         .respect_retry_after(false)
 }
 
+#[tokio::test]
+async fn gemini_stream_eof_without_finish_reason_yields_incomplete_stream() {
+    let mut server = mockito::Server::new_async().await;
+    // Truncated: one text chunk, no finishReason frame ever arrives.
+    let body = sse_text("Hello", None);
+    server
+        .mock("POST", Matcher::Regex("streamGenerateContent".into()))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let provider = GeminiProvider::new("key", None, Some(server.url()));
+    let mut stream = provider
+        .stream(
+            ChatRequest::builder()
+                .messages(vec![Message::user("hi")])
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let mut saw_done = false;
+    let mut last_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ev) => saw_done |= ev.done,
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(!saw_done, "must not fabricate a done event on truncation");
+    match last_err.expect("EOF without finishReason must yield an error") {
+        MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "gemini ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+}
+
 fn no_retry() -> RetryPolicy {
     RetryPolicy::new()
         .max_retries(0)

@@ -655,9 +655,11 @@ struct OpenAIStreamAdapter {
     /// terminal `done` event when the `[DONE]` sentinel arrives — this
     /// avoids emitting two `done` events per stream.
     pending_stop_reason: Option<StopReason>,
-    /// Whether we have already emitted a terminal `done` event. Prevents
-    /// the EOF fallback from emitting a second one when the upstream
-    /// stream closes cleanly after the `[DONE]` sentinel.
+    /// Whether a terminal outcome was already yielded ([DONE] parsed, an
+    /// error surfaced, or the EOF arm resolved). The EOF arm combines this
+    /// with `pending_stop_reason` to decide done(stash) — finish_reason is
+    /// the semantic terminal — vs IncompleteStream when NEITHER signal
+    /// arrived.
     done_emitted: bool,
 }
 
@@ -844,18 +846,23 @@ impl Stream for OpenAIStreamAdapter {
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
                 Poll::Ready(None) => {
-                    // End of upstream stream. Guarantee the consumer always
-                    // sees exactly one terminal `done` event, even when the
-                    // provider closes the connection without sending
-                    // `[DONE]` and without any `finish_reason` chunk (some
-                    // non-conformant proxies do this).
+                    // M3 (amended 2026-07-17): upstream closed without the
+                    // `[DONE]` transport epilogue. A stashed finish_reason
+                    // is the SEMANTIC terminal — the stream is complete, so
+                    // emit the terminal done carrying it (narrow survival
+                    // of the pre-0.24 EOF flush, ONLY when finish_reason
+                    // was seen). EOF with NEITHER signal is truncation: a
+                    // typed error, never a fabricated done.
                     if !self.done_emitted {
                         self.done_emitted = true;
-                        let done = match self.pending_stop_reason.take() {
-                            Some(reason) => StreamEvent::done_with_stop_reason(reason),
-                            None => StreamEvent::done(),
-                        };
-                        return Poll::Ready(Some(Ok(done)));
+                        if let Some(reason) = self.pending_stop_reason.take() {
+                            return Poll::Ready(Some(Ok(StreamEvent::done_with_stop_reason(
+                                reason,
+                            ))));
+                        }
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "openai ended without a terminal event".to_string(),
+                        ))));
                     }
                     return Poll::Ready(None);
                 }

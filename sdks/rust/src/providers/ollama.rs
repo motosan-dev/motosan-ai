@@ -390,6 +390,7 @@ impl ProviderImpl for OllamaProvider {
         let adapter = OllamaStreamAdapter {
             inner: Box::pin(ndjson_stream),
             pending: std::collections::VecDeque::new(),
+            saw_terminal: false,
         };
 
         Ok(Box::pin(adapter))
@@ -401,6 +402,7 @@ impl ProviderImpl for OllamaProvider {
 struct OllamaStreamAdapter {
     inner: Pin<Box<dyn Stream<Item = Result<String, MotosanError>> + Send>>,
     pending: std::collections::VecDeque<StreamEvent>,
+    saw_terminal: bool,
 }
 
 impl Stream for OllamaStreamAdapter {
@@ -427,6 +429,7 @@ impl Stream for OllamaStreamAdapter {
                         .and_then(Value::as_bool)
                         .unwrap_or(false);
                     if done {
+                        self.saw_terminal = true;
                         return Poll::Ready(Some(Ok(StreamEvent::done())));
                     }
 
@@ -474,9 +477,18 @@ impl Stream for OllamaStreamAdapter {
                 Poll::Ready(Some(Err(e))) => {
                     // Inner NdjsonStream already yields a typed MotosanError; pass it
                     // through unchanged (re-wrapping would double the "stream error:" prefix).
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(e)));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "ollama ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -557,6 +569,7 @@ mod tests {
         let mut adapter = OllamaStreamAdapter {
             inner: Box::pin(inner),
             pending: std::collections::VecDeque::new(),
+            saw_terminal: false,
         };
 
         let item = adapter.next().await.expect("one item");

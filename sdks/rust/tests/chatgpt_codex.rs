@@ -31,6 +31,54 @@ fn no_retry() -> RetryPolicy {
         .max_delay_ms(0)
 }
 
+#[tokio::test]
+async fn codex_stream_eof_without_response_completed_yields_incomplete_stream() {
+    let mut server = mockito::Server::new_async().await;
+    // Truncated: response.created + one text delta, but the terminal
+    // `response.completed` frame never arrives.
+    let truncated = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"content_index\":0,\"delta\":\"Hi\",\"item_id\":\"msg_1\",\"output_index\":1}\n\n"
+    );
+    server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(truncated)
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let mut stream = provider
+        .stream(
+            ChatRequest::builder()
+                .messages(vec![Message::user("hi")])
+                .build(),
+        )
+        .await
+        .unwrap();
+
+    let mut saw_done = false;
+    let mut last_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ev) => saw_done |= ev.done,
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(!saw_done, "must not fabricate a done event on truncation");
+    match last_err.expect("EOF without response.completed must yield an error") {
+        MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "chatgpt-codex ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // stream() e2e
 // ---------------------------------------------------------------------------

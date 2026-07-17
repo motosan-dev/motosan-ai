@@ -749,19 +749,21 @@ async fn openai_stream_propagates_finish_reason_stop() {
 }
 
 #[tokio::test]
-async fn openai_stream_eof_flush_when_done_sentinel_missing() {
-    // Some non-conformant OpenAI-compatible proxies skip the `[DONE]` line.
-    // Adapter must still emit a terminal done event with stop_reason from
-    // the upstream end-of-stream fallback.
+async fn openai_stream_finish_reason_then_eof_completes_with_stop_reason() {
+    // Amended M3 rule (2026-07-17): `finish_reason` is the SEMANTIC
+    // terminal event; `[DONE]` is only the transport epilogue. EOF after a
+    // finish_reason chunk is a COMPLETE stream — the adapter emits done
+    // carrying the stashed stop_reason, NOT Err(IncompleteStream).
+    // (Adjusted survival of the pre-0.24
+    // `openai_stream_eof_flush_when_done_sentinel_missing` pin.)
     let mut server = mockito::Server::new_async().await;
     let sse_body = concat!(
         "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
-        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" // NOTE: no [DONE] sentinel
+        "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\n" // no [DONE]
     );
 
-    let mock = server
+    server
         .mock("POST", "/v1/chat/completions")
-        .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_body(sse_body)
@@ -776,33 +778,27 @@ async fn openai_stream_eof_flush_when_done_sentinel_missing() {
 
     let mut stream = provider.stream(request).await.expect("stream response");
     let mut events = Vec::new();
-    while let Some(event_item) = stream.next().await {
-        let event = event_item.expect("stream item should not fail");
-        events.push(event);
+    while let Some(item) = stream.next().await {
+        events.push(item.expect("finish_reason-terminated stream must not error"));
     }
 
     let done = events
         .iter()
         .find(|e| e.done)
-        .expect("EOF flush should still emit a done event when [DONE] sentinel is missing");
+        .expect("EOF after finish_reason emits the terminal done");
     assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
     assert_eq!(events.iter().filter(|e| e.done).count(), 1);
-
-    mock.assert_async().await;
+    assert_eq!(events[0].content, "hello");
 }
 
 #[tokio::test]
-async fn openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel() {
-    // Worst-case non-conformant proxy: stream closes after a text chunk
-    // with no `finish_reason` and no `[DONE]`. Adapter must still emit
-    // exactly one terminal `done` event so callers don't hang.
+async fn openai_stream_eof_without_terminal_yields_incomplete_stream() {
+    // Flip of pre-0.24 `openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel`.
     let mut server = mockito::Server::new_async().await;
-    // no finish_reason, no [DONE] — exercises the EOF-flush invariant.
     let sse_body = "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n";
 
-    let mock = server
+    server
         .mock("POST", "/v1/chat/completions")
-        .match_header("authorization", "Bearer test-key")
         .with_status(200)
         .with_header("content-type", "text/event-stream")
         .with_body(sse_body)
@@ -816,22 +812,24 @@ async fn openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel(
         .build();
 
     let mut stream = provider.stream(request).await.expect("stream response");
-    let mut events = Vec::new();
-    while let Some(event_item) = stream.next().await {
-        let event = event_item.expect("stream item should not fail");
-        events.push(event);
+    let mut text = String::new();
+    let mut last_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ev) => text.push_str(&ev.content),
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
     }
-
-    let done_count = events.iter().filter(|e| e.done).count();
-    assert_eq!(
-        done_count, 1,
-        "expected exactly one terminal done event, got {done_count}"
-    );
-    let done = events.iter().find(|e| e.done).unwrap();
-    assert_eq!(done.stop_reason, None, "no stop_reason was reported");
-    assert_eq!(events[0].content, "hello");
-
-    mock.assert_async().await;
+    assert_eq!(text, "hello", "deltas before truncation still arrive");
+    match last_err.expect("EOF without terminal must yield an error") {
+        MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "openai ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
 }
 
 #[tokio::test]

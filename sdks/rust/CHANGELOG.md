@@ -4,6 +4,9 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+- **Truncated streams now error instead of ending cleanly.** Every HTTP stream adapter (openai, anthropic, gemini, gemini-code-assist, chatgpt-codex, ollama) yields `Err(MotosanError::IncompleteStream("<provider> ended without a terminal event"))` when the upstream connection closes without the provider terminal event (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices / `message_stop` / `finishReason` / `response.completed` / `"done":true`). OpenAI amendment: `finish_reason` is the semantic terminal — EOF after a stashed finish_reason still emits `done(stop_reason)` and completes cleanly; only EOF with NEITHER signal errors. The v0.10.1 invariant "exactly one terminal done event even when upstream closes without `[DONE]`" is retired for that neither-signal case. New `MotosanError::IncompleteStream(String)` variant — enum addition breaks exhaustive matches.
+
 ## [0.23.0] - 2026-07-16
 
 ### Breaking

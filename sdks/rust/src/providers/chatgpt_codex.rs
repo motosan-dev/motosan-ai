@@ -283,6 +283,7 @@ impl ProviderImpl for ChatGptCodexProvider {
             seen_tool_ids: HashSet::new(),
             saw_tool_call: false,
             error: None,
+            saw_terminal: false,
         };
         Ok(Box::pin(adapter))
     }
@@ -323,6 +324,7 @@ struct ChatGptCodexStreamAdapter {
     /// A fatal stream error to surface on the next `poll_next` (top-level
     /// `error` / `response.failed`).
     error: Option<String>,
+    saw_terminal: bool,
 }
 
 impl ChatGptCodexStreamAdapter {
@@ -473,6 +475,7 @@ impl ChatGptCodexStreamAdapter {
                 };
                 self.pending
                     .push_back(StreamEvent::done_with_stop_reason(stop_reason));
+                self.saw_terminal = true;
             }
 
             // Fatal stream errors -> surfaced as Err on the next poll.
@@ -514,6 +517,7 @@ impl Stream for ChatGptCodexStreamAdapter {
             return Poll::Ready(Some(Ok(ev)));
         }
         if let Some(msg) = self.error.take() {
+            self.saw_terminal = true;
             return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
         }
 
@@ -534,14 +538,24 @@ impl Stream for ChatGptCodexStreamAdapter {
                         return Poll::Ready(Some(Ok(first)));
                     }
                     if let Some(msg) = self.error.take() {
+                        self.saw_terminal = true;
                         return Poll::Ready(Some(Err(MotosanError::Stream(msg))));
                     }
                     continue;
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    self.saw_terminal = true;
                     return Poll::Ready(Some(Err(MotosanError::Stream(e.to_string()))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    if !self.saw_terminal {
+                        self.saw_terminal = true;
+                        return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
+                            "chatgpt-codex ended without a terminal event".to_string(),
+                        ))));
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -747,6 +761,7 @@ mod tests {
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
+                saw_terminal: false,
             }
         }
 
@@ -925,6 +940,7 @@ mod tests {
                 seen_tool_ids: HashSet::new(),
                 saw_tool_call: false,
                 error: None,
+                saw_terminal: false,
             };
 
             let item = adapter.next().await.expect("one item");

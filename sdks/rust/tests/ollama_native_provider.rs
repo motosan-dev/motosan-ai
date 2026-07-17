@@ -13,6 +13,45 @@ fn build_provider(base_url: String) -> OllamaProvider {
     OllamaProvider::new(DEFAULT_OLLAMA_MODEL.to_string(), base_url)
 }
 
+#[tokio::test]
+async fn ollama_stream_eof_without_done_frame_yields_incomplete_stream() {
+    let mut server = mockito::Server::new_async().await;
+    // NDJSON truncated mid-stream: no `"done":true` terminal object.
+    let ndjson_body = "{\"message\":{\"role\":\"assistant\",\"content\":\"The\"},\"done\":false}\n";
+    server
+        .mock("POST", "/api/chat")
+        .with_status(200)
+        .with_header("content-type", "application/x-ndjson")
+        .with_body(ndjson_body)
+        .create_async()
+        .await;
+
+    let provider = build_provider(server.url());
+    let request = ChatRequest::builder()
+        .message(Message::user("hello"))
+        .build();
+
+    let mut stream = provider.stream(request).await.expect("stream response");
+    let mut saw_done = false;
+    let mut last_err = None;
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(ev) => saw_done |= ev.done,
+            Err(e) => {
+                last_err = Some(e);
+                break;
+            }
+        }
+    }
+    assert!(!saw_done, "must not fabricate a done event on truncation");
+    match last_err.expect("EOF without a done:true frame must yield an error") {
+        motosan_ai::MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "ollama ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+}
+
 fn build_provider_with_think(base_url: String) -> OllamaProvider {
     OllamaProvider::new(DEFAULT_OLLAMA_MODEL.to_string(), base_url).with_think(Some("on".into()))
 }
