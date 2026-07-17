@@ -25,6 +25,7 @@ from motosan_ai.types import (
     Role,
     StopReason,
     StreamEvent,
+    StreamEventType,
     Usage,
 )
 
@@ -82,7 +83,13 @@ def _parse_sse_event(data: str, state: _ChatGptCodexAdapterState) -> list[Stream
     ):
         delta = chunk.get("delta")
         if isinstance(delta, str) and delta:
-            out.append(StreamEvent(content=delta, done=False, event_type="thinking"))
+            out.append(
+                StreamEvent(
+                    content=delta,
+                    done=False,
+                    event_type=StreamEventType.thinking_delta,
+                )
+            )
 
     elif event_type == "response.output_item.added":
         item = chunk.get("item")
