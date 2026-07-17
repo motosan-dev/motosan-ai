@@ -141,3 +141,21 @@ Making it unconditional un-gates `stream.rs` entirely (goal 3). If rejected at e
 - `cargo hack check --each-feature` green in CI.
 - Public feature set unchanged (plus the `ollama-native` alias); `cargo metadata` resolved-deps
   diff is empty for every pre-existing feature.
+
+## Amendments (2026-07-17, planning-time verification at origin/main `b9bcc3e`)
+
+Two corrections surfaced while instantiating the migration into the M4 implementation plan
+(`docs/superpowers/plans/2026-07-17-stream-retry-m4-implementation.md`, Task 1):
+
+1. **`TimeoutConfig` placement.** It does not live in `providers/mod.rs`; it lives at
+   `client.rs:18` and backs the UNGATED public accessors
+   `Client::connect_timeout/read_idle_timeout/total_timeout`, which exist under
+   `--no-default-features` today. Placing it in `_http`-gated `transport/http.rs` would delete
+   public API from CLI-only builds (breaking). It moves to the ungated `transport/mod.rs` root
+   instead; everything else in Stratum 1 moves as written.
+2. **Acceptance criterion №1 refined.** The baseline count grew 34 → **45** (M3 additions), and
+   the literal post-migration `grep -rn 'feature = "gemini-code-assist"' src/` count is **16**,
+   not ≤3: 15 are single-feature Stratum-2 gates in `client.rs` per-provider wiring that §2
+   explicitly leaves unchanged, plus the provider's module decl. The enforceable form of the
+   original intent: shared-code files contain exactly **1** mention (the module decl) and
+   **zero `any(...)` enumerations anywhere** name the feature.
