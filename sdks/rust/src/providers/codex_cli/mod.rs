@@ -10,7 +10,8 @@
 //! shells out to `codex exec --json -`, writes the prompt to stdin, and parses
 //! the newline-delimited JSON event stream on stdout. The CLI handles
 //! authentication, tool execution, sandboxing, and approvals internally; we
-//! just surface the final `agent_message` text plus token usage.
+//! surface agent messages, token usage, session ids, and `tool_calls` as a
+//! record of tools the CLI executed internally.
 //!
 //! # One pipeline for chat and stream
 //!
@@ -25,9 +26,9 @@
 //!
 //! There is no explicit cancel handle. Spawned CLI children use
 //! `kill_on_drop(true)`: dropping the `chat()` future or returned [`BoxStream`]
-//! kills and reaps the child process. Stream drivers own and reap the child at the tail;
-//! use [`CodexCliProvider::timeout`] to bound runtime. A stalled stream read
-//! yields `Err(MotosanError::StreamReadTimeout(_))` and terminates the stream.
+//! terminates the child process. Stream drivers drain stderr concurrently and
+//! reap and validate the exit status before yielding terminal success. Use
+//! [`CodexCliProvider::timeout`] to bound read stalls.
 //!
 //! [`StreamEvent`]: crate::StreamEvent
 //!
@@ -429,12 +430,14 @@ impl CodexCliProvider {
     /// streaming. The event order is:
     ///
     /// 1. Optional `SessionStarted` event (from `thread.started.thread_id`),
-    /// 2. Zero or more `Text` events (preamble + final answer),
+    /// 2. Zero or more `Text` and tool-call lifecycle events,
     /// 3. Optional `Usage` event (from `turn.completed`),
     /// 4. A terminal `done` event.
     ///
-    /// Non-`agent_message` items (reasoning, command execution, file
-    /// changes, etc.) are filtered out.
+    /// Completed command executions and MCP tool calls become `tool_calls`
+    /// that record work Codex already performed; they are not requests for
+    /// the caller to execute. Reasoning, file-change, and unsupported item
+    /// kinds are filtered out.
     ///
     /// # Errors
     ///
@@ -458,6 +461,7 @@ impl CodexCliProvider {
             retry_after: None,
             request_id: None,
         })?;
+        let mut stderr = crate::transport::cli::StderrCapture::start_child(&mut child);
 
         {
             let mut stdin = child
@@ -469,13 +473,16 @@ impl CodexCliProvider {
                     retry_after: None,
                     request_id: None,
                 })?;
-            stdin.write_all(composed.as_bytes()).await.map_err(|e| {
-                MotosanError::ProviderError {
-                    message: format!("failed to write to codex stdin: {e}"),
-                    status_code: None,
-                    retry_after: None,
-                    request_id: None,
-                }
+            crate::transport::cli::poll_with_stderr(
+                stdin.write_all(composed.as_bytes()),
+                &mut stderr,
+            )
+            .await
+            .map_err(|e| MotosanError::ProviderError {
+                message: format!("failed to write to codex stdin: {e}"),
+                status_code: None,
+                retry_after: None,
+                request_id: None,
             })?;
         }
 
@@ -491,14 +498,33 @@ impl CodexCliProvider {
 
         let reader = BufReader::new(stdout);
 
-        Ok(drive_lines(Some(child), reader, config.timeout))
+        Ok(drive_lines_with_stderr(
+            Some(child),
+            reader,
+            config.timeout,
+            stderr,
+        ))
     }
 }
 
+#[cfg(test)]
 pub(crate) fn drive_lines<R>(
     mut child: Option<tokio::process::Child>,
     reader: R,
     read_timeout: Option<Duration>,
+) -> BoxStream
+where
+    R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
+{
+    let stderr = crate::transport::cli::StderrCapture::start(&mut child);
+    drive_lines_with_stderr(child, reader, read_timeout, stderr)
+}
+
+fn drive_lines_with_stderr<R>(
+    mut child: Option<tokio::process::Child>,
+    reader: R,
+    read_timeout: Option<Duration>,
+    mut stderr: crate::transport::cli::StderrCapture,
 ) -> BoxStream
 where
     R: tokio::io::AsyncBufRead + Unpin + Send + 'static,
@@ -509,26 +535,45 @@ where
         let mut lines = reader.lines();
         loop {
             let next = match read_timeout {
-                Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
+                Some(dur) => match tokio::time::timeout(
+                    dur,
+                    crate::transport::cli::poll_with_stderr(
+                        lines.next_line(),
+                        &mut stderr,
+                    ),
+                ).await {
                     Ok(res) => res,
                     Err(_) => {
-                        reap_child(&mut child, true).await;
+                        crate::transport::cli::terminate(&mut child, &mut stderr).await;
                         yield Err(MotosanError::StreamReadTimeout(dur.as_secs()));
                         break;
                     }
                 },
-                None => lines.next_line().await,
+                None => crate::transport::cli::poll_with_stderr(
+                    lines.next_line(),
+                    &mut stderr,
+                ).await,
             };
 
             let line = match next {
                 Ok(Some(line)) => line.trim().to_string(),
                 // EOF/read error before a terminal event surfaces an abnormal child exit.
                 Ok(None) => {
-                    yield Err(abnormal_exit_error(&mut child, None).await);
+                    yield Err(crate::transport::cli::abnormal_exit_error(
+                        &mut child,
+                        &mut stderr,
+                        CLI_LABEL,
+                        None,
+                    ).await);
                     break;
                 }
                 Err(e) => {
-                    yield Err(abnormal_exit_error(&mut child, Some(e)).await);
+                    yield Err(crate::transport::cli::abnormal_exit_error(
+                        &mut child,
+                        &mut stderr,
+                        CLI_LABEL,
+                        Some(e),
+                    ).await);
                     break;
                 }
             };
@@ -551,7 +596,14 @@ where
                     }
                     stream_json::NdjsonAction::Done { usage, done } => {
                         let _ = done;
-                        // Reaped at the loop tail AFTER the terminal yields below.
+                        if let Err(err) = crate::transport::cli::validate_terminal_exit(
+                            &mut child,
+                            &mut stderr,
+                            CLI_LABEL,
+                        ).await {
+                            yield Err(err);
+                            break;
+                        }
                         if let Some(usage_event) = usage {
                             yield Ok(usage_event);
                         }
@@ -559,7 +611,7 @@ where
                         break;
                     }
                     stream_json::NdjsonAction::Error(msg) => {
-                        reap_child(&mut child, true).await;
+                        crate::transport::cli::terminate(&mut child, &mut stderr).await;
                         yield Err(MotosanError::ProviderError {
                             message: msg,
                             status_code: None,
@@ -571,146 +623,10 @@ where
                 }
             }
         }
-
-        reap_child(&mut child, false).await;
     })
 }
 
-async fn reap_child(child: &mut Option<tokio::process::Child>, kill: bool) {
-    if let Some(mut c) = child.take() {
-        if kill {
-            // SIGKILL unblocks the child immediately, so wait() returns promptly.
-            let _ = c.start_kill();
-            let _ = c.wait().await;
-        } else {
-            // Cooperative reap (success/EOF path) — but never hang the stream: if
-            // the child does not exit promptly (e.g. blocked on an undrained stderr
-            // pipe), SIGKILL it so the stream can always terminate.
-            if tokio::time::timeout(Duration::from_secs(5), c.wait())
-                .await
-                .is_err()
-            {
-                let _ = c.start_kill();
-                let _ = c.wait().await;
-            }
-        }
-    }
-}
-
 const CLI_LABEL: &str = "codex CLI";
-
-async fn abnormal_exit_error(
-    child: &mut Option<tokio::process::Child>,
-    read_err: Option<std::io::Error>,
-) -> MotosanError {
-    use std::future::{poll_fn, Future};
-    use std::pin::Pin;
-    use std::task::Poll;
-    use tokio::io::{AsyncRead, ReadBuf};
-
-    let mut status = "unknown".to_string();
-    let mut stderr_excerpt = String::new();
-
-    if let Some(mut c) = child.take() {
-        let mut stderr = c.stderr.take();
-        let mut stderr_buf = Vec::with_capacity(8000);
-        let mut read_buf = [0_u8; 8192];
-        let mut child_done = false;
-        let mut stderr_done = stderr.is_none();
-        let mut wait_failed = false;
-
-        let collection_timed_out = {
-            let wait = c.wait();
-            tokio::pin!(wait);
-            let collect = poll_fn(|cx| {
-                if !child_done {
-                    match wait.as_mut().poll(cx) {
-                        Poll::Ready(Ok(exit)) => {
-                            child_done = true;
-                            status = exit
-                                .code()
-                                .map_or_else(|| exit.to_string(), |code| code.to_string());
-                        }
-                        Poll::Ready(Err(_)) => {
-                            wait_failed = true;
-                            return Poll::Ready(());
-                        }
-                        Poll::Pending => {}
-                    }
-                }
-
-                if !stderr_done {
-                    if let Some(pipe) = stderr.as_mut() {
-                        let mut reads = 0;
-                        loop {
-                            let read = {
-                                let mut buf = ReadBuf::new(&mut read_buf);
-                                match Pin::new(&mut *pipe).poll_read(cx, &mut buf) {
-                                    Poll::Ready(Ok(())) => Poll::Ready(Ok(buf.filled().len())),
-                                    Poll::Ready(Err(err)) => Poll::Ready(Err(err)),
-                                    Poll::Pending => Poll::Pending,
-                                }
-                            };
-                            match read {
-                                Poll::Ready(Ok(0)) | Poll::Ready(Err(_)) => {
-                                    stderr_done = true;
-                                    break;
-                                }
-                                Poll::Ready(Ok(n)) => {
-                                    let retained = (8000 - stderr_buf.len()).min(n);
-                                    stderr_buf.extend_from_slice(&read_buf[..retained]);
-                                    reads += 1;
-                                    if reads == 16 {
-                                        cx.waker().wake_by_ref();
-                                        break;
-                                    }
-                                }
-                                Poll::Pending => break,
-                            }
-                        }
-                    }
-                }
-
-                if child_done && stderr_done {
-                    Poll::Ready(())
-                } else {
-                    Poll::Pending
-                }
-            });
-
-            tokio::time::timeout(Duration::from_secs(5), collect)
-                .await
-                .is_err()
-        };
-
-        if wait_failed || (collection_timed_out && !child_done) {
-            let _ = c.start_kill();
-            if let Ok(exit) = c.wait().await {
-                status = exit
-                    .code()
-                    .map_or_else(|| exit.to_string(), |code| code.to_string());
-            }
-        }
-
-        stderr_excerpt = String::from_utf8_lossy(&stderr_buf)
-            .trim()
-            .chars()
-            .take(2000)
-            .collect();
-    }
-
-    let detail = if !stderr_excerpt.is_empty() {
-        stderr_excerpt
-    } else if let Some(err) = read_err {
-        format!("stdout read error: {err}")
-    } else {
-        "stream ended before a terminal event".to_string()
-    };
-
-    MotosanError::Stream(format!(
-        "{CLI_LABEL} exited unexpectedly (status {status}): {detail}"
-    ))
-}
 
 impl Default for CodexCliProvider {
     /// Equivalent to [`CodexCliProvider::new`].
@@ -850,6 +766,53 @@ mod tests {
                 Err(crate::error::MotosanError::StreamReadTimeout(_)) => {}
                 other => panic!("expected StreamReadTimeout, got {other:?}"),
             }
+        }
+
+        #[tokio::test]
+        async fn lifecycle_rejects_nonzero_exit_after_success_terminal() {
+            let bin = write_fake_cli("late-exit", "");
+            std::fs::write(
+                &bin,
+                format!(
+                    "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{TRANSCRIPT}\nNDJSON\n\
+                     printf 'late codex failure\\n' >&2\nsleep 0.2\nexit 7\n"
+                ),
+            )
+            .expect("write late-exit script");
+            let result = CodexCliProvider::with_path(bin.clone())
+                .chat(user_request("hi"))
+                .await;
+            let _ = std::fs::remove_file(&bin);
+
+            match result {
+                Err(crate::error::MotosanError::Stream(message)) => {
+                    assert!(message.contains("status"), "got: {message}");
+                    assert!(message.contains('7'), "got: {message}");
+                    assert!(message.contains("late codex failure"), "got: {message}");
+                }
+                other => panic!("expected Stream error for exit 7, got {other:?}"),
+            }
+        }
+
+        #[tokio::test]
+        async fn lifecycle_drains_large_stderr_before_success_terminal() {
+            let bin = write_fake_cli("large-stderr", "");
+            std::fs::write(
+                &bin,
+                format!(
+                    "#!/bin/sh\ncat > /dev/null\nyes x | head -c 1048576 >&2\n\
+                     cat <<'NDJSON'\n{TRANSCRIPT}\nNDJSON\n"
+                ),
+            )
+            .expect("write large-stderr script");
+            let result = CodexCliProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_secs(2))
+                .chat(user_request("hi"))
+                .await;
+            let _ = std::fs::remove_file(&bin);
+
+            let response = result.expect("large stderr must not block stdout");
+            assert_eq!(response.stop_reason, StopReason::EndTurn);
         }
     }
 
