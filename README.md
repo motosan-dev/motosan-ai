@@ -26,18 +26,18 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.24.0 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.17.0 |
-| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.14.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.25.0 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.18.0 |
+| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.15.0 |
 
 ## Install
 
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.24.0", features = ["anthropic"] }
-# features: anthropic | openai | minimax | ollama | ollama_native | full
-#           gemini | gemini-code-assist | claude-code | codex-cli | gemini-cli
+motosan-ai = { version = "0.25.0", features = ["anthropic"] }
+# features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
+#           gemini | gemini-code-assist | chatgpt-codex | claude-code | codex-cli | gemini-cli
 ```
 
 ```bash
@@ -201,7 +201,7 @@ let client = Client::builder()
 let response = client.chat(vec![Message::user("Hello")]).await?;
 ```
 
-> **CLI backend limitations (Claude Code / Codex CLI / Gemini CLI):** Tool calls run internally by the CLI and are **not** surfaced on `ChatResponse.tool_calls` (always empty). All CLI backends require the corresponding binary installed and authenticated. In Rust, enable with `--features claude-code`, `--features codex-cli`, or `--features gemini-cli`. Python currently includes `ClaudeCodeClient` and `CodexCliClient` as built-in subprocess backends.
+> **CLI backend semantics (Claude Code / Codex CLI / Gemini CLI):** Tools run internally by the CLI. Since Rust 0.25.0 / Python 0.18.0, `ChatResponse.tool_calls` records the tools the CLI already executed — never a request to execute — and a completed CLI turn always reports `stop_reason = end_turn`. All CLI backends require the corresponding binary installed and authenticated. In Rust, enable with `--features claude-code`, `--features codex-cli`, or `--features gemini-cli`. Python includes `ClaudeCodeClient`, `CodexCliClient`, and `GeminiCliClient` as built-in subprocess backends (`Provider.claude_code` / `Provider.codex_cli` / `Provider.gemini_cli`).
 
 ## Features
 

@@ -4,6 +4,19 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-07-17
+
+### Breaking
+- CLI chat/stream contract (`claude-code` / `codex-cli` / `gemini-cli`): a successfully completed CLI turn always reports `stop_reason = Some(StopReason::EndTurn)` on both `chat()` and `stream()`. CLI backends never report `ToolUse` — their tools are executed internally by the CLI; `ToolUse` means "caller must execute tools", which a CLI backend never requests, and reporting it made agent loops re-execute already-executed tools. The internal `cli_terminal_stop_reason(saw_tool_call)` helper is retired; the terminal stream event is always `done_with_stop_reason(EndTurn)`. Migration: code that branched on `StopReason::ToolUse` after a CLI turn should treat `ChatResponse.tool_calls` as the record of already-executed tools and branch on `EndTurn`.
+- `chat()` for all three CLI backends is reimplemented as stream delegation (collect the provider's own `stream()`), so `tool_calls` / `thinking` / `usage` / `session_id` populate identically on both paths. `ChatResponse.tool_calls` for CLI backends is **no longer always empty** — it records the tools the CLI already executed (never a request to execute). One documented parity exception: `chat()` backfills `ChatResponse.model` from provider config when the collected value is empty. The `chat()` failure surface shifts to the stream-path variants (`StreamReadTimeout` on stalls, stream error variants on abnormal CLI exit — no longer the single-shot mappings), and `codex-cli` `chat()` no longer splits the preamble into `thinking` (the old split was a post-hoc whole-transcript heuristic, unrepresentable in a stream: content is the concatenation, `thinking` is `None`). The newly-dead single-shot invoke path was removed.
+
+### Added
+- `motosan_ai::auth` (ungated): `#[async_trait] pub trait TokenSource: Send + Sync + Debug { async fn access_token(&self) -> Result<String, MotosanError>; }` plus `StaticTokenSource`. `ChatGptCodexProvider` stores `Arc<dyn TokenSource>` — `new()` keeps its exact signature and wraps the plain token in `StaticTokenSource`; a `with_token_source` builder is added; `Debug` never prints token material — and resolves the bearer token at the top of **every retry attempt** (`send_with_retry_async_build`; the pre-existing `send_with_retry` is now a thin wrapper over it, preserving the single M2 retry engine and `on_retry`). `ClientBuilder::chatgpt_codex_token_source(Arc<dyn TokenSource>)` threads a custom source through the facade. The SDK stays decoupled from the oauth crates — a refreshing `TokenSource` over the workspace `codex-oauth` crate ships as an `#[ignore]`d live test.
+- `ollama-native` feature alias for `ollama_native`.
+
+### Changed
+- Feature architecture: private umbrella features `_http = [dep:reqwest, dep:chrono, dep:eventsource-stream, dep:tokio]` and `_cli = [dep:tokio, dep:async-stream]` replace the per-provider `dep:` lists; `tokio-stream` is an unconditional dependency (and `stream.rs` loses its feature gate); the HTTP-shared helpers (`send_with_retry`, `observe_and_sleep`, `parse_retry_after`, `extract_request_id`, `is_retryable_status`, `is_retryable_network_error`, `map_http_error`, `RETRY_AFTER_CAP`, `TimeoutConfig`) move from `providers/mod.rs` to `src/transport/http.rs` behind one `#[cfg(feature = "_http")]` gate. Public feature set unchanged (plus the `ollama-native` alias); resolved dependencies per pre-existing feature are identical. CI adds `cargo hack check --each-feature`.
+
 ## [0.24.0] - 2026-07-17
 
 ### Breaking

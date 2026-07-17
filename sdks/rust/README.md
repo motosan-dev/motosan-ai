@@ -106,17 +106,16 @@ All default-off (`default = []`). Public provider features:
 
 - `anthropic`
 - `openai`
-- `minimax` (routing alias — Anthropic-compatible endpoint)
+- `minimax`
 - `ollama` (OpenAI-compatible mode)
-- `ollama-native` (native `/api/chat` endpoint with NDJSON streaming)
-- `ollama_native` (permanent alias for `ollama-native`, kept for backwards compatibility)
+- `ollama_native` (native `/api/chat` endpoint with NDJSON streaming; `ollama-native` is an equivalent alias since 0.25.0)
 - `gemini` (Google Generative AI HTTP API)
 - `gemini-code-assist` (Google Cloud Code Assist HTTP API; depends on `gemini`)
-- `chatgpt-codex` (ChatGPT-backend Responses HTTP API)
+- `chatgpt-codex` (ChatGPT-backend Responses API; OAuth bearer token, no API key)
 - `claude-code` (local Claude Code CLI backend)
 - `codex-cli` (local Codex CLI backend)
 - `gemini-cli` (local Gemini CLI backend)
-- `full` (every HTTP provider above)
+- `full` (enables HTTP providers: `anthropic`, `openai`, `minimax`, `ollama`, `ollama_native`, `ollama-native`, `gemini`, `gemini-code-assist`, `chatgpt-codex`)
 
 ### Feature architecture rules
 
@@ -336,7 +335,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.24.0", features = ["claude-code"] }
+motosan-ai = { version = "0.25.0", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -436,7 +435,7 @@ All setters return `Self` for chaining. Omitted setters leave the corresponding 
 
 Notes:
 - Authentication: `claude` uses your existing local login state — motosan-ai does not pass any credentials through.
-- Blocking `ChatResponse.tool_calls` is always empty — tools run inside the CLI and are not folded into `chat()` responses.
+- Blocking `chat()` delegates to `stream()` + collect (since 0.25.0): `ChatResponse.tool_calls` records the tools the CLI already executed — never a request to execute — and a completed turn always reports `StopReason::EndTurn`.
 - `stream()` surfaces CLI tool-use blocks as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd` events.
 - Argv order is stable and locked by the `common_args_full_loadout_order_is_stable` unit test. Changing the order may break callers that grep spawned command lines for debugging.
 - Live integration tests that actually spawn `claude` and verify each flag group are gated behind `#[ignore]` — run with `cargo test --features claude-code -- --ignored`.
@@ -446,7 +445,7 @@ Notes:
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.24.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.25.0", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -498,8 +497,7 @@ let stream = client.stream(request).await?;
 
 Notes:
 - Codex emits **complete** `agent_message` items, not token deltas — `stream()` yields one text event per finalized message.
-- `chat()` treats the **last** `agent_message` as `ChatResponse.content` and folds prior messages (preamble / tool narration) into `ChatResponse.thinking`.
-- Blocking `ChatResponse.tool_calls` is always empty — Codex tool invocations are not folded into `chat()` responses.
+- Blocking `chat()` delegates to `stream()` + collect (since 0.25.0): `ChatResponse.tool_calls` records the Codex tool invocations the CLI already executed, and a completed turn always reports `StopReason::EndTurn`.
 - `stream()` surfaces `command_execution` and `mcp_tool_call` items as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd` events.
 - Authentication: Codex CLI uses `CODEX_API_KEY` or `~/.codex/auth.json`, not `OPENAI_API_KEY`.
 - `agent_mode(true)` passes `--full-auto` (workspace-write sandbox + approvals off); can coexist with an explicit `sandbox()`.
@@ -510,7 +508,7 @@ Notes:
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
 ```toml
-motosan-ai = { version = "0.24.0", features = ["gemini-cli"] }
+motosan-ai = { version = "0.25.0", features = ["gemini-cli"] }
 ```
 
 **Option A — via `Client::builder()`**:
@@ -550,7 +548,7 @@ Notes:
 - **System prompts**: Gemini CLI has no `--system-prompt` flag, so motosan-ai merges system text into the stdin payload as a blank-line-separated prefix. This matches how the CLI treats `GEMINI.md` context.
 - **Streaming**: Gemini emits delta chunks (`{"type":"message","role":"assistant","content":"...","delta":true}`) followed by a terminal `{"type":"result","stats":{...}}` that carries token usage. Both `chat()` and `stream()` use the same parser.
 - **Usage**: populated from `result.stats.input_tokens` / `output_tokens` / `cached` (mapped to `cache_read_input_tokens`). Gemini CLI does not expose cache-creation tokens.
-- **Tool calls**: blocking `ChatResponse.tool_calls` is always empty, but `stream()` surfaces Gemini `tool_use` events as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd`. Gemini `tool_result` events are ignored.
+- **Tool calls**: blocking `chat()` delegates to `stream()` + collect (since 0.25.0), so `ChatResponse.tool_calls` records already-executed Gemini `tool_use` events; `stream()` surfaces them as `ToolCallStart` → `ToolCallArgs` → `ToolCallEnd`, a completed turn always reports `StopReason::EndTurn`, and Gemini `tool_result` events are ignored.
 - **Model selection**: `-m` is forwarded when the model string is non-empty and not `"default"` (case-insensitive).
 
 ## Publishing

@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-07-17
+
 ### Added
 - `ChatGptCodexProvider` and `ClientBuilder.chatgptCodex` accept an async token
   source: `accessToken: string | TokenSource` where `TokenSource = () => Promise<string>`
