@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
@@ -314,58 +315,18 @@ class GeminiCliClient:
         return args
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        system, user_prompt = _messages_to_prompt(request.messages)
-        if request.system:
-            system = request.system
-        stdin_payload = _merge_system_into_prompt(system, user_prompt)
-        args = self._build_args(model=request.model)
+        """Collect :meth:`stream` into one response (F4 delegation).
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._config.cwd,
-            env=self._child_env(),
-        )
-        try:
-            if self._config.timeout_secs is None:
-                stdout, stderr = await proc.communicate(stdin_payload.encode())
-            else:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(stdin_payload.encode()),
-                    timeout=self._config.timeout_secs,
-                )
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
-            raise ProviderError(f"gemini CLI timed out after {self._config.timeout_secs}s") from exc
-
-        if proc.returncode != 0:
-            raise ProviderError(
-                f"gemini CLI exited with {proc.returncode}: {stderr.decode().strip()}"
-            )
-
-        content_parts: list[str] = []
-        usage = Usage(0, 0)
-        session_id: str | None = None
-        for raw in stdout.decode().splitlines():
-            for event in _parse_jsonl_line(raw):
-                if event.session_id and session_id is None:
-                    session_id = event.session_id
-                elif event.event_type == "text" and event.content:
-                    content_parts.append(event.content)
-                elif event.event_type == "usage" and event.usage is not None:
-                    usage = event.usage
-
-        return ChatResponse(
-            content="".join(content_parts),
-            tool_calls=[],
-            model=request.model or self._config.model or "",
-            usage=usage,
-            stop_reason=StopReason.end_turn,
-            session_id=session_id,
-        )
+        ``tool_calls`` is the record of tools the CLI already executed; a
+        completed turn always reports ``StopReason.end_turn``. Parity
+        exception: ``model`` is backfilled from the request or client
+        config. Error mapping follows the stream path: per-read stalls
+        raise ``ProviderError``; result failures raise ``ProviderError``
+        via the parser; early child death raises ``StreamError``.
+        """
+        response = await collect_stream(self.stream(request))
+        response.model = request.model or self._config.model or ""
+        return response
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         system, user_prompt = _messages_to_prompt(request.messages)
@@ -382,7 +343,6 @@ class GeminiCliClient:
             cwd=self._config.cwd,
             env=self._child_env(),
         )
-        saw_tool_call = False
         saw_done = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
@@ -424,13 +384,11 @@ class GeminiCliClient:
                     )
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
-                    if event.event_type == "tool_call_start":
-                        saw_tool_call = True
                     if event.done:
                         saw_done = True
-                        event.stop_reason = (
-                            StopReason.tool_use if saw_tool_call else StopReason.end_turn
-                        )
+                        # F4: the CLI executes tools internally; a completed
+                        # turn always ends the turn — never a tool_use request.
+                        event.stop_reason = StopReason.end_turn
                     yield event
                     if event.done:
                         return
