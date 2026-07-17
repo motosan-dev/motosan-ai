@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import replace
 from enum import StrEnum
 from types import TracebackType
@@ -73,6 +73,7 @@ class Client:
         account_id: str | None = None,
         *,
         reasoning_effort: str | None = None,
+        token_source: Callable[[], Awaitable[str]] | None = None,
         ollama_native: bool = False,
         ollama_think: bool = False,
         ollama_keep_alive: str | None = None,
@@ -108,8 +109,8 @@ class Client:
                 read_idle_timeout=read_idle_timeout,
             )
         elif provider_value == Provider.openai_chatgpt:
-            if not access_token:
-                raise ConfigError("openai_chatgpt requires access_token")
+            if not access_token and token_source is None:
+                raise ConfigError("openai_chatgpt requires access_token or token_source")
             if not account_id:
                 raise ConfigError("openai_chatgpt requires account_id")
             self.api_key = ""
@@ -118,6 +119,7 @@ class Client:
                 account_id=account_id,
                 model=model,
                 base_url=base_url,
+                token_source=token_source,
                 connect_timeout=connect_timeout,
                 read_idle_timeout=read_idle_timeout,
             ).reasoning_effort(reasoning_effort)
@@ -270,6 +272,7 @@ class Client:
         reasoning_effort: str | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        token_source: Callable[[], Awaitable[str]] | None = None,
     ) -> Client:
         return cls(
             provider=Provider.openai_chatgpt,
@@ -280,6 +283,7 @@ class Client:
             reasoning_effort=reasoning_effort,
             max_retries=max_retries,
             retry_policy=retry_policy,
+            token_source=token_source,
         )
 
     @classmethod
