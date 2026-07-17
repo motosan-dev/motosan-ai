@@ -81,6 +81,22 @@ def test_stream_event_type_values():
     assert StreamEventType.usage == "usage"
 
 
+def test_stream_event_type_thinking_members():
+    assert StreamEventType.thinking_delta == "thinking_delta"
+    assert StreamEventType.thinking_done == "thinking_done"
+    # Full M4/F2 vocabulary. Note: NO "done" member — done is a bool field
+    # on StreamEvent, never an event_type.
+    assert {m.value for m in StreamEventType} == {
+        "text",
+        "tool_call_start",
+        "tool_call_args",
+        "tool_call_end",
+        "usage",
+        "thinking_delta",
+        "thinking_done",
+    }
+
+
 def test_stream_event_new_optional_fields_default_none():
     ev = StreamEvent(content="hi", done=False)
     assert ev.stop_reason is None

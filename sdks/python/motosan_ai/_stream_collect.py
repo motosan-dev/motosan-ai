@@ -12,14 +12,15 @@ from motosan_ai.types import ChatResponse, StopReason, StreamEvent, ToolCall, Us
 async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     """Collect a stream into one ChatResponse.
 
-    Handles text, thinking, tool-call start/args/end, usage, and terminal
-    stop_reason events. Malformed streamed tool arguments are treated as an
-    empty object to match provider collector behavior. A mid-stream provider
-    error (StreamError / NetworkError / ProviderError) raised by ``events``
-    propagates out of this function uncollected.
+    Handles text, thinking_delta/thinking_done, tool-call start/args/end,
+    usage, and terminal stop_reason events. thinking_done text takes
+    priority over concatenated thinking_delta fallback. Malformed streamed
+    tool arguments are treated as an empty object to match provider
+    collector behavior. A mid-stream provider error (StreamError /
+    NetworkError / ProviderError) raised by ``events`` propagates out of
+    this function uncollected.
     """
     content = ""
-    thinking = ""
     tool_calls: list[ToolCall] = []
     usage = Usage(0, 0)
     stop_reason: StopReason | None = None
@@ -29,15 +30,28 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     current_tc_args = ""
     session_id: str | None = None
 
+    # Thinking accumulation (mirrors Rust stream.rs). thinking_delta_buf
+    # collects every thinking_delta as a fallback in case the provider
+    # does not emit thinking_done. thinking_done_buf holds the explicit
+    # final text from the most recent thinking_done and takes priority
+    # on assembly.
+    thinking_delta_buf = ""
+    thinking_done_buf: str | None = None
+
     async for event in events:
         # last-wins on session_id (HTTP providers never set it, so usually None);
-        # CLI readback uses the provider chat()/stream() first-wins path, not this.
+        # CLI providers emit exactly one session event per stream.
         if event.session_id is not None:
             session_id = event.session_id
         if event.event_type == "text" and event.content:
             content += event.content
-        elif event.event_type == "thinking" and event.content:
-            thinking += event.content
+        elif event.event_type == "thinking_delta" and event.content:
+            thinking_delta_buf += event.content
+        elif event.event_type == "thinking_done":
+            # thinking_done carries the full text; it wins over the delta
+            # accumulator. Clear deltas so a second block starts fresh.
+            thinking_done_buf = event.content
+            thinking_delta_buf = ""
         elif event.event_type == "tool_call_start":
             current_tc_id = event.tool_call_id or ""
             current_tc_name = event.tool_call_name or ""
@@ -77,12 +91,18 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
     if stop_reason is None:
         stop_reason = StopReason.tool_use if tool_calls else StopReason.end_turn
 
+    if thinking_done_buf is not None:
+        # Explicit empty thinking block -> treat as none (Rust parity).
+        thinking = thinking_done_buf or None
+    else:
+        thinking = thinking_delta_buf or None
+
     return ChatResponse(
         content=content,
         tool_calls=tool_calls,
         model="",
         usage=usage,
         stop_reason=stop_reason,
-        thinking=thinking or None,
+        thinking=thinking,
         session_id=session_id,
     )

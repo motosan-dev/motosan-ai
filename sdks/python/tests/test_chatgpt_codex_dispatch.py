@@ -51,3 +51,26 @@ def test_client_chatgpt_codex_threads_reasoning_effort_default():
 def test_client_chatgpt_codex_reasoning_effort_defaults_none():
     c = Client.chatgpt_codex(access_token="tok", account_id="acct-123")
     assert c._provider._reasoning_effort is None
+
+
+def test_client_chatgpt_codex_accepts_token_source_without_access_token():
+    async def source() -> str:
+        return "tok"
+
+    c = Client.chatgpt_codex(account_id="acct-123", token_source=source)
+    assert isinstance(c._provider, ChatGptCodexProvider)
+    assert c._provider.token_source is source
+    assert c._provider.access_token is None
+
+
+def test_client_chatgpt_codex_token_source_still_requires_account_id():
+    async def source() -> str:
+        return "tok"
+
+    with pytest.raises(ConfigError, match="account_id"):
+        Client.chatgpt_codex(token_source=source)
+
+
+def test_client_chatgpt_codex_error_mentions_token_source():
+    with pytest.raises(ConfigError, match="access_token or token_source"):
+        Client.chatgpt_codex(account_id="acct-123")

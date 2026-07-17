@@ -7,6 +7,7 @@ import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
@@ -111,34 +112,6 @@ def _raise_on_error_result(event: dict) -> None:
     parts = [p for p in (subtype, result_text) if isinstance(p, str) and p]
     detail = ": ".join(parts) if parts else "unknown error"
     raise StreamError(f"claude CLI reported an error result: {detail}")
-
-
-def _parse_agent_json(raw: str) -> tuple[str, Usage, str | None]:
-    """Parse JSON output from agent mode: ``result``, ``usage``, ``session_id``.
-
-    Raises :class:`~motosan_ai.error.StreamError` when the payload reports an
-    error result (``is_error: true`` or an ``error_*`` subtype).
-    """
-    try:
-        v = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise ProviderError(f"failed to parse claude JSON output: {e}") from e
-
-    if isinstance(v, dict):
-        _raise_on_error_result(v)
-
-    text = v.get("result", "")
-    u = v.get("usage", {})
-    sid = v.get("session_id")
-    session_id = sid if isinstance(sid, str) and sid else None
-    return (
-        text,
-        Usage(
-            input_tokens=int(u.get("input_tokens", 0)),
-            output_tokens=int(u.get("output_tokens", 0)),
-        ),
-        session_id,
-    )
 
 
 def _parse_ndjson_line(line: str) -> list[StreamEvent]:
@@ -446,8 +419,6 @@ class ClaudeCodeClient:
             args.extend(["--output-format", output_format])
             if output_format == "stream-json":
                 args.append("--verbose")
-        elif self._config.agent_mode:
-            args.extend(["--output-format", "json"])
 
         if self._config.bare:
             args.append("--bare")
@@ -541,62 +512,21 @@ class ClaudeCodeClient:
         return args
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        """Invoke ``claude --print`` and collect the output."""
-        msg_system, user_prompt = _messages_to_prompt(request.messages)
-        system_prompt = request.system or msg_system
+        """Collect :meth:`stream` into one response (F4 delegation).
 
-        args = self._build_args(
-            model=request.model,
-            system_prompt=system_prompt,
-        )
-
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._config.cwd,
-            env=self._subprocess_env(),
-        )
-
-        timeout = self._config.timeout_secs
-        try:
-            if timeout is None:
-                stdout, stderr = await proc.communicate(user_prompt.encode())
-            else:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(user_prompt.encode()),
-                    timeout=timeout,
-                )
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
-            raise ProviderError(f"claude CLI timed out after {timeout} seconds") from exc
-
-        if proc.returncode != 0:
-            raise ProviderError(
-                f"claude CLI exited with {proc.returncode}: {stderr.decode().strip()}"
-            )
-
-        raw = stdout.decode()
-
-        if self._agent_mode:
-            text, usage, session_id = _parse_agent_json(raw)
-        else:
-            text = raw.strip()
-            usage = Usage(input_tokens=0, output_tokens=0)
-            session_id = None
-
-        effective_model = request.model or self._config.model or ""
-
-        return ChatResponse(
-            content=text,
-            tool_calls=[],
-            model=effective_model,
-            usage=usage,
-            stop_reason=StopReason.end_turn,
-            session_id=session_id,
-        )
+        content / thinking / tool_calls / usage / session_id / stop_reason
+        are identical to collecting :meth:`stream` by construction;
+        ``tool_calls`` is the record of tools the CLI already executed, and
+        a completed turn always reports ``StopReason.end_turn``. The one
+        documented parity exception: ``model`` is backfilled from the
+        request or client config because CLI transcripts do not echo a
+        model name. Error mapping follows the stream path: per-read stalls
+        raise ``ProviderError``; CLI error results and early child death
+        raise ``StreamError``.
+        """
+        response = await collect_stream(self.stream(request))
+        response.model = request.model or self._config.model or ""
+        return response
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         """Stream via ``claude --print --output-format stream-json``, yielding NDJSON events.
@@ -632,7 +562,6 @@ class ClaudeCodeClient:
 
         assert proc.stdout is not None
         timeout = self._config.timeout_secs
-        saw_tool_call = False
         saw_done = False
         try:
             while True:
@@ -667,17 +596,11 @@ class ClaudeCodeClient:
                 if not line:
                     continue
                 for event in _parse_ndjson_line(line):
-                    if event.event_type in (
-                        "tool_call_start",
-                        "tool_call_args",
-                        "tool_call_end",
-                    ):
-                        saw_tool_call = True
                     if event.done:
                         saw_done = True
-                        event.stop_reason = (
-                            StopReason.tool_use if saw_tool_call else StopReason.end_turn
-                        )
+                        # F4: the CLI executes tools internally; a completed
+                        # turn always ends the turn — never a tool_use request.
+                        event.stop_reason = StopReason.end_turn
                     yield event
                     if event.done:
                         return

@@ -5,7 +5,7 @@ import pytest
 import respx
 
 from motosan_ai.providers.anthropic import AnthropicProvider
-from motosan_ai.types import ChatRequest, Message, ThinkingConfig
+from motosan_ai.types import ChatRequest, Message, StreamEventType, ThinkingConfig
 
 
 @pytest.fixture
@@ -131,9 +131,11 @@ def _sse_lines(*events: dict) -> str:
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_stream_emits_thinking_deltas_as_thinking_event(provider):
-    """Regression: `thinking_delta` events were silently dropped in the stream path,
-    so OAuth chat() (which collects from stream) never populated ChatResponse.thinking.
+async def test_stream_emits_typed_thinking_events(provider):
+    """M4/F3: thinking blocks stream as thinking_delta events, then exactly one
+    thinking_done event carrying the full concatenated text fires on
+    content_block_stop — before any final-answer text events (mirrors the Rust
+    Anthropic adapter).
     """
     sse = _sse_lines(
         {
@@ -170,11 +172,23 @@ async def test_stream_emits_thinking_deltas_as_thinking_event(provider):
     req = ChatRequest(messages=[Message.user("q")], thinking=ThinkingConfig(budget_tokens=1024))
     events = [e async for e in provider.stream(req)]
 
-    thinking_events = [e for e in events if e.event_type == "thinking" and not e.done]
-    assert [e.content for e in thinking_events] == ["Let me ", "reason..."]
+    deltas = [e for e in events if e.event_type == StreamEventType.thinking_delta]
+    assert [e.content for e in deltas] == ["Let me ", "reason..."]
 
-    text_events = [e for e in events if e.event_type == "text" and not e.done]
-    assert [e.content for e in text_events] == ["42"]
+    dones = [e for e in events if e.event_type == StreamEventType.thinking_done]
+    assert [e.content for e in dones] == ["Let me reason..."]
+    assert all(not e.done for e in deltas + dones)
+
+    idx_done = next(
+        i for i, e in enumerate(events) if e.event_type == StreamEventType.thinking_done
+    )
+    idx_first_text = next(
+        i for i, e in enumerate(events) if e.event_type == StreamEventType.text and e.content
+    )
+    assert idx_done < idx_first_text
+    assert [e.content for e in events if e.event_type == StreamEventType.text and e.content] == [
+        "42"
+    ]
 
 
 @respx.mock

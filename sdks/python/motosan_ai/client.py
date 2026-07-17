@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import replace
 from enum import StrEnum
 from types import TracebackType
@@ -13,6 +13,7 @@ from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderEr
 from motosan_ai.providers import (
     AnthropicProvider,
     ChatGptCodexProvider,
+    ClaudeCodeClient,
     CodexCliClient,
     GeminiCliClient,
     GeminiCodeAssistProvider,
@@ -37,6 +38,7 @@ class Provider(StrEnum):
     minimax = "minimax"
     ollama = "ollama"
     gemini = "gemini"
+    claude_code = "claude_code"
     codex_cli = "codex_cli"
     gemini_cli = "gemini_cli"
     gemini_code_assist = "gemini_code_assist"
@@ -73,6 +75,7 @@ class Client:
         account_id: str | None = None,
         *,
         reasoning_effort: str | None = None,
+        token_source: Callable[[], Awaitable[str]] | None = None,
         ollama_native: bool = False,
         ollama_think: bool = False,
         ollama_keep_alive: str | None = None,
@@ -108,8 +111,8 @@ class Client:
                 read_idle_timeout=read_idle_timeout,
             )
         elif provider_value == Provider.openai_chatgpt:
-            if not access_token:
-                raise ConfigError("openai_chatgpt requires access_token")
+            if not access_token and token_source is None:
+                raise ConfigError("openai_chatgpt requires access_token or token_source")
             if not account_id:
                 raise ConfigError("openai_chatgpt requires account_id")
             self.api_key = ""
@@ -118,9 +121,15 @@ class Client:
                 account_id=account_id,
                 model=model,
                 base_url=base_url,
+                token_source=token_source,
                 connect_timeout=connect_timeout,
                 read_idle_timeout=read_idle_timeout,
             ).reasoning_effort(reasoning_effort)
+        elif provider_value == Provider.claude_code:
+            self.api_key = ""
+            self._provider = self._apply_cli_timeout(
+                ClaudeCodeClient(binary_path=binary_path), cli_timeout
+            )
         elif provider_value == Provider.codex_cli:
             self.api_key = ""
             self._provider = self._apply_cli_timeout(
@@ -270,6 +279,7 @@ class Client:
         reasoning_effort: str | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        token_source: Callable[[], Awaitable[str]] | None = None,
     ) -> Client:
         return cls(
             provider=Provider.openai_chatgpt,
@@ -280,6 +290,7 @@ class Client:
             reasoning_effort=reasoning_effort,
             max_retries=max_retries,
             retry_policy=retry_policy,
+            token_source=token_source,
         )
 
     @classmethod
@@ -311,6 +322,24 @@ class Client:
     ) -> Client:
         return cls(
             provider=Provider.codex_cli,
+            binary_path=binary_path,
+            model=model,
+            max_retries=max_retries,
+            retry_policy=retry_policy,
+            cli_timeout=cli_timeout,
+        )
+
+    @classmethod
+    def claude_code(
+        cls,
+        binary_path: str | None = None,
+        model: str | None = None,
+        max_retries: int = 3,
+        retry_policy: RetryPolicy | None = None,
+        cli_timeout: float | None = _UNSET_CLI_TIMEOUT,
+    ) -> Client:
+        return cls(
+            provider=Provider.claude_code,
             binary_path=binary_path,
             model=model,
             max_retries=max_retries,
@@ -373,9 +402,9 @@ class Client:
 
     @staticmethod
     def _apply_cli_timeout(
-        cli: CodexCliClient | GeminiCliClient,
+        cli: ClaudeCodeClient | CodexCliClient | GeminiCliClient,
         cli_timeout: float | None,
-    ) -> CodexCliClient | GeminiCliClient:
+    ) -> ClaudeCodeClient | CodexCliClient | GeminiCliClient:
         if cli_timeout is _UNSET_CLI_TIMEOUT:
             return cli
         if cli_timeout is None:

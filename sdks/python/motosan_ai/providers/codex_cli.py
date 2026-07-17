@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.types import (
@@ -351,56 +352,18 @@ class CodexCliClient:
         return args
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        msg_system, user_prompt = _messages_to_prompt(request.messages)
-        prompt = _compose_prompt(request.system or msg_system, user_prompt)
-        args = self._build_args(model=request.model)
+        """Collect :meth:`stream` into one response (F4 delegation).
 
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=self._subprocess_env(),
-        )
-        timeout = self._config.timeout_secs
-        try:
-            if timeout is None:
-                stdout, stderr = await proc.communicate(prompt.encode())
-            else:
-                stdout, stderr = await asyncio.wait_for(
-                    proc.communicate(prompt.encode()), timeout=timeout
-                )
-        except TimeoutError as exc:
-            proc.kill()
-            await proc.wait()
-            raise ProviderError(f"codex CLI timed out after {timeout}s") from exc
-
-        if proc.returncode != 0:
-            raise ProviderError(
-                f"codex CLI exited with {proc.returncode}: {stderr.decode().strip()}"
-            )
-
-        content_parts: list[str] = []
-        usage = Usage(0, 0)
-        session_id: str | None = None
-        for raw in stdout.decode().splitlines():
-            for event in _parse_jsonl_line(raw):
-                if event.session_id is not None and session_id is None:
-                    session_id = event.session_id
-                elif event.event_type == "text" and event.content:
-                    content_parts.append(event.content)
-                elif event.event_type == "usage" and event.usage is not None:
-                    usage = event.usage
-
-        return ChatResponse(
-            content="".join(content_parts),
-            # Codex CLI runs tools internally and does not surface SDK tool calls.
-            tool_calls=[],
-            model=request.model or self._config.model or "",
-            usage=usage,
-            stop_reason=StopReason.end_turn,
-            session_id=session_id,
-        )
+        ``tool_calls`` is the record of tools the CLI already executed; a
+        completed turn always reports ``StopReason.end_turn``. Parity
+        exception: ``model`` is backfilled from the request or client
+        config. Error mapping follows the stream path: per-read stalls
+        raise ``ProviderError``; turn failures raise ``ProviderError`` via
+        the parser; early child death raises ``StreamError``.
+        """
+        response = await collect_stream(self.stream(request))
+        response.model = request.model or self._config.model or ""
+        return response
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         msg_system, user_prompt = _messages_to_prompt(request.messages)
@@ -415,7 +378,6 @@ class CodexCliClient:
             env=self._subprocess_env(),
         )
 
-        saw_tool_call = False
         saw_done = False
         try:
             assert proc.stdin is not None and proc.stdout is not None
@@ -456,16 +418,11 @@ class CodexCliClient:
                     )
                 line = raw.decode().rstrip("\n")
                 for event in _parse_jsonl_line(line):
-                    if event.event_type in (
-                        "tool_call_start",
-                        "tool_call_args",
-                        "tool_call_end",
-                    ):
-                        saw_tool_call = True
                     if event.done:
                         saw_done = True
-                    if event.done and saw_tool_call:
-                        event.stop_reason = StopReason.tool_use
+                        # F4: the CLI executes tools internally; a completed
+                        # turn always ends the turn — never a tool_use request.
+                        event.stop_reason = StopReason.end_turn
                     yield event
                     if event.done:
                         return

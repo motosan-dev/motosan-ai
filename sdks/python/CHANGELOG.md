@@ -2,6 +2,11 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [Unreleased]
+
+### Added
+- `Provider.claude_code` + `Client.claude_code(binary_path=None, model=None, max_retries=3, retry_policy=None, cli_timeout=...)`: the `claude` CLI backend is now reachable through unified `Client` dispatch (previously direct `ClaudeCodeClient()` only). `binary_path` falls back to `CLAUDE_CODE_PATH` then `claude` in `PATH`; `cli_timeout` threads to `.timeout()` / `.no_timeout()` exactly like `Client.codex_cli()` (claude default remains 300s). Richer knobs (`permission_mode`, `effort`, `agent_mode`, session flags, ...) remain builder methods on the underlying `ClaudeCodeClient`.
+
 ## [0.17.0] - 2026-07-17
 
 ### Breaking

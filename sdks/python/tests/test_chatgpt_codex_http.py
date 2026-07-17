@@ -241,3 +241,115 @@ async def test_stream_5xx_message_has_status_and_retry_after():
     msg = str(exc_info.value)
     assert "HTTP 503: overloaded" in msg
     assert "Retry-After: 7" in msg
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_chat_token_source_resolved_per_attempt():
+    from motosan_ai.retry import with_retry
+
+    awaited: list[str] = []
+
+    async def source() -> str:
+        tok = f"tok-{len(awaited) + 1}"
+        awaited.append(tok)
+        return tok
+
+    seen_auth: list[str] = []
+    replies = iter(
+        [
+            httpx.Response(500, json={"error": {"message": "boom"}}),
+            httpx.Response(200, text=_text_stream(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers["authorization"])
+        return next(replies)
+
+    route = respx.post(_URL).mock(side_effect=_respond)
+    p = ChatGptCodexProvider(account_id="acct-123", model="gpt-5.5", token_source=source)
+    resp = await with_retry(
+        lambda: p.chat(ChatRequest(messages=[Message.user("hi")])),
+        max_retries=2,
+        initial_backoff=0.001,
+    )
+    assert resp.content == "Hello world."
+    assert route.call_count == 2
+    assert awaited == ["tok-1", "tok-2"]
+    assert seen_auth == ["Bearer tok-1", "Bearer tok-2"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_stream_token_source_resolved_per_call():
+    awaited: list[str] = []
+
+    async def source() -> str:
+        tok = f"tok-{len(awaited) + 1}"
+        awaited.append(tok)
+        return tok
+
+    seen_auth: list[str] = []
+    replies = iter(
+        [
+            httpx.Response(500, json={"error": {"message": "boom"}}),
+            httpx.Response(200, text=_text_stream(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers["authorization"])
+        return next(replies)
+
+    respx.post(_URL).mock(side_effect=_respond)
+    p = ChatGptCodexProvider(account_id="acct-123", token_source=source)
+
+    # Each stream() invocation resolves the token anew — this is exactly what
+    # Client._dispatch_chat / Client.stream_with do once per retry attempt.
+    with pytest.raises(ProviderError):
+        async for _ in p.stream(ChatRequest(messages=[Message.user("hi")])):
+            pass
+
+    events = [e async for e in p.stream(ChatRequest(messages=[Message.user("hi")]))]
+    assert events[-1].done is True
+    assert awaited == ["tok-1", "tok-2"]
+    assert seen_auth == ["Bearer tok-1", "Bearer tok-2"]
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_client_stream_retry_uses_fresh_token_per_attempt():
+    from motosan_ai import Client
+    from motosan_ai.retry import RetryPolicy
+
+    awaited: list[str] = []
+
+    async def source() -> str:
+        tok = f"tok-{len(awaited) + 1}"
+        awaited.append(tok)
+        return tok
+
+    seen_auth: list[str] = []
+    replies = iter(
+        [
+            httpx.Response(500, json={"error": {"message": "boom"}}),
+            httpx.Response(200, text=_text_stream(), headers={"content-type": "text/event-stream"}),
+        ]
+    )
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        seen_auth.append(request.headers["authorization"])
+        return next(replies)
+
+    respx.post(_URL).mock(side_effect=_respond)
+    c = Client.chatgpt_codex(
+        account_id="acct-123",
+        token_source=source,
+        retry_policy=RetryPolicy(max_retries=1, base_delay=0.001, jitter=False),
+    )
+    events = [e async for e in c.stream([{"role": "user", "content": "hi"}])]
+    text = "".join(e.content for e in events if not e.done)
+    assert text == "Hello world."
+    assert awaited == ["tok-1", "tok-2"]
+    assert seen_auth == ["Bearer tok-1", "Bearer tok-2"]

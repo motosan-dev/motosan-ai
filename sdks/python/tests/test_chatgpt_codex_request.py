@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+from motosan_ai.error import ConfigError
 from motosan_ai.providers.chatgpt_codex import ChatGptCodexProvider
 from motosan_ai.types import (
     ChatRequest,
@@ -36,7 +39,7 @@ def test_stream_url_returns_base_url_verbatim():
 
 
 def test_auth_headers_present_and_lowercase():
-    h = ChatGptCodexProvider("tok", "acct-123")._headers()
+    h = ChatGptCodexProvider("tok", "acct-123")._headers("tok")
     assert h["authorization"] == "Bearer tok"
     assert h["chatgpt-account-id"] == "acct-123"
     assert h["originator"] == "codex_cli_rs"
@@ -227,3 +230,28 @@ def test_reasoning_effort_none_clears_default():
     p = _provider().reasoning_effort("high").reasoning_effort(None)
     body = p._build_responses_body(ChatRequest(messages=[Message.user("hi")]))
     assert "reasoning" not in body
+
+
+def test_constructor_requires_access_token_or_token_source():
+    with pytest.raises(ConfigError, match="access_token or token_source"):
+        ChatGptCodexProvider(account_id="acct-123")
+
+
+def test_constructor_requires_account_id():
+    with pytest.raises(ConfigError, match="account_id"):
+        ChatGptCodexProvider(access_token="tok")
+
+
+def test_constructor_accepts_token_source_without_access_token():
+    async def source() -> str:
+        return "tok"
+
+    p = ChatGptCodexProvider(account_id="acct-123", token_source=source)
+    assert p.access_token is None
+    assert p.token_source is source
+
+
+def test_static_access_token_leaves_token_source_none():
+    p = ChatGptCodexProvider("tok", "acct-123")
+    assert p.access_token == "tok"
+    assert p.token_source is None

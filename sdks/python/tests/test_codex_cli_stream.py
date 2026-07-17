@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import ProviderError, StreamError
 from motosan_ai.providers.codex_cli import (
     CodexCliClient,
@@ -13,7 +14,7 @@ from motosan_ai.providers.codex_cli import (
     _messages_to_prompt,
     _parse_jsonl_line,
 )
-from motosan_ai.types import ChatRequest, Message, StopReason
+from motosan_ai.types import ChatRequest, Message, StopReason, ToolCall
 
 
 def test_agent_message_emits_text_event():
@@ -260,7 +261,9 @@ async def test_chat_prefers_request_system_over_message_system(monkeypatch):
 async def test_chat_raises_on_nonzero_returncode(monkeypatch):
     _stub_subprocess(monkeypatch, _FakeProc("", returncode=2, stderr="codex: bad config\n"))
     client = CodexCliClient(binary_path="codex")
-    with pytest.raises(ProviderError, match="bad config"):
+    # F4: chat() delegates to stream(); a child that dies without a terminal
+    # event surfaces as StreamError (was ProviderError on the single-shot path).
+    with pytest.raises(StreamError, match="bad config"):
         await client.chat(ChatRequest(messages=[Message.user("hi")]))
 
 
@@ -333,7 +336,7 @@ async def test_chat_passes_env_to_subprocess(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_does_not_surface_tool_calls(monkeypatch):
+async def test_chat_surfaces_executed_tool_record(monkeypatch):
     jsonl = (
         '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
         '"command": "ls"}}\n'
@@ -344,12 +347,16 @@ async def test_chat_does_not_surface_tool_calls(monkeypatch):
     resp = await CodexCliClient(binary_path="codex").chat(
         ChatRequest(messages=[Message.user("hi")])
     )
-    assert resp.tool_calls == []
+    # F4: tool_calls records what the CLI already executed — never a
+    # request for the caller to execute tools.
+    expected = [ToolCall(id="i0", name="command_execution", input={"command": "ls"})]
+    assert resp.tool_calls == expected
+    assert resp.stop_reason == StopReason.end_turn
     assert "done" in resp.content
 
 
 @pytest.mark.asyncio
-async def test_stream_tool_call_sets_tool_use_stop_reason(monkeypatch):
+async def test_stream_tool_call_terminal_is_end_turn(monkeypatch):
     jsonl = (
         '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
         '"command": "ls"}}\n'
@@ -363,7 +370,8 @@ async def test_stream_tool_call_sets_tool_use_stop_reason(monkeypatch):
         )
     ]
     done = [e for e in events if e.done][-1]
-    assert done.stop_reason == StopReason.tool_use
+    # F4: CLI backends never report tool_use.
+    assert done.stop_reason == StopReason.end_turn
 
 
 @pytest.mark.asyncio
@@ -404,3 +412,41 @@ async def test_stream_read_stall_raises(monkeypatch):
     with pytest.raises(ProviderError, match="timed out"):
         async for _ in client.stream(ChatRequest(messages=[Message.user("hi")])):
             pass
+
+
+@pytest.mark.asyncio
+async def test_chat_stream_parity_tool_turn_is_end_turn(monkeypatch):
+    """F4: chat() == collect_stream(stream()) for a text + tool-call + terminal
+    transcript; both end_turn, tool record populated (model exempt)."""
+    jsonl = (
+        '{"type": "thread.started", "thread_id": "th_1"}\n'
+        '{"type": "item.completed", "item": {"type": "agent_message", "text": "running ls"}}\n'
+        '{"type": "item.completed", "item": {"id": "i0", "type": "command_execution", '
+        '"command": "ls"}}\n'
+        '{"type": "turn.completed", "usage": {"input_tokens": 9, "output_tokens": 4}}\n'
+    )
+    monkeypatch.setattr(asyncio.subprocess, "PIPE", -1, raising=False)
+    monkeypatch.setattr(
+        "asyncio.create_subprocess_exec",
+        AsyncMock(side_effect=[_FakeProc(jsonl), _FakeProc(jsonl, returncode=None)]),
+    )
+    client = CodexCliClient(binary_path="codex")
+    request = ChatRequest(messages=[Message.user("hi")])
+
+    chat_resp = await client.chat(request)
+    streamed = await collect_stream(client.stream(request))
+
+    expected = [ToolCall(id="i0", name="command_execution", input={"command": "ls"})]
+    assert chat_resp.tool_calls == expected
+    assert chat_resp.stop_reason == StopReason.end_turn
+    assert streamed.stop_reason == StopReason.end_turn
+    assert chat_resp.content == streamed.content
+    assert chat_resp.thinking == streamed.thinking
+    assert chat_resp.tool_calls == streamed.tool_calls
+    assert chat_resp.stop_reason == streamed.stop_reason
+    assert chat_resp.usage == streamed.usage
+    assert chat_resp.session_id == streamed.session_id
+    assert chat_resp.content == "running ls"
+    assert chat_resp.usage.input_tokens == 9
+    assert chat_resp.usage.output_tokens == 4
+    assert chat_resp.session_id == "th_1"

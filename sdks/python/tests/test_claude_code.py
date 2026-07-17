@@ -10,7 +10,6 @@ from motosan_ai.providers.claude_code import (
     ClaudeCodeClient,
     _messages_to_prompt,
     _model_to_forward,
-    _parse_agent_json,
     _parse_ndjson_line,
 )
 from motosan_ai.types import Message
@@ -75,54 +74,6 @@ class TestMessagesToPrompt:
         sys, prompt = _messages_to_prompt([])
         assert sys is None
         assert prompt == ""
-
-
-# ---------------------------------------------------------------------------
-# parse_agent_json
-# ---------------------------------------------------------------------------
-
-
-class TestParseAgentJson:
-    def test_with_usage(self):
-        raw = json.dumps(
-            {
-                "result": "hello world",
-                "usage": {"input_tokens": 10, "output_tokens": 5},
-            }
-        )
-        text, usage, _sid = _parse_agent_json(raw)
-        assert text == "hello world"
-        assert usage.input_tokens == 10
-        assert usage.output_tokens == 5
-
-    def test_without_usage(self):
-        raw = json.dumps({"result": "hello"})
-        text, usage, _sid = _parse_agent_json(raw)
-        assert text == "hello"
-        assert usage.input_tokens == 0
-        assert usage.output_tokens == 0
-
-    def test_invalid_json(self):
-        from motosan_ai.error import ProviderError
-
-        with pytest.raises(ProviderError, match="failed to parse"):
-            _parse_agent_json("not json")
-
-    def test_returns_session_id(self):
-        text, usage, sid = _parse_agent_json('{"result":"hi","session_id":"s1"}')
-        assert text == "hi"
-        assert sid == "s1"
-
-    def test_session_id_none_when_absent(self):
-        text, usage, sid = _parse_agent_json('{"result":"hi"}')
-        assert sid is None
-
-    def test_error_result_raises_stream_error(self):
-        from motosan_ai.error import StreamError
-
-        raw = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True})
-        with pytest.raises(StreamError, match="error_max_turns"):
-            _parse_agent_json(raw)
 
 
 # ---------------------------------------------------------------------------
@@ -390,8 +341,9 @@ class TestBuildArgs:
         client = ClaudeCodeClient().agent_mode(True)
         args = client._build_args(model=None, system_prompt=None)
         assert "--dangerously-skip-permissions" in args
-        idx = args.index("--output-format")
-        assert args[idx + 1] == "json"
+        # F4: the single-shot `--output-format json` mode is gone; chat()
+        # delegates to stream(), which always passes "stream-json".
+        assert "--output-format" not in args
 
     def test_stream_format(self):
         client = ClaudeCodeClient()

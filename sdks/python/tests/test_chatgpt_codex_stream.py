@@ -12,7 +12,7 @@ from motosan_ai.providers.chatgpt_codex import (
     _ChatGptCodexAdapterState,
     _parse_sse_event,
 )
-from motosan_ai.types import ChatRequest, Message, StopReason
+from motosan_ai.types import ChatRequest, Message, StopReason, StreamEventType
 
 _URL = "https://chatgpt.com/backend-api/codex/responses"
 
@@ -118,8 +118,11 @@ def test_adapter_maps_reasoning_delta_to_thinking():
             {"type": "response.reasoning_summary_text.delta", "delta": "more"},
         ]
     )
-    thinking = "".join(e.content for e in events if e.event_type == "thinking")
-    assert thinking == "think more"
+    deltas = [e for e in events if e.event_type == StreamEventType.thinking_delta]
+    assert "".join(e.content for e in deltas) == "think more"
+    # Rust parity: the codex adapter emits ThinkingDelta only, never
+    # ThinkingDone — the Responses wire has no thinking block boundary.
+    assert not [e for e in events if e.event_type == StreamEventType.thinking_done]
 
 
 def test_adapter_handles_function_call_lifecycle():

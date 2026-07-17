@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -10,6 +10,7 @@ import httpx
 from motosan_ai._stream_collect import collect_stream
 from motosan_ai.error import (
     AuthError,
+    ConfigError,
     IncompleteStreamError,
     NetworkError,
     ProviderError,
@@ -25,6 +26,7 @@ from motosan_ai.types import (
     Role,
     StopReason,
     StreamEvent,
+    StreamEventType,
     Usage,
 )
 
@@ -82,7 +84,13 @@ def _parse_sse_event(data: str, state: _ChatGptCodexAdapterState) -> list[Stream
     ):
         delta = chunk.get("delta")
         if isinstance(delta, str) and delta:
-            out.append(StreamEvent(content=delta, done=False, event_type="thinking"))
+            out.append(
+                StreamEvent(
+                    content=delta,
+                    done=False,
+                    event_type=StreamEventType.thinking_delta,
+                )
+            )
 
     elif event_type == "response.output_item.added":
         item = chunk.get("item")
@@ -193,15 +201,21 @@ class ChatGptCodexProvider(BaseProvider):
 
     def __init__(
         self,
-        access_token: str,
-        account_id: str,
+        access_token: str | None = None,
+        account_id: str | None = None,
         model: str | None = None,
         base_url: str | None = None,
         *,
+        token_source: Callable[[], Awaitable[str]] | None = None,
         connect_timeout: float = 10.0,
         read_idle_timeout: float = 120.0,
     ) -> None:
+        if access_token is None and token_source is None:
+            raise ConfigError("chatgpt_codex requires access_token or token_source")
+        if not account_id:
+            raise ConfigError("chatgpt_codex requires account_id")
         self.access_token = access_token
+        self.token_source = token_source
         self.account_id = account_id
         self.model = model or _DEFAULT_MODEL
         self.base_url = base_url or _DEFAULT_BASE_URL
@@ -236,9 +250,23 @@ class ChatGptCodexProvider(BaseProvider):
     def _stream_url(self) -> str:
         return self.base_url
 
-    def _headers(self) -> dict[str, str]:
+    async def _bearer(self) -> str:
+        """Resolve the bearer token for the current request attempt (F5).
+
+        When ``token_source`` is set it is awaited on every call. The retry
+        loops live in ``Client`` (``_dispatch_chat`` / ``stream_with``) and
+        re-enter ``stream()`` once per attempt, so each attempt fetches a
+        fresh token.
+        """
+        if self.token_source is not None:
+            return await self.token_source()
+        if self.access_token is None:  # pragma: no cover — guarded in __init__
+            raise ConfigError("chatgpt_codex requires access_token or token_source")
+        return self.access_token
+
+    def _headers(self, bearer: str) -> dict[str, str]:
         return {
-            "authorization": f"Bearer {self.access_token}",
+            "authorization": f"Bearer {bearer}",
             "chatgpt-account-id": self.account_id,
             "originator": _ORIGINATOR,
             "openai-beta": "responses=experimental",
@@ -364,10 +392,15 @@ class ChatGptCodexProvider(BaseProvider):
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         self.validate_request(request)
         body = self._build_responses_body(request)
+        # F5: resolved at the top of the attempt. Client retry loops re-invoke
+        # stream() per attempt (chat() delegates here too), so a token_source
+        # is consulted once per attempt. Token-source failures propagate
+        # verbatim — they are auth plumbing, not transport errors.
+        bearer = await self._bearer()
         try:
             resp = await self._http.send(
                 self._http.build_request(
-                    "POST", self._stream_url(), headers=self._headers(), json=body
+                    "POST", self._stream_url(), headers=self._headers(bearer), json=body
                 ),
                 stream=True,
             )
