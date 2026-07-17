@@ -10,7 +10,15 @@ from typing import Any
 import httpx
 
 from motosan_ai._stream_collect import collect_stream
-from motosan_ai.error import AuthError, NetworkError, ProviderError, RateLimitError, StreamError
+from motosan_ai.error import (
+    AuthError,
+    IncompleteStreamError,
+    NetworkError,
+    ProviderError,
+    RateLimitError,
+    StreamError,
+    StreamReadTimeoutError,
+)
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
 from motosan_ai.providers.gemini import build_gemini_body
 from motosan_ai.retry import parse_retry_after_header
@@ -166,12 +174,27 @@ class GeminiCodeAssistProvider(BaseProvider):
         project_id: str,
         model: str | None = None,
         base_url: str | None = None,
+        *,
+        connect_timeout: float = 10.0,
+        read_idle_timeout: float = 120.0,
     ) -> None:
         self.access_token = access_token
         self.project_id = project_id
         self.model = model or _DEFAULT_MODEL
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
-        self._http = httpx.AsyncClient(timeout=120.0)
+        self._read_idle_timeout = read_idle_timeout
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=connect_timeout,
+                read=read_idle_timeout,
+                write=read_idle_timeout,
+                pool=connect_timeout,
+            )
+        )
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        await self._http.aclose()
 
     def _stream_url(self) -> str:
         return f"{self.base_url}/v1internal:streamGenerateContent?alt=sse"
@@ -234,10 +257,22 @@ class GeminiCodeAssistProvider(BaseProvider):
                         yield event
                         if event.done:
                             return
+
+                raise IncompleteStreamError(
+                    "incomplete stream: gemini_code_assist ended without a terminal event"
+                )
             except (StreamError, AuthError, RateLimitError, ProviderError, NetworkError):
                 raise
+            except httpx.ReadTimeout as exc:
+                raise StreamReadTimeoutError(
+                    f"stream read timed out after {self._read_idle_timeout}s"
+                ) from exc
             except httpx.HTTPError as exc:
                 raise StreamError(f"stream transport error: {exc}") from exc
+        except httpx.ReadTimeout as exc:
+            raise StreamReadTimeoutError(
+                f"stream read timed out after {self._read_idle_timeout}s"
+            ) from exc
         finally:
             await resp.aclose()
 

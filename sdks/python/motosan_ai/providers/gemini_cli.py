@@ -274,6 +274,10 @@ class GeminiCliClient:
         self._config.timeout_secs = None
         return self
 
+    async def aclose(self) -> None:
+        """No-op: CLI providers spawn a subprocess per call and hold no pool."""
+        return None
+
     def _child_env(self) -> dict[str, str] | None:
         if len(self._config.envs) == 0:
             return None

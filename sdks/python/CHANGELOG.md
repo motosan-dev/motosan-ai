@@ -2,6 +2,24 @@
 
 All notable changes to `motosan-ai` Python SDK are documented in this file.
 
+## [Unreleased]
+
+### Breaking
+- **Streaming:** HTTP provider streams that end without the provider's terminal event (`message_stop` / `[DONE]`-or-`finish_reason` on the OpenAI wire / `finishReason` / `response.completed` / `{"done": true}`) now raise `IncompleteStreamError` instead of ending silently as if complete - truncation is no longer indistinguishable from completion. `IncompleteStreamError` subclasses `StreamError` deliberately (migration softener): existing `except StreamError` handlers keep catching it; catch `IncompleteStreamError` to handle truncation specifically. Not retried (mid-stream errors are never retried, per `specs/retry.md`). CLI providers unchanged - child-process death already raises `StreamError` (M1); child death is not HTTP truncation.
+- **OpenAI-wire streaming (openai, minimax):** per the amended terminal-event contract (`specs/types.md`), a stream completes on `data: [DONE]` OR a `finish_reason`-bearing chunk - either suffices (`finish_reason` is the semantic terminal, `[DONE]` the transport epilogue). openai stashes the finish_reason-derived `stop_reason` and emits it with the terminal done event at `[DONE]` or, failing that, at EOF; minimax emits its usual no-stop_reason done at EOF after a finish_reason chunk. Truncation with NEITHER signal raises `IncompleteStreamError`. Mirrors the Rust 0.24.0 adapter.
+
+### Added
+- Unified timeout model (E4): `Client(..., connect_timeout: float = 10.0, read_idle_timeout: float = 120.0, total_timeout: float | None = None)` threaded into every HTTP provider as `httpx.Timeout(connect=connect_timeout, read=read_idle_timeout, write=read_idle_timeout, pool=connect_timeout)`. `total_timeout` (opt-in) bounds `chat()`/`chat_with()` wall clock including retries; it never applies to streams.
+- `StreamReadTimeoutError` (`MotosanError` subclass; mirrors Rust `StreamReadTimeout` / TS `StreamReadTimeoutError`): a streaming body idle past `read_idle_timeout` raises it. Never retried - mid-stream retry would replay already-yielded deltas.
+- Client lifecycle (E8): `await client.aclose()` and `async with Client(...) as client:`; every provider gains `aclose()` (no-op for CLI providers).
+- `cli_timeout` facade kwarg (keyword-only on `Client`; trailing parameter on `Client.codex_cli()`/`Client.gemini_cli()` - pass it by keyword): threads to `CodexCliClient`/`GeminiCliClient` `.timeout()`; `cli_timeout=None` maps to `.no_timeout()`.
+
+### Changed
+- **MiniMax timeout unified**: the hardcoded `httpx.AsyncClient(timeout=30)` outlier now uses the shared model (connect 10s, read/write 120s) - requests that previously failed at 30s idle now wait 120s.
+- Default connect timeout tightened from 120s (blanket `timeout=120.0`) to 10s across all HTTP providers.
+- A streaming-phase `httpx.ReadTimeout` now raises `StreamReadTimeoutError` instead of `StreamError("stream transport error: ...")` (anthropic/openai/gemini/gemini_code_assist/chatgpt_codex) or `NetworkError`/`StreamError` (minimax/ollama).
+- Non-2xx error-body reads in `stream()` now sit inside the same ReadTimeout-mapping/cleanup scope as the SSE loop. gemini previously ran `await resp.aread()` before its `try`/`finally` - a `ReadTimeout` there escaped as a raw httpx exception and the response was never closed on error statuses (leak now fixed); gemini_code_assist/chatgpt_codex ran it outside the inner catch chain (raw `ReadTimeout` escaped, response was closed). All three now raise `StreamReadTimeoutError` and always close the response.
+
 ## [0.16.0] - 2026-07-16
 
 ### Added

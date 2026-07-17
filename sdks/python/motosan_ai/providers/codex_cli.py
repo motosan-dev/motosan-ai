@@ -299,6 +299,10 @@ class CodexCliClient:
         self._config.timeout_secs = None
         return self
 
+    async def aclose(self) -> None:
+        """No-op: CLI providers spawn a subprocess per call and hold no pool."""
+        return None
+
     def _subprocess_env(self) -> dict[str, str] | None:
         if not self._config.envs:
             return None

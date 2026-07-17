@@ -7,7 +7,13 @@ from typing import Any
 
 import httpx
 
-from motosan_ai.error import NetworkError, ProviderError, StreamError
+from motosan_ai.error import (
+    IncompleteStreamError,
+    NetworkError,
+    ProviderError,
+    StreamError,
+    StreamReadTimeoutError,
+)
 from motosan_ai.provider_base import ProviderCapabilities
 from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
@@ -41,13 +47,28 @@ class OllamaProvider:
         think: bool = False,
         keep_alive: str | None = None,
         num_ctx: int | None = None,
+        *,
+        connect_timeout: float = 10.0,
+        read_idle_timeout: float = 120.0,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.think = think
         self.keep_alive = keep_alive
         self.num_ctx = num_ctx
-        self._http = httpx.AsyncClient(timeout=120.0)
+        self._read_idle_timeout = read_idle_timeout
+        self._http = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=connect_timeout,
+                read=read_idle_timeout,
+                write=read_idle_timeout,
+                pool=connect_timeout,
+            )
+        )
+
+    async def aclose(self) -> None:
+        """Close the underlying HTTP connection pool."""
+        await self._http.aclose()
 
     @staticmethod
     def _serialize_messages(
@@ -224,8 +245,16 @@ class OllamaProvider:
                             tool_call_id=tc_id,
                             event_type="tool_call_end",
                         )
+
+                raise IncompleteStreamError(
+                    "incomplete stream: ollama ended without a terminal event"
+                )
         except (ProviderError, StreamError):
             raise
+        except httpx.ReadTimeout as exc:
+            raise StreamReadTimeoutError(
+                f"stream read timed out after {self._read_idle_timeout}s"
+            ) from exc
         except httpx.HTTPError as exc:
             if yielded:
                 raise StreamError(f"stream transport error: {exc}") from exc
