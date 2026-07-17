@@ -10,9 +10,11 @@
 #![cfg(feature = "chatgpt-codex")]
 
 use mockito::Matcher;
+use motosan_ai::auth::{async_trait, TokenSource};
 use motosan_ai::providers::chatgpt_codex::ChatGptCodexProvider;
 use motosan_ai::providers::ProviderImpl;
 use motosan_ai::{ChatRequest, Message, MotosanError, RetryPolicy, StopReason, StreamEventType};
+use std::sync::Arc;
 use tokio_stream::StreamExt;
 
 /// The REAL captured SSE stream from the route-B spike (the `event:`/`data:`
@@ -283,4 +285,94 @@ async fn stream_fires_on_retry_via_shared_engine() {
     }
     assert_eq!(text, EXPECTED_TEXT);
     assert_eq!(*seen.lock().unwrap(), vec![(1, 503)]);
+}
+
+// ---------------------------------------------------------------------------
+// F5: per-attempt TokenSource resolution
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+struct SequenceTokenSource {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+impl std::fmt::Debug for SequenceTokenSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SequenceTokenSource")
+            .finish_non_exhaustive()
+    }
+}
+
+#[async_trait]
+impl TokenSource for SequenceTokenSource {
+    async fn access_token(&self) -> Result<String, MotosanError> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(format!("tok-{}", n + 1))
+    }
+}
+
+#[tokio::test]
+async fn token_source_is_consulted_once_per_attempt() {
+    let mut server = mockito::Server::new_async().await;
+    // Attempt 1 must carry the token minted for it (tok-1) and gets a
+    // retryable 500; the mocks are disambiguated by the auth header, so a
+    // stale-token second attempt would match NEITHER mock and fail loudly.
+    let first = server
+        .mock("POST", Matcher::Any)
+        .match_header("authorization", "Bearer tok-1")
+        .with_status(500)
+        .with_body(r#"{"error":{"message":"overloaded"}}"#)
+        .expect(1)
+        .create_async()
+        .await;
+    // Attempt 2 must re-resolve and carry tok-2.
+    let second = server
+        .mock("POST", Matcher::Any)
+        .match_header("authorization", "Bearer tok-2")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(FIXTURE)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let source = Arc::new(SequenceTokenSource::default());
+    let provider =
+        ChatGptCodexProvider::new("ignored-static", "acct-123", "gpt-5.5", Some(server.url()))
+            .with_retry_policy(
+                RetryPolicy::new()
+                    .max_retries(1)
+                    .base_delay_ms(0)
+                    .max_delay_ms(0)
+                    .jitter(false),
+            )
+            .with_token_source(source.clone());
+
+    let mut stream = provider
+        .stream(
+            ChatRequest::builder()
+                .messages(vec![Message::user("hi")])
+                .build(),
+        )
+        .await
+        .unwrap();
+    let mut text = String::new();
+    while let Some(item) = stream.next().await {
+        let ev = item.expect("stream item should not fail");
+        if ev.event_type == StreamEventType::Text {
+            text.push_str(&ev.content);
+        }
+    }
+    assert_eq!(text, EXPECTED_TEXT);
+    assert_eq!(
+        source.calls.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "token source must be consulted exactly once per attempt"
+    );
+    first.assert_async().await;
+    second.assert_async().await;
+    eprintln!(
+        "500-then-200: token source calls=2; attempt 1 used Bearer tok-1; \
+         attempt 2 used refreshed Bearer tok-2"
+    );
 }
