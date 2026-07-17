@@ -24,6 +24,7 @@ retryable_status(s) = s == 408 || s == 409 || s == 429 || s >= 500
 | HTTP 429 (rate limit) | ✅ |
 | HTTP ≥ 500 (server error) | ✅ |
 | Transport / connection error (table below) | ✅ |
+| Caller-initiated cancellation (TypeScript `CancelledError`, table below) | ❌ never |
 | Any other 4xx (400, 401, 403, 404, 422, …) | ❌ never |
 | Success-body parse error; any error after the first stream event | ❌ never |
 
@@ -41,13 +42,22 @@ Python's `_is_retryable` is attribute-based: `RateLimitError` → retry;
 `NetworkError` → retry; `ProviderError` → retry iff
 `error.status_code in {408, 409}` or `(error.status_code or 0) >= 500`.
 
-Transport / connection errors (always retryable):
+Transport / connection / cancellation errors:
 
-| SDK | Surfaced as | Predicate |
-|-----|-------------|-----------|
-| Rust | `MotosanError::Network` | `is_retryable_network_error`: `reqwest::Error::is_timeout() \|\| is_connect() \|\| is_request() \|\| is_body()` |
-| Python | `NetworkError` | providers wrap `httpx.HTTPError` raised while sending (`httpx.TransportError`-derived in practice: `ConnectError`, `ConnectTimeout`, `ReadTimeout`, `ReadError`, …); every `NetworkError` is retryable |
-| TypeScript | raw fetch/Node error, classified directly | `isRetryableNetworkError`: `error.name === 'AbortError'`, `error instanceof TypeError`, or Node `error.code` ∈ {`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`} |
+| SDK | Surfaced as | Predicate | Retry |
+|-----|-------------|-----------|-------|
+| Rust | `MotosanError::Network` | `is_retryable_network_error`: `reqwest::Error::is_timeout() \|\| is_connect() \|\| is_request() \|\| is_body()` | ✅ |
+| Python | `NetworkError` | providers wrap `httpx.HTTPError` raised while sending (`httpx.TransportError`-derived in practice: `ConnectError`, `ConnectTimeout`, `ReadTimeout`, `ReadError`, …); every `NetworkError` is retryable | ✅ |
+| TypeScript | raw fetch/Node error, classified directly | `isRetryableNetworkError`: `error.name === 'AbortError'` **when no caller-supplied signal is aborted**, `error instanceof TypeError`, or Node `error.code` ∈ {`ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`} | ✅ |
+| TypeScript | `CancelledError` (`extends MotosanError`) | the caller-supplied per-request `AbortSignal` is aborted at failure time | ❌ never |
+
+TypeScript AbortError split — an abort is classified by **who
+aborted**. If the caller-supplied per-request `AbortSignal` is
+aborted, the SDK throws `CancelledError`: the caller asked to stop,
+and retrying would override that intent. A fetch-internal
+`AbortError` with no caller signal aborted (e.g. an SDK-composed
+`AbortSignal.timeout`) remains a retryable transport error, exactly
+as before.
 
 ## Retry-After
 
@@ -112,6 +122,14 @@ has been yielded to the caller, every error — even one retryable by
 class — propagates verbatim: replaying a partially consumed stream
 would double-emit content. Connection-phase failures (before the first
 event) follow the normal classification table.
+
+Read-idle timeout errors that fire mid-stream (Rust
+`MotosanError::StreamReadTimeout`, TypeScript
+`StreamReadTimeoutError`, and Python `StreamReadTimeoutError` —
+surfaced from `httpx.ReadTimeout`) are **not retried**: they occur
+after the first emitted event, so the rule above applies, even though
+timeout-class transport errors are retryable during the connection
+phase.
 
 Reference conformance tests:
 `sdks/python/tests/test_client_stream_with.py::test_stream_with_does_not_retry_provider_error_after_yield`
