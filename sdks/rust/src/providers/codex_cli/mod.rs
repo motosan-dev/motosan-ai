@@ -12,26 +12,14 @@
 //! authentication, tool execution, sandboxing, and approvals internally; we
 //! just surface the final `agent_message` text plus token usage.
 //!
-//! # Streaming vs Blocking
+//! # One pipeline for chat and stream
 //!
-//! Unlike the HTTP providers (Anthropic, OpenAI, etc.) where `.chat()`
-//! and `.stream()` are two views over the same SSE engine, the codex CLI
-//! always emits NDJSON regardless of which path is used:
-//!
-//! - [`chat`](CodexCliProvider) spawns `codex exec --json
-//!   --skip-git-repo-check`, waits for the subprocess to exit, collects
-//!   the full NDJSON output, and extracts the final `agent_message` plus
-//!   `turn.completed` usage into a single [`ChatResponse`]. Intermediate
-//!   events are discarded.
-//! - [`stream`](CodexCliProvider) spawns the same command but reads
-//!   NDJSON lines as they arrive, yielding one [`StreamEvent`] per
-//!   meaningful event (`item.completed` of type `agent_message` becomes
-//!   `Text`; `turn.completed` becomes the terminal `done` event with
-//!   usage).
-//!
-//! Callers should prefer `stream()` for any UI that benefits from
-//! incremental output, and `chat()` only when they need the whole reply
-//! as a single string.
+//! Both [`chat`](CodexCliProvider) and [`stream`](CodexCliProvider) spawn
+//! `codex exec --json --skip-git-repo-check` and parse its NDJSON. `chat()`
+//! is `collect_stream(stream())` plus a model backfill from provider config,
+//! so tool_calls / thinking / usage / session_id parity holds by construction
+//! and a completed turn always reports `stop_reason = end_turn` (the CLI
+//! executes tools internally).
 //!
 //! # Cancellation
 //!
@@ -406,42 +394,28 @@ impl CodexCliProvider {
         }
     }
 
-    /// Send a chat request by invoking `codex exec --json` and waiting for
-    /// the subprocess to exit.
+    /// Send a chat request by delegating to [`Self::stream`] and collecting
+    /// the events with [`crate::stream::collect_stream`].
     ///
-    /// # Behavior
+    /// Both paths share one `codex exec --json` spawn/parse pipeline, so
+    /// `content`, `thinking`, `tool_calls`, `usage`, `session_id`, and
+    /// `stop_reason` are identical by construction. Codex may emit several
+    /// `agent_message` items per turn; they concatenate into
+    /// [`content`](ChatResponse::content) in arrival order. A successfully
+    /// completed CLI turn always reports [`StopReason::EndTurn`]:
+    /// [`ChatResponse::tool_calls`] records the tools the CLI already ran —
+    /// never a request for the caller to execute them.
     ///
-    /// Codex may emit multiple `agent_message` items during a single turn —
-    /// typically a preamble narrating tool use followed by the final answer.
-    /// This method treats the **last** agent message as the response
-    /// [`content`](ChatResponse::content) and folds any preceding agent
-    /// messages into [`thinking`](ChatResponse::thinking), joined by blank
-    /// lines. Tool calls run internally by the CLI are **not** surfaced as
-    /// [`ChatResponse::tool_calls`] — that field is always empty.
-    ///
-    /// # Errors
-    ///
-    /// - [`MotosanError::ProviderError`] if the subprocess fails to spawn,
-    ///   times out according to [`Self::timeout`], exits non-zero, emits an
-    ///   `error` / `turn.failed` event, or writes malformed JSONL.
+    /// Documented parity exception: `model` is backfilled from the request /
+    /// provider configuration because stream events carry no model name.
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
-        let system_prompt = request.system.clone().or(msg_system);
-        let composed = prompt::compose_prompt(system_prompt.as_deref(), &user_prompt);
-
-        let config = self.build_spawn_config(request.model.clone());
-
-        let (content, thinking, usage, session_id) = spawn::invoke_cli(&config, &composed).await?;
-
-        Ok(ChatResponse {
-            content,
-            thinking,
-            tool_calls: vec![],
-            model: config.model.unwrap_or_default(),
-            usage,
-            stop_reason: StopReason::EndTurn,
-            session_id,
-        })
+        let configured_model = request.model.clone().or_else(|| self.model.clone());
+        let stream = self.stream(request).await?;
+        let mut resp = crate::stream::collect_stream(stream).await?;
+        if resp.model.is_empty() {
+            resp.model = configured_model.unwrap_or_default();
+        }
+        Ok(resp)
     }
 
     /// Stream a chat request via `codex exec --json`, yielding
@@ -470,24 +444,13 @@ impl CodexCliProvider {
     /// items in the returned stream.
     pub async fn stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
         use tokio::io::{AsyncWriteExt, BufReader};
-        use tokio::process::Command;
 
         let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
         let system_prompt = request.system.clone().or(msg_system);
         let composed = prompt::compose_prompt(system_prompt.as_deref(), &user_prompt);
         let config = self.build_spawn_config(request.model.clone());
 
-        let mut cmd = Command::new(&config.binary_path);
-        cmd.envs(config.envs.iter().map(|(k, v)| (k, v)));
-        spawn::push_exec_subcommand(&mut cmd, &config);
-        cmd.arg("--json").arg("--skip-git-repo-check");
-        spawn::apply_common_args(&mut cmd, &config);
-
-        cmd.arg("-");
-        cmd.kill_on_drop(true);
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
+        let mut cmd = spawn::build_command(&config);
 
         let mut child = cmd.spawn().map_err(|e| MotosanError::ProviderError {
             message: format!("failed to spawn codex CLI: {e}"),
@@ -544,8 +507,6 @@ where
 
     Box::pin(async_stream::stream! {
         let mut lines = reader.lines();
-        let mut saw_tool_call = false;
-
         loop {
             let next = match read_timeout {
                 Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
@@ -584,7 +545,6 @@ where
                         yield Ok(event);
                     }
                     stream_json::NdjsonAction::ToolCalls(events) => {
-                        saw_tool_call = true;
                         for event in events {
                             yield Ok(event);
                         }
@@ -595,7 +555,7 @@ where
                         if let Some(usage_event) = usage {
                             yield Ok(usage_event);
                         }
-                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                         break;
                     }
                     stream_json::NdjsonAction::Error(msg) => {
@@ -781,6 +741,117 @@ impl super::ProviderImpl for CodexCliProvider {
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// F4 parity: one fake-CLI transcript through `chat()` and through
+    /// `collect_stream(stream())` must agree on content / thinking /
+    /// tool_calls / stop_reason / usage / session_id. `model` is the one
+    /// documented exception: `chat()` backfills it from provider config.
+    #[cfg(unix)]
+    mod chat_stream_parity {
+        use super::*;
+        use crate::types::StopReason;
+
+        const TRANSCRIPT: &str = concat!(
+            r#"{"type":"thread.started","thread_id":"th_777"}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Let me check."}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"ls -la","exit_code":0,"status":"completed"}}"#,
+            "\n",
+            r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Answer: 4"}}"#,
+            "\n",
+            r#"{"type":"turn.completed","usage":{"input_tokens":11,"output_tokens":5,"cached_input_tokens":2}}"#,
+        );
+
+        /// Write an executable fake `codex` that ignores its argv, drains
+        /// stdin, and plays back `body` on stdout.
+        fn write_fake_cli(test_name: &str, body: &str) -> std::path::PathBuf {
+            use std::io::Write;
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!(
+                "motosan-fake-codex-{test_name}-{}",
+                std::process::id()
+            ));
+            let mut f = std::fs::File::create(&path).expect("create fake CLI");
+            write!(
+                f,
+                "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{body}\nNDJSON\n"
+            )
+            .expect("write fake CLI");
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake CLI");
+            path
+        }
+
+        #[tokio::test]
+        async fn chat_equals_collected_stream_and_reports_end_turn() {
+            let bin = write_fake_cli("parity", TRANSCRIPT);
+            let provider = || CodexCliProvider::with_path(bin.clone()).model("test-model");
+
+            let chat_resp = provider()
+                .chat(user_request("hi"))
+                .await
+                .expect("chat should succeed");
+            let stream = provider()
+                .stream(user_request("hi"))
+                .await
+                .expect("stream should start");
+            let collected = crate::stream::collect_stream(stream)
+                .await
+                .expect("collect should succeed");
+            let _ = std::fs::remove_file(&bin);
+
+            // F4: chat()'s tool_calls = the executed-tool record from the CLI.
+            assert_eq!(
+                chat_resp.tool_calls.len(),
+                1,
+                "chat() must surface the CLI's executed-tool record"
+            );
+            assert_eq!(chat_resp.tool_calls[0].id, "item_1");
+            assert_eq!(chat_resp.tool_calls[0].name, "command_execution");
+            assert_eq!(
+                chat_resp.tool_calls[0].input,
+                serde_json::json!({"command": "ls -la"})
+            );
+            assert_eq!(chat_resp.tool_calls, collected.tool_calls);
+
+            // F4: a completed CLI turn ALWAYS reports end_turn.
+            assert_eq!(chat_resp.stop_reason, StopReason::EndTurn);
+            assert_eq!(collected.stop_reason, StopReason::EndTurn);
+
+            // F4 behavior change: agent messages concatenate into content in
+            // arrival order (stream semantics); the old preamble→thinking
+            // split of the former single-shot path is gone.
+            assert_eq!(chat_resp.content, "Let me check.Answer: 4");
+            assert_eq!(chat_resp.content, collected.content);
+            assert_eq!(chat_resp.thinking, None);
+            assert_eq!(chat_resp.thinking, collected.thinking);
+            assert_eq!(chat_resp.usage.input_tokens, 11);
+            assert_eq!(chat_resp.usage.output_tokens, 5);
+            assert_eq!(chat_resp.usage.cache_read_input_tokens, Some(2));
+            assert_eq!(chat_resp.usage, collected.usage);
+            assert_eq!(chat_resp.session_id.as_deref(), Some("th_777"));
+            assert_eq!(chat_resp.session_id, collected.session_id);
+
+            // Documented F4 parity exception: model backfill from config.
+            assert_eq!(chat_resp.model, "test-model");
+            assert_eq!(collected.model, "");
+        }
+
+        #[tokio::test]
+        async fn chat_times_out_via_stream_read_timeout() {
+            let bin = write_fake_cli("stall", "");
+            std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").expect("write stall script");
+            let provider = CodexCliProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_millis(50));
+            let result = provider.chat(user_request("hi")).await;
+            let _ = std::fs::remove_file(&bin);
+            match result {
+                Err(crate::error::MotosanError::StreamReadTimeout(_)) => {}
+                other => panic!("expected StreamReadTimeout, got {other:?}"),
+            }
+        }
+    }
 
     /// Compile-time + runtime check: `CodexCliProvider` can be coerced into
     /// `Box<dyn ProviderImpl>` and used polymorphically. We don't actually
