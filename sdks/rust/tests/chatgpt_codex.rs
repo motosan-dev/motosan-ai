@@ -376,3 +376,66 @@ async fn token_source_is_consulted_once_per_attempt() {
          attempt 2 used refreshed Bearer tok-2"
     );
 }
+
+// ---------------------------------------------------------------------------
+// F5: ClientBuilder::chatgpt_codex_token_source
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+struct SentinelSource;
+
+#[async_trait]
+impl TokenSource for SentinelSource {
+    async fn access_token(&self) -> Result<String, MotosanError> {
+        Err(MotosanError::Auth {
+            message: "sentinel token source consulted".to_string(),
+            status_code: None,
+            retry_after: None,
+            request_id: None,
+        })
+    }
+}
+
+#[tokio::test]
+async fn builder_token_source_wins_over_static_access_token() {
+    // The builder-made provider always targets the real chatgpt.com URL
+    // (client.rs passes base_url: None), so observe the seam via a sentinel
+    // source that errors BEFORE any network I/O: if the static token had
+    // won, chat() would have attempted a real HTTP call instead.
+    let client = motosan_ai::Client::builder()
+        .provider(motosan_ai::Provider::OpenAiChatGpt)
+        .chatgpt_codex("static-token-should-lose", "acct-123", "gpt-5.5")
+        .chatgpt_codex_token_source(Arc::new(SentinelSource))
+        .build()
+        .expect("build succeeds");
+
+    let err = client
+        .chat(vec![Message::user("hi")])
+        .await
+        .expect_err("sentinel source fails the attempt before any I/O");
+    assert!(
+        matches!(err, MotosanError::Auth { ref message, .. }
+            if message == "sentinel token source consulted"),
+        "got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn builder_token_source_alone_is_sufficient() {
+    // Pins the access-token waiver: no chatgpt_codex(access_token, ...) call
+    // at all. (Verified: build() never required it — api_key is waived for
+    // Provider::OpenAiChatGpt at client.rs:1006-1013 and the static token
+    // defaults to "" — so this is a pin, not a behavior change.)
+    let client = motosan_ai::Client::builder()
+        .provider(motosan_ai::Provider::OpenAiChatGpt)
+        .model("gpt-5.5")
+        .chatgpt_codex_token_source(Arc::new(SentinelSource))
+        .build()
+        .expect("token_source alone must build");
+
+    let err = client
+        .chat(vec![Message::user("hi")])
+        .await
+        .expect_err("sentinel source fails the attempt before any I/O");
+    assert!(matches!(err, MotosanError::Auth { .. }), "got {err:?}");
+}
