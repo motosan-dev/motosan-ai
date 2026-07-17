@@ -16,7 +16,16 @@ import os
 
 import pytest
 
-from motosan_ai import ChatRequest, Client, Message, Provider, SystemBlock, ThinkingConfig, Tool
+from motosan_ai import (
+    ChatRequest,
+    Client,
+    Message,
+    Provider,
+    StreamEventType,
+    SystemBlock,
+    ThinkingConfig,
+    Tool,
+)
 from motosan_ai.providers.anthropic import AnthropicProvider
 
 API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -247,7 +256,9 @@ async def test_live_opus_4_8_adaptive_thinking():
             break
 
     assert any(event.done for event in events)
-    assert any(event.event_type == "thinking" and event.content for event in events)
+    assert any(
+        event.event_type == StreamEventType.thinking_delta and event.content for event in events
+    )
     assert "".join(event.content for event in events if event.event_type == "text").strip()
     await _cooldown()
 
