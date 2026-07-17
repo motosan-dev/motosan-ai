@@ -7,26 +7,14 @@
 //! [`gemini_cli`](super::gemini_cli) so all three CLI backends are
 //! interchangeable via `Box<dyn ProviderImpl>`.
 //!
-//! # Streaming vs Blocking
+//! # One pipeline for chat and stream
 //!
-//! Unlike the HTTP providers (Anthropic, OpenAI, etc.) where `.chat()`
-//! and `.stream()` are two views over the same SSE engine, CLI backends
-//! spawn the binary in **different modes** for each path:
-//!
-//! - [`chat`](ClaudeCodeProvider) spawns `claude --print -` (no
-//!   `--output-format`), waits for the subprocess to exit, collects the
-//!   complete stdout, and returns a single [`ChatResponse`]. No
-//!   intermediate events are surfaced. Token usage is `0`/`0` unless
-//!   `agent_mode` is enabled (which adds `--output-format json`).
-//! - [`stream`](ClaudeCodeProvider) spawns
-//!   `claude --print --output-format stream-json --verbose -`, reads
-//!   NDJSON lines from stdout as they arrive, and yields one
-//!   [`StreamEvent`] per parsed line. The `--verbose` flag is **required**
-//!   by `claude` ≥ 2.1.x for this format and is enforced by this crate.
-//!
-//! Callers should prefer `stream()` for any UI that benefits from
-//! incremental output, and `chat()` only when they need the whole reply
-//! as a single string.
+//! Both [`chat`](ClaudeCodeProvider) and [`stream`](ClaudeCodeProvider)
+//! spawn `claude --print --output-format stream-json --verbose -` and
+//! parse its NDJSON. `chat()` is `collect_stream(stream())` plus a model
+//! backfill from provider config, so tool_calls / thinking / usage /
+//! session_id parity holds by construction and a completed turn always
+//! reports `stop_reason = end_turn` (the CLI executes tools internally).
 //!
 //! # Cancellation
 //!
@@ -59,8 +47,7 @@ pub struct ClaudeCodeProvider {
     /// Path to the `claude` binary. Defaults to `$CLAUDE_CODE_PATH` or
     /// `"claude"` (resolved via `PATH`).
     pub binary_path: PathBuf,
-    /// Whether to pass `--dangerously-skip-permissions` and switch the
-    /// blocking path to `--output-format json` (so usage can be parsed).
+    /// Whether to pass `--dangerously-skip-permissions`.
     pub agent_mode: bool,
     /// Whether to pass `--bare`. Skips hooks, plugins, auto-memory,
     /// keychain reads, and user/project settings discovery, so the
@@ -449,25 +436,26 @@ impl ClaudeCodeProvider {
         }
     }
 
-    /// Send a chat request by invoking the `claude` CLI as a subprocess.
+    /// Send a chat request by delegating to [`Self::stream`] and collecting
+    /// the events with [`crate::stream::collect_stream`].
+    ///
+    /// Both paths share one spawn/parse pipeline, so `content`, `thinking`,
+    /// `tool_calls`, `usage`, `session_id`, and `stop_reason` are identical
+    /// by construction. A successfully completed CLI turn always reports
+    /// [`StopReason::EndTurn`]: the CLI executes its tools internally, so
+    /// [`ChatResponse::tool_calls`] is the record of tools the CLI already
+    /// ran — never a request for the caller to execute them.
+    ///
+    /// Documented parity exception: `model` is backfilled from the request /
+    /// provider configuration because stream events carry no model name.
     pub async fn chat(&self, request: ChatRequest) -> Result<ChatResponse, MotosanError> {
-        // Extract system prompt: prefer request.system, fall back to first system message.
-        let (msg_system, user_prompt) = prompt::messages_to_prompt(&request.messages);
-        let append_system_prompt = request.system.or(msg_system);
-
-        let config = self.build_spawn_config(request.model, append_system_prompt);
-
-        let (text, usage, session_id) = spawn::invoke_cli(&config, &user_prompt).await?;
-
-        Ok(ChatResponse {
-            content: text,
-            thinking: None,
-            tool_calls: vec![],
-            model: config.model.unwrap_or_default(),
-            usage,
-            stop_reason: StopReason::EndTurn,
-            session_id,
-        })
+        let configured_model = request.model.clone().or_else(|| self.model.clone());
+        let stream = self.stream(request).await?;
+        let mut resp = crate::stream::collect_stream(stream).await?;
+        if resp.model.is_empty() {
+            resp.model = configured_model.unwrap_or_default();
+        }
+        Ok(resp)
     }
 
     /// Stream a chat request via `claude --print --output-format stream-json`.
@@ -562,8 +550,6 @@ where
 
     Box::pin(async_stream::stream! {
         let mut lines = reader.lines();
-        let mut saw_tool_call = false;
-
         loop {
             let next = match read_timeout {
                 Some(dur) => match tokio::time::timeout(dur, lines.next_line()).await {
@@ -599,7 +585,6 @@ where
                         yield Ok(event);
                     }
                     stream_json::NdjsonAction::ToolCalls(events) => {
-                        saw_tool_call = true;
                         for event in events {
                             yield Ok(event);
                         }
@@ -614,7 +599,7 @@ where
                         if let Some(usage_event) = usage {
                             yield Ok(usage_event);
                         }
-                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(super::cli_terminal_stop_reason(saw_tool_call)));
+                        yield Ok(crate::types::StreamEvent::done_with_stop_reason(StopReason::EndTurn));
                         break;
                     }
                     stream_json::NdjsonAction::Error(msg) => {
@@ -798,6 +783,116 @@ impl super::ProviderImpl for ClaudeCodeProvider {
 mod tests {
     use super::*;
     use crate::types::{ChatRequest, Message, Role};
+
+    /// F4 parity: one fake-CLI transcript through `chat()` and through
+    /// `collect_stream(stream())` must agree on content / thinking /
+    /// tool_calls / stop_reason / usage / session_id. `model` is the one
+    /// documented exception: `chat()` backfills it from provider config.
+    #[cfg(unix)]
+    mod chat_stream_parity {
+        use super::*;
+        use crate::types::StopReason;
+
+        const TRANSCRIPT: &str = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"checking"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"path":"/tmp/x"}}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":" done"}]}}"#,
+            "\n",
+            r#"{"type":"result","result":"done","usage":{"input_tokens":7,"output_tokens":3},"session_id":"sess_42"}"#,
+        );
+
+        /// Write an executable fake `claude` that ignores its argv, drains
+        /// stdin (the provider writes the prompt then closes the pipe), and
+        /// plays back `body` on stdout.
+        fn write_fake_cli(test_name: &str, body: &str) -> std::path::PathBuf {
+            use std::io::Write;
+            use std::os::unix::fs::PermissionsExt;
+            let path = std::env::temp_dir().join(format!(
+                "motosan-fake-claude-{test_name}-{}",
+                std::process::id()
+            ));
+            let mut f = std::fs::File::create(&path).expect("create fake CLI");
+            write!(
+                f,
+                "#!/bin/sh\ncat > /dev/null\ncat <<'NDJSON'\n{body}\nNDJSON\n"
+            )
+            .expect("write fake CLI");
+            f.set_permissions(std::fs::Permissions::from_mode(0o755))
+                .expect("chmod fake CLI");
+            path
+        }
+
+        #[tokio::test]
+        async fn chat_equals_collected_stream_and_reports_end_turn() {
+            let bin = write_fake_cli("parity", TRANSCRIPT);
+            let provider = || ClaudeCodeProvider::with_path(bin.clone()).model("sonnet");
+
+            let chat_resp = provider()
+                .chat(test_request("hi"))
+                .await
+                .expect("chat should succeed");
+            let stream = provider()
+                .stream(test_request("hi"))
+                .await
+                .expect("stream should start");
+            let collected = crate::stream::collect_stream(stream)
+                .await
+                .expect("collect should succeed");
+            let _ = std::fs::remove_file(&bin);
+
+            // F4: chat()'s tool_calls = the executed-tool record from the CLI.
+            assert_eq!(
+                chat_resp.tool_calls.len(),
+                1,
+                "chat() must surface the CLI's executed-tool record"
+            );
+            assert_eq!(chat_resp.tool_calls[0].id, "toolu_1");
+            assert_eq!(chat_resp.tool_calls[0].name, "Read");
+            assert_eq!(
+                chat_resp.tool_calls[0].input,
+                serde_json::json!({"path": "/tmp/x"})
+            );
+            assert_eq!(chat_resp.tool_calls, collected.tool_calls);
+
+            // F4: a completed CLI turn ALWAYS reports end_turn — the CLI
+            // already ran its tools; tool_use would make agent loops
+            // re-execute them.
+            assert_eq!(chat_resp.stop_reason, StopReason::EndTurn);
+            assert_eq!(collected.stop_reason, StopReason::EndTurn);
+
+            assert_eq!(chat_resp.content, "checking done");
+            assert_eq!(chat_resp.content, collected.content);
+            assert_eq!(chat_resp.thinking, None);
+            assert_eq!(chat_resp.thinking, collected.thinking);
+            assert_eq!(chat_resp.usage.input_tokens, 7);
+            assert_eq!(chat_resp.usage.output_tokens, 3);
+            assert_eq!(chat_resp.usage, collected.usage);
+            assert_eq!(chat_resp.session_id.as_deref(), Some("sess_42"));
+            assert_eq!(chat_resp.session_id, collected.session_id);
+
+            // Documented F4 parity exception: model backfill from config.
+            assert_eq!(chat_resp.model, "sonnet");
+            assert_eq!(collected.model, "");
+        }
+
+        #[tokio::test]
+        async fn chat_times_out_via_stream_read_timeout() {
+            // SpawnConfig.timeout must still bound chat() on the delegated
+            // path — as the M3 read-idle timeout, not the old total-wall
+            // ProviderError.
+            let bin = write_fake_cli("stall", "");
+            // Overwrite with a stalling body: never emits a line.
+            std::fs::write(&bin, "#!/bin/sh\nsleep 30\n").expect("write stall script");
+            let provider = ClaudeCodeProvider::with_path(bin.clone())
+                .timeout(std::time::Duration::from_millis(50));
+            let result = provider.chat(test_request("hi")).await;
+            let _ = std::fs::remove_file(&bin);
+            match result {
+                Err(crate::error::MotosanError::StreamReadTimeout(_)) => {}
+                other => panic!("expected StreamReadTimeout, got {other:?}"),
+            }
+        }
+    }
 
     /// Compile-time + runtime check that `ClaudeCodeProvider` can be coerced
     /// into `Box<dyn ProviderImpl>` and used polymorphically alongside the
