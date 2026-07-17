@@ -25,6 +25,7 @@ from motosan_ai.types import (
     Role,
     StopReason,
     StreamEvent,
+    StreamEventType,
     ToolCall,
     Usage,
     content_block_to_dict,
@@ -428,6 +429,11 @@ class AnthropicProvider(BaseProvider):
 
         current_tool_id: str | None = None
         current_stop_reason: StopReason | None = None
+        # Accumulates the text of an open `thinking` content block; None
+        # when no thinking block is open (redacted_thinking never opens
+        # it). content_block_stop drains it into a thinking_done event
+        # (mirrors the Rust adapter, anthropic.rs).
+        current_thinking: str | None = None
 
         try:
             if not resp.is_success:
@@ -497,6 +503,12 @@ class AnthropicProvider(BaseProvider):
                             tool_call_name=block.get("name", ""),
                             event_type="tool_call_start",
                         )
+                    elif block.get("type") == "thinking":
+                        # Open the thinking accumulator. No event is
+                        # emitted at start; redacted_thinking blocks
+                        # intentionally leave current_thinking as None so
+                        # their block_stop is a no-op.
+                        current_thinking = ""
 
                 elif event_type == "content_block_delta":
                     delta = payload.get("delta") or {}
@@ -508,8 +520,12 @@ class AnthropicProvider(BaseProvider):
                     elif delta_type == "thinking_delta":
                         thinking_text = delta.get("thinking", "")
                         if thinking_text:
+                            if current_thinking is not None:
+                                current_thinking += thinking_text
                             yield StreamEvent(
-                                content=thinking_text, done=False, event_type="thinking"
+                                content=thinking_text,
+                                done=False,
+                                event_type=StreamEventType.thinking_delta,
                             )
                     elif delta_type == "input_json_delta":
                         partial = delta.get("partial_json", "")
@@ -531,6 +547,16 @@ class AnthropicProvider(BaseProvider):
                             event_type="tool_call_end",
                         )
                         current_tool_id = None
+                    elif current_thinking is not None:
+                        # Emit even when empty: presence of thinking_done
+                        # tells consumers a thinking block existed (Rust
+                        # parity, anthropic.rs content_block_stop).
+                        yield StreamEvent(
+                            content=current_thinking,
+                            done=False,
+                            event_type=StreamEventType.thinking_done,
+                        )
+                        current_thinking = None
 
                 elif event_type == "message_stop":
                     yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
