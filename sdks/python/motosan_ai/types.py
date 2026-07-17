@@ -27,6 +27,14 @@ class StreamEventType(StrEnum):
     tool_call_args = "tool_call_args"
     tool_call_end = "tool_call_end"
     usage = "usage"
+    # Partial extended-thinking delta; StreamEvent.content carries the
+    # delta text. Emitted by anthropic and chatgpt_codex streams.
+    thinking_delta = "thinking_delta"
+    # End of a thinking block; StreamEvent.content carries the FULL
+    # concatenated thinking text. Emitted by anthropic on
+    # content_block_stop of a thinking block, always after that block's
+    # thinking_delta events and before any final-answer text events.
+    thinking_done = "thinking_done"
 
 
 @dataclass(frozen=True)
