@@ -5,6 +5,7 @@ pub mod providers;
 pub mod retry;
 pub mod stream;
 pub mod think_stripper;
+pub(crate) mod transport;
 pub mod types;
 
 #[cfg(feature = "claude-code")]
