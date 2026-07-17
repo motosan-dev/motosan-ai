@@ -45,6 +45,8 @@ jobs:
         # indexmap >=2.14 requires hashbrown >=0.17, which itself requires
         # the unstable `edition2024` Cargo feature — unavailable on 1.82.
         # uuid >=1.23 pulls getrandom 0.4, which also requires edition2024.
+        # The codex-oauth live-smoke dev graph otherwise resolves newer
+        # reqwest/url/TLS/WASI transitives whose MSRVs are newer than 1.82.
         # Cargo.lock is gitignored (library crate), so without these pins
         # CI resolves transitively to the latest compatible-looking versions
         # on every run.
@@ -52,6 +54,12 @@ jobs:
           cargo generate-lockfile
           cargo update -p indexmap --precise 2.13.1
           cargo update -p uuid --precise 1.18.1
+          cargo update -p reqwest --precise 0.12.4
+          cargo update -p url --precise 2.4.1
+          cargo update -p native-tls --precise 0.2.15
+          cargo update -p tempfile --precise 3.24.0
+          cargo update -p zeroize --precise 1.8.2
+          cargo update -p wasip2 --precise 1.0.1+wasi-0.2.4
       - name: Cargo build (no features)
         run: cargo build
       - name: Cargo test (no features)
