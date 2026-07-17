@@ -11,9 +11,9 @@
 ## Global Constraints
 
 - **Baseline:** authored 2026-07-16 against `origin/main` @ `acf5d7f` (post-M2: 0.23.0/0.16.0/0.13.0 shipped; `send_with_retry`, structured error metadata, `specs/retry.md` + three conformance suites all exist). ALL line refs approximate; execute in a worktree off CURRENT `origin/main` and ground every edit in real files.
-- **Locked design (E1–E9):** error names `IncompleteStream` (Rust variant) / `IncompleteStreamError` (Py/TS, subclass of StreamError) / `CancelledError` (TS) / `StreamReadTimeoutError` (Py, mirrors existing Rust/TS); enforcement at ADAPTERS; timeout defaults **connect 10s / read-idle 120s / total None** (total = chat-only, never streams); Rust providers built ONCE in `build()` sharing one `reqwest::Client`; TS caller-signal abort → `CancelledError`, never retried (fetch-internal AbortError stays retryable); the v0.10.1 "exactly one done even on truncated EOF" invariant is deliberately retired. Deviation = wrong even if it compiles.
+- **Locked design (E1–E9):** error names `IncompleteStream` (Rust variant) / `IncompleteStreamError` (Py/TS, subclass of StreamError) / `CancelledError` (TS) / `StreamReadTimeoutError` (Py, mirrors existing Rust/TS); enforcement at ADAPTERS; timeout defaults **connect 10s / read-idle 120s / total None** (total = chat-only, never streams); Rust providers built ONCE in `build()` sharing one `reqwest::Client`; TS caller-signal abort → `CancelledError`, never retried (fetch-internal AbortError stays retryable); the v0.10.1 "exactly one done even on truncated EOF" invariant is deliberately retired *(amended 2026-07-17: on OpenAI-wire adapters — Rust/TS openai, Python openai + minimax — the retirement covers ONLY EOF with NEITHER `[DONE]` NOR a `finish_reason`-bearing chunk. `finish_reason` is the SEMANTIC terminal and `[DONE]` only the transport epilogue: EOF after a stashed finish_reason still completes cleanly with `done(stop_reason)`. Anthropic stays strict `message_stop`)*. Deviation = wrong even if it compiles.
 - **Pinned-behavior flips are explicit:** any task retiring pinned behavior lists every flipped test file:name and updates spec + conformance in the same PR group. Everything not explicitly flipped (M1 retry tests, M2 conformance) MUST pass unchanged; editing tests to make them pass remains unacceptable — with exactly ONE carve-out, below.
-- **Fixture-completion allowance (M3 amendment, 2026-07-17):** an existing test whose SSE/NDJSON fixture merely OMITS the provider's terminal event, while its assertions target unrelated behavior (tool calls, usage, text, headers), MAY have the terminal event APPENDED to its fixture (`data: [DONE]`, `message_stop`, `finishReason` chunk, `response.completed`, or `"done": true` per provider) — assertions otherwise unchanged. Rationale: these fixtures were wire-unrealistic (real providers always send the terminal event); pre-M3 they passed only because adapters fabricated `done` at EOF, which M3 retires. This is NOT a flip. Rules: (1) list every completed fixture in the commit message under `Fixture completions:`; (2) if completing a fixture would require changing ANY assertion beyond tolerating the terminal-derived `done` event, STOP — that test needs flip-list treatment, report it; (3) tests that assert termination behavior on truncated input remain governed exclusively by the flip list. Known instances at baseline (executor verifies each; adapter unit tests that feed frames without EOF semantics are unaffected): `openai_provider.rs::openai_stream_emits_tool_call_events`, `collect_stream.rs::{stream_then_collect_returns_chat_response, stream_collect_with_tool_calls, chat_vs_stream_collect_consistency, oauth_chat_uses_collect_stream_internally}`, `anthropic_oauth_usage.rs::oauth_chat_captures_usage_from_stream_events`, `vision_openai.rs::openai_vision_base64_uses_data_url_format`, `mcp_servers.rs::oauth_plus_mcp_sends_single_merged_beta_header`; sweep Python/TS fixtures for the same shape when their tasks run.
+- **Fixture-completion allowance (M3 amendment, 2026-07-17):** an existing test whose SSE/NDJSON fixture merely OMITS the provider's terminal event, while its assertions target unrelated behavior (tool calls, usage, text, headers), MAY have the terminal event APPENDED to its fixture (`data: [DONE]`, `message_stop`, `finishReason` chunk, `response.completed`, or `"done": true` per provider) — assertions otherwise unchanged. Rationale: these fixtures were wire-unrealistic (real providers always send the terminal event); pre-M3 they passed only because adapters fabricated `done` at EOF, which M3 retires. This is NOT a flip. Rules: (1) list every completed fixture in the commit message under `Fixture completions:`; (2) if completing a fixture would require changing ANY assertion beyond tolerating the terminal-derived `done` event, STOP — that test needs flip-list treatment, report it; (3) tests that assert termination behavior on truncated input remain governed exclusively by the flip list. Known instances at baseline (executor verifies each; adapter unit tests that feed frames without EOF semantics are unaffected): `openai_provider.rs::openai_stream_emits_tool_call_events`, `collect_stream.rs::{stream_then_collect_returns_chat_response, stream_collect_with_tool_calls, chat_vs_stream_collect_consistency, oauth_chat_uses_collect_stream_internally}`, `anthropic_oauth_usage.rs::oauth_chat_captures_usage_from_stream_events`, `vision_openai.rs::openai_vision_base64_uses_data_url_format`, `mcp_servers.rs::oauth_plus_mcp_sends_single_merged_beta_header`; sweep Python/TS fixtures for the same shape when their tasks run. **Amended 2026-07-17 (either-suffices rule):** the known-instances list above was compiled under the earlier strict-`[DONE]` reading. Under the amended rule an OpenAI-wire fixture that already ends with a `finish_reason`-bearing chunk is VALID unchanged — `finish_reason` now counts as the terminal event — so most of the listed OpenAI-wire instances need NO completion (executor re-verifies each). The allowance stays as a safety valve ONLY for fixtures ending with NEITHER signal (no `[DONE]` and no `finish_reason` chunk on the OpenAI wire; no provider terminal frame on other wires) whose assertions target unrelated behavior.
 - **Breaking budget:** Rust `MotosanError` gains a variant + stream EOF semantics (0.24.0, changelog migration section); Python stream truncation now raises (0.17.0, softened by subclassing); TS same + cancellation (0.14.0). Python `LlmClient` Protocol stays additive-only.
 - **House workflow:** every `.rs`/`Cargo.toml` change via PR + CI; Rust clippy gate is `cargo clippy --all-features --all-targets -- -D warnings` (`--all-targets` mandatory); fresh Python worktrees run `uv sync --all-extras` before first push; TS full suite = `npm run build && npm test`.
 - **Commands** — Rust (from `sdks/rust`): `cargo test --all-features …`, `cargo fmt`, clippy as above. Python (from `sdks/python`): `uv run pytest tests/… -v`, `uv run ruff check motosan_ai/`, `uv run ruff format`. TypeScript (from `sdks/typescript`): `npx vitest run tests/…`, `npm run typecheck`.
@@ -78,8 +78,8 @@
 
   | Provider family | Terminal event |
   |-----------------|----------------|
-  | OpenAI | `data: [DONE]` SSE sentinel |
-  | MiniMax | Python: `data: [DONE]` SSE sentinel (own OpenAI-compatible-wire adapter). Rust / TypeScript: `message_stop` — both delegate to the Anthropic adapter (Rust `build_minimax_provider` constructs an `AnthropicProvider`; TS `MinimaxProvider` wraps one), so the Anthropic rule applies |
+  | OpenAI | `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices; `finish_reason` is the semantic terminal, `[DONE]` the transport epilogue) |
+  | MiniMax | Python: `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices, as for OpenAI — own OpenAI-compatible-wire adapter). Rust / TypeScript: `message_stop` — both delegate to the Anthropic adapter (Rust `build_minimax_provider` constructs an `AnthropicProvider`; TS `MinimaxProvider` wraps one), so the Anthropic rule applies |
   | Anthropic | `message_stop` SSE event (the Python adapter additionally treats a stray `data: [DONE]` as terminal) |
   | Gemini, GeminiCodeAssist | final SSE chunk carrying `finishReason` (a trailing `[DONE]` is tolerated but not required) |
   | ChatGPT Codex | `response.completed` SSE event |
@@ -90,7 +90,10 @@
   **without** the provider's terminal event, the adapter yields/throws
   the `IncompleteStream` error below. Adapters MUST NOT fabricate a
   synthetic `done` event and MUST NOT end the stream silently:
-  truncation is always distinguishable from completion.
+  truncation is always distinguishable from completion. (On the OpenAI
+  wire the `done` event may be *emitted at EOF* when a `finish_reason`
+  chunk — a real terminal event per the table above — already arrived;
+  that is delivery of a received terminal, not fabrication.)
 
   Collectors are unchanged: they keep propagating adapter errors (the
   M1 fallible-stream contract) and keep the `stop_reason` heuristic
@@ -127,8 +130,13 @@
   silent-end paths elsewhere, e.g. the TypeScript Anthropic adapter's
   fallback `done` at EOF) is **deliberately retired**. Fabricating
   `done` on a truncated EOF made truncation indistinguishable from
-  completion. The narrower invariant that survives: a stream that
-  terminates *without error* emits exactly one terminal `done` event.
+  completion. What is retired is precisely the NEITHER-signal
+  fabrication: on the OpenAI wire an EOF after a `finish_reason`-bearing
+  chunk is a *semantically complete* stream (per the terminal-event
+  table above) and still emits `done` carrying the stashed stop reason —
+  that path is NOT retired. The narrower invariant that survives: a
+  stream that terminates *without error* emits exactly one terminal
+  `done` event.
 
   ### Cancellation
 
@@ -231,11 +239,13 @@
   ```
   docs(specs): add stream termination contract; amend retry rules for cancellation and read-idle timeouts
 
-  - types.md: terminal-event rule (adapter-enforced) with per-SDK
-    MiniMax terminal events (Python [DONE] wire vs Rust/TS Anthropic
-    delegate), IncompleteStream error spellings, retire the v0.10.1
-    fabricated-done invariant, document cancellation semantics (Rust
-    drop / TS AbortSignal / Python task cancellation)
+  - types.md: terminal-event rule (adapter-enforced) with the
+    OpenAI-wire either-suffices terminal ([DONE] or a finish_reason
+    chunk) and per-SDK MiniMax terminal events (Python OpenAI wire vs
+    Rust/TS Anthropic delegate), IncompleteStream error spellings,
+    retire the v0.10.1 neither-signal fabricated-done invariant,
+    document cancellation semantics (Rust drop / TS AbortSignal /
+    Python task cancellation)
   - retry.md: TS CancelledError never retried (caller-signal aborts);
     fetch-internal AbortError stays retryable; mid-stream read-idle
     timeouts are not retried
@@ -248,7 +258,7 @@
 
 ### Task 2: Add MotosanError::IncompleteStream and make every Rust HTTP stream adapter error on EOF without the provider terminal event
 
-Breaking change — this is the 0.24.0 headline. The "exactly one terminal done event even when upstream closes without `[DONE]`" invariant (documented since v0.10.1) is deliberately retired: adapters now yield `Err(IncompleteStream)` when the upstream byte/event stream ends without the provider terminal event (OpenAI `[DONE]`, Anthropic `message_stop`, Gemini/CodeAssist `finishReason` frame, codex `response.completed`, Ollama `"done":true`). Collectors are unchanged: `collect_stream` keeps propagating `Err` items (M1) and keeps the stop_reason heuristic only for a real done event that lacks a reason. House rule: all `.rs` changes land via PR + CI, never direct to main.
+Breaking change — this is the 0.24.0 headline. The "exactly one terminal done event even when upstream closes without `[DONE]`" invariant (documented since v0.10.1) is deliberately retired *for the neither-signal case*: adapters now yield `Err(IncompleteStream)` when the upstream byte/event stream ends without the provider terminal event (OpenAI `[DONE]` **or** a `finish_reason`-bearing chunk — either suffices, so EOF with a stashed finish_reason still completes cleanly with `done(stop_reason)`; Anthropic `message_stop`; Gemini/CodeAssist `finishReason` frame; codex `response.completed`; Ollama `"done":true`). Collectors are unchanged: `collect_stream` keeps propagating `Err` items (M1) and keeps the stop_reason heuristic only for a real done event that lacks a reason. House rule: all `.rs` changes land via PR + CI, never direct to main.
 
 **E9 spec coupling (merge ordering):** This task's PR group must land AFTER the E9 spec task that amends `specs/types.md` §stream termination — the `done`-row language "Exactly one terminal event per stream" (~line 115) is retired/reworded there and replaced with the termination contract. Do not merge this PR group until that spec amendment has landed: otherwise spec and code contradict each other (this task flips the pinned openai tests the current spec language backs). The spec's per-provider terminal-event table introduced by the E9 task is the normative reference for which event counts as terminal for each provider; the parenthetical list above (`[DONE]` / `message_stop` / `finishReason` / `response.completed` / `"done":true`) is a convenience restatement of that table, and the table wins on any discrepancy.
 
@@ -260,7 +270,7 @@ Breaking change — this is the 0.24.0 headline. The "exactly one terminal done 
 - `sdks/rust/src/providers/gemini_code_assist.rs` — init ~145-149, struct ~165-167, finish arm ~279-289, Err/EOF arms ~296-299, test inits ~409, ~422, ~441, ~457
 - `sdks/rust/src/providers/chatgpt_codex.rs` — init ~279-286, struct ~322-325, `response.completed` arm ~474-476, error-take sites ~516-518 and ~536-538, Err/EOF arms ~541-544, test inits ~743-750, ~921-928
 - `sdks/rust/src/providers/ollama.rs` — init ~390-393, struct ~401-404, done arm ~429-431, Err/EOF arms ~474-479, test init ~557-560
-- `sdks/rust/tests/openai_provider.rs` — flip two tests ~751-835
+- `sdks/rust/tests/openai_provider.rs` — rewrite two EOF tests ~751-835 (one flip, one adjusted survival — amended 2026-07-17)
 - `sdks/rust/tests/anthropic_stream.rs`, `sdks/rust/tests/gemini_provider.rs`, `sdks/rust/tests/gemini_code_assist.rs`, `sdks/rust/tests/chatgpt_codex.rs`, `sdks/rust/tests/ollama_native_provider.rs`, `sdks/rust/tests/collect_stream.rs` — new tests (append at end of each file)
 - `sdks/rust/CHANGELOG.md` — `[Unreleased]` section ~5
 
@@ -268,9 +278,10 @@ Breaking change — this is the 0.24.0 headline. The "exactly one terminal done 
 - Produces: `#[error("incomplete stream: {0}")] IncompleteStream(String)` on `MotosanError`. Message payload convention: `"<provider> ended without a terminal event"` with provider ∈ {`openai`, `anthropic`, `gemini`, `gemini-code-assist`, `chatgpt-codex`, `ollama`} (full Display: `"incomplete stream: openai ended without a terminal event"`).
 - Consumes: `BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>` (unchanged); `StreamEvent::done()` / `done_with_stop_reason(StopReason)` (unchanged).
 
-**M2/M1 regression contract — pinned tests explicitly retired by E3 (the ONLY flips):**
-- `sdks/rust/tests/openai_provider.rs::openai_stream_eof_flush_when_done_sentinel_missing` (~752)
-- `sdks/rust/tests/openai_provider.rs::openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel` (~795)
+**M2/M1 regression contract — pinned tests explicitly retired by E3 (the ONLY flip; list shrunk by the 2026-07-17 either-suffices amendment):**
+- `sdks/rust/tests/openai_provider.rs::openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel` (~795) — the NEITHER-signal EOF fabrication is what M3 retires.
+
+`openai_stream_eof_flush_when_done_sentinel_missing` (~752) is **no longer flipped**: its pinned behavior (EOF after a `finish_reason` chunk emits `done` with the stashed stop_reason) IS the amended rule's sanctioned semantic-completion path. Step 1 renames/re-comments it to state the amended rule; its fixture and stop_reason assertions survive intact.
 
 Every other stream test fixture already ends with its terminal frame and must pass unchanged.
 
@@ -287,14 +298,17 @@ Steps:
             ),
   ```
 
-  and add `MotosanError::IncompleteStream("i".into()),` to the `errors` array in `accessors_return_none_on_non_http_variants` (~line 161). (b) In `sdks/rust/tests/openai_provider.rs`, replace the two retired tests (approximate lines 751-835, both fixture bodies kept verbatim from the originals) with:
+  and add `MotosanError::IncompleteStream("i".into()),` to the `errors` array in `accessors_return_none_on_non_http_variants` (~line 161). (b) In `sdks/rust/tests/openai_provider.rs`, rewrite the two EOF tests (approximate lines 751-835; both fixture bodies kept verbatim from the originals). The first becomes the amended-rule completeness test — an *adjusted survival* of `openai_stream_eof_flush_when_done_sentinel_missing`, same fixture and same stop_reason assertions, renamed/re-commented to state the amended contract; it passes both pre- and post-change (it pins the narrow surviving path) but is compile-blocked with the rest of the file until step 3 adds the variant. The second flips to `IncompleteStream`. The `[DONE]` happy path is unchanged and stays pinned by the existing `openai_stream_done_count_is_exactly_one_when_done_sentinel_present` (~838) — no edit there:
 
   ```rust
   #[tokio::test]
-  async fn openai_stream_eof_without_done_sentinel_yields_incomplete_stream() {
-      // Flip of pre-0.24 `openai_stream_eof_flush_when_done_sentinel_missing`:
-      // finish_reason arrived but the `[DONE]` terminal sentinel never did —
-      // that is truncation now, not an "EOF flush".
+  async fn openai_stream_finish_reason_then_eof_completes_with_stop_reason() {
+      // Amended M3 rule (2026-07-17): `finish_reason` is the SEMANTIC
+      // terminal event; `[DONE]` is only the transport epilogue. EOF after a
+      // finish_reason chunk is a COMPLETE stream — the adapter emits done
+      // carrying the stashed stop_reason, NOT Err(IncompleteStream).
+      // (Adjusted survival of the pre-0.24
+      // `openai_stream_eof_flush_when_done_sentinel_missing` pin.)
       let mut server = mockito::Server::new_async().await;
       let sse_body = concat!(
           "data: {\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n",
@@ -313,24 +327,17 @@ Steps:
           .message(Message::user("hello"))
           .build();
       let mut stream = provider.stream(request).await.expect("stream response");
-      let mut saw_done = false;
-      let mut last_err = None;
+      let mut events = Vec::new();
       while let Some(item) = stream.next().await {
-          match item {
-              Ok(ev) => saw_done |= ev.done,
-              Err(e) => {
-                  last_err = Some(e);
-                  break;
-              }
-          }
+          events.push(item.expect("finish_reason-terminated stream must not error"));
       }
-      assert!(!saw_done, "must not fabricate a done event on truncation");
-      match last_err.expect("EOF without [DONE] must yield an error") {
-          MotosanError::IncompleteStream(msg) => {
-              assert_eq!(msg, "openai ended without a terminal event")
-          }
-          other => panic!("expected IncompleteStream, got {other:?}"),
-      }
+      let done = events
+          .iter()
+          .find(|e| e.done)
+          .expect("EOF after finish_reason emits the terminal done");
+      assert_eq!(done.stop_reason, Some(StopReason::MaxTokens));
+      assert_eq!(events.iter().filter(|e| e.done).count(), 1);
+      assert_eq!(events[0].content, "hello");
   }
 
   #[tokio::test]
@@ -640,13 +647,14 @@ Steps:
       #[error("stream read timeout: no data received within {0} seconds")]
       StreamReadTimeout(u64),
       /// Upstream byte/event stream ended without the provider terminal event
-      /// (`[DONE]` / `message_stop` / `finishReason` / `response.completed` /
-      /// `"done":true`). Payload: `"<provider> ended without a terminal event"`.
+      /// (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices /
+      /// `message_stop` / `finishReason` / `response.completed` / `"done":true`).
+      /// Payload: `"<provider> ended without a terminal event"`.
       #[error("incomplete stream: {0}")]
       IncompleteStream(String),
   ```
 
-  (b) `sdks/rust/src/providers/openai.rs` — update the `done_emitted` doc comment (~658-661) to: `/// Whether a terminal `[DONE]` was parsed (or the stream already ended in an error). The EOF arm uses this to decide clean end vs IncompleteStream.` Then, Current code (approximate lines 846-861):
+  (b) `sdks/rust/src/providers/openai.rs` — update the `done_emitted` doc comment (~658-661) to: `/// Whether a terminal outcome was already yielded ([DONE] parsed, an error surfaced, or the EOF arm resolved). The EOF arm combines this with `pending_stop_reason` to decide done(stash) — finish_reason is the semantic terminal — vs IncompleteStream when NEITHER signal arrived.` Then, Current code (approximate lines 846-861):
 
   ```rust
                   Poll::Ready(None) => {
@@ -671,13 +679,20 @@ Steps:
 
   ```rust
                   Poll::Ready(None) => {
-                      // M3: upstream closed without the `[DONE]` terminal
-                      // sentinel. The pre-0.24 "EOF flush" that fabricated a
-                      // clean `done` here is retired — truncation is a typed
-                      // error. Any stashed finish_reason is discarded: without
-                      // `[DONE]` the stream did not terminate.
+                      // M3 (amended 2026-07-17): upstream closed without the
+                      // `[DONE]` transport epilogue. A stashed finish_reason
+                      // is the SEMANTIC terminal — the stream is complete, so
+                      // emit the terminal done carrying it (narrow survival
+                      // of the pre-0.24 EOF flush, ONLY when finish_reason
+                      // was seen). EOF with NEITHER signal is truncation: a
+                      // typed error, never a fabricated done.
                       if !self.done_emitted {
                           self.done_emitted = true;
+                          if let Some(reason) = self.pending_stop_reason.take() {
+                              return Poll::Ready(Some(Ok(
+                                  StreamEvent::done_with_stop_reason(reason),
+                              )));
+                          }
                           return Poll::Ready(Some(Err(MotosanError::IncompleteStream(
                               "openai ended without a terminal event".to_string(),
                           ))));
@@ -714,10 +729,10 @@ Steps:
 
   ```markdown
   ### Breaking
-  - **Truncated streams now error instead of ending cleanly.** Every HTTP stream adapter (openai, anthropic, gemini, gemini-code-assist, chatgpt-codex, ollama) yields `Err(MotosanError::IncompleteStream("<provider> ended without a terminal event"))` when the upstream connection closes without the provider terminal event (`[DONE]` / `message_stop` / `finishReason` / `response.completed` / `"done":true`). The v0.10.1 invariant "exactly one terminal done event even when upstream closes without `[DONE]`" is retired. New `MotosanError::IncompleteStream(String)` variant — enum addition breaks exhaustive matches.
+  - **Truncated streams now error instead of ending cleanly.** Every HTTP stream adapter (openai, anthropic, gemini, gemini-code-assist, chatgpt-codex, ollama) yields `Err(MotosanError::IncompleteStream("<provider> ended without a terminal event"))` when the upstream connection closes without the provider terminal event (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices / `message_stop` / `finishReason` / `response.completed` / `"done":true`). OpenAI amendment: `finish_reason` is the semantic terminal — EOF after a stashed finish_reason still emits `done(stop_reason)` and completes cleanly; only EOF with NEITHER signal errors. The v0.10.1 invariant "exactly one terminal done event even when upstream closes without `[DONE]`" is retired for that neither-signal case. New `MotosanError::IncompleteStream(String)` variant — enum addition breaks exhaustive matches.
   ```
 
-- [ ] 4. Run `cargo test --all-features incomplete_stream` from `sdks/rust` — all new/flipped tests pass. Then run the full package suite: `cargo test --all-features` — everything else must pass unchanged (the only retired behaviors are the two openai tests flipped in step 1).
+- [ ] 4. Run `cargo test --all-features incomplete_stream` from `sdks/rust` — all new/flipped tests pass — then `cargo test --all-features --test openai_provider finish_reason_then_eof` for the amended completeness test (its name lacks the `incomplete_stream` filter token). Then run the full package suite: `cargo test --all-features` — everything else must pass unchanged (the only retired behavior is the single openai neither-signal test flipped in step 1).
 
 - [ ] 5. Run `cargo fmt` then `cargo clippy --all-features --all-targets -- -D warnings` from `sdks/rust`; fix any lint (note: `--all-targets` lints the test files too).
 
@@ -729,9 +744,13 @@ Steps:
   BREAKING: EOF without the provider terminal event now yields
   Err(IncompleteStream) from every HTTP stream adapter instead of a
   fabricated clean done event; retires the v0.10.1 "exactly one done
-  even without [DONE]" invariant. Flipped pinned tests:
-  tests/openai_provider.rs::openai_stream_eof_flush_when_done_sentinel_missing,
-  tests/openai_provider.rs::openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel.
+  even without [DONE]" invariant for the neither-signal case. OpenAI
+  wire: [DONE] or a finish_reason chunk terminates (either suffices) —
+  EOF after a stashed finish_reason still completes with
+  done(stop_reason). Flipped pinned test:
+  tests/openai_provider.rs::openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel
+  (openai_stream_eof_flush_when_done_sentinel_missing survives, renamed
+  openai_stream_finish_reason_then_eof_completes_with_stop_reason).
 
   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   ```
@@ -1536,7 +1555,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
 - `sdks/python/motosan_ai/__init__.py` (~lines 4-13, ~line 82)
 - `sdks/python/motosan_ai/providers/anthropic.py` (~line 10, ~lines 512-515)
 - `sdks/python/motosan_ai/providers/openai.py` (~line 9, ~lines 244-264, ~lines 313-329)
-- `sdks/python/motosan_ai/providers/minimax.py` (~lines 9-16, ~lines 288-292)
+- `sdks/python/motosan_ai/providers/minimax.py` (~lines 9-16, ~line 244, ~lines 288-292)
 - `sdks/python/motosan_ai/providers/gemini.py` (~line 10, ~lines 345-352)
 - `sdks/python/motosan_ai/providers/gemini_code_assist.py` (~line 13, ~lines 233-237)
 - `sdks/python/motosan_ai/providers/chatgpt_codex.py` (~lines 11-17, ~lines 379-381)
@@ -1551,10 +1570,10 @@ All line refs approximate, against origin/main @ acf5d7f.
 - Produces: `class IncompleteStreamError(StreamError)` exported from `motosan_ai`; raise sites use exactly `IncompleteStreamError("incomplete stream: <provider> ended without a terminal event")` with `<provider>` one of `anthropic`, `openai`, `minimax`, `gemini`, `gemini_code_assist`, `chatgpt_codex`, `ollama`.
 
 **Scope guards (read before coding):**
-- Terminal events per provider (normative: the specs/types.md terminal-event table from the E9 task, and the Rust Task 2 resolution): anthropic `message_stop` (its explicit `data: [DONE]` defensive branch at ~421-424 also terminates — keep, it is a frame not EOF); openai strictly `data: [DONE]` — a `finish_reason` chunk is NOT terminal: the adapter stashes the mapped stop_reason and keeps reading, only `[DONE]` emits the done event (carrying the stash), and EOF after finish_reason-without-`[DONE]` raises `IncompleteStreamError` with the stash discarded (mirrors the Rust openai adapter in Task 2); minimax — checked for the same defect: its chunks carry the same OpenAI-compatible `finish_reason` shape, but the baseline adapter (~288-291) is already strictly `[DONE]`-terminated (`finish_reason` only maps `tool_calls` to a non-terminal `tool_call_end`; the `[DONE]` done event deliberately carries no stop_reason — the collector heuristic fills it, E2), so hunk 3f's post-loop raise is its only change; gemini `finishReason`; gemini_code_assist `finishReason` inside the `response` wrapper; chatgpt_codex `response.completed` (`[DONE]` alone is NOT terminal); ollama `{"done": true}` NDJSON line.
+- Terminal events per provider (normative: the specs/types.md terminal-event table from the E9 task, and the Rust Task 2 resolution; amended 2026-07-17 to the either-suffices rule): anthropic `message_stop` (its explicit `data: [DONE]` defensive branch at ~421-424 also terminates — keep, it is a frame not EOF); openai `data: [DONE]` OR a `finish_reason`-bearing chunk — either suffices (`finish_reason` is the semantic terminal, `[DONE]` the transport epilogue): the adapter stashes the mapped stop_reason and keeps reading; `[DONE]` emits the done event carrying the stash; EOF WITH a stash emits the same done event and ends normally (the stream is semantically complete); EOF with NEITHER raises `IncompleteStreamError` (mirrors the Rust openai adapter in Task 2); minimax — same either-suffices rule (its chunks carry the same OpenAI-compatible `finish_reason` shape): hunk 3f tracks `saw_finish_reason` and at EOF with the flag set emits the same no-stop_reason done event as its `[DONE]` branch (the collector heuristic fills stop_reason, E2); EOF with neither raises; gemini `finishReason`; gemini_code_assist `finishReason` inside the `response` wrapper; chatgpt_codex `response.completed` (`[DONE]` alone is NOT terminal); ollama `{"done": true}` NDJSON line.
 - CLI providers (`claude_code.py`, `codex_cli.py`, `gemini_cli.py`) are deliberately NOT touched: since M1 they already raise `StreamError` with returncode/stderr on child-process death — child death is not HTTP truncation; the asymmetry is intentional.
 - `_stream_collect.py` is NOT changed (E2): errors propagate (M1), and the stop_reason heuristic at ~77-78 stays — with adapters enforcing EOF it can only trigger on a real done event lacking a reason.
-- M2 regression contract — flipped tests: **NONE in Python.** Every existing stream fixture already carries its terminal frame (verified: test_anthropic.py, test_anthropic_stream_usage.py, test_anthropic_thinking.py, test_openai.py, test_minimax.py, test_gemini_stream.py, test_code_assist_stream.py, test_chatgpt_codex_stream.py, test_chatgpt_codex_http.py, test_ollama.py, test_ollama_native.py, test_client_stream_collect.py, test_client_stream_with.py, test_client_retry_policy.py, tests/parity/test_stream_contract.py). OpenAI strict-`[DONE]` note: every openai-wire stream fixture appends the `data: [DONE]` sentinel after its `finish_reason` chunk via a shared helper (`test_openai.py::_sse_lines` ~19, `test_ollama.py` openai-compat helper ~18, `tests/parity` fixture builders ~37/~50), so under hunk 3e the done event just moves from the finish_reason chunk to the `[DONE]` frame with the same stashed stop_reason — identical observable event sequence, nothing flips. The full suite must pass unchanged. This task lands in the same PR group as the specs/types.md amendment task (E9): specs/types.md ~line 115 ("Exactly one terminal event per stream") is retired there.
+- M2 regression contract — flipped tests: **NONE in Python.** Every existing stream fixture already carries its terminal frame (verified: test_anthropic.py, test_anthropic_stream_usage.py, test_anthropic_thinking.py, test_openai.py, test_minimax.py, test_gemini_stream.py, test_code_assist_stream.py, test_chatgpt_codex_stream.py, test_chatgpt_codex_http.py, test_ollama.py, test_ollama_native.py, test_client_stream_collect.py, test_client_stream_with.py, test_client_retry_policy.py, tests/parity/test_stream_contract.py). OpenAI-wire either-suffices note (amended 2026-07-17): every openai-wire stream fixture appends the `data: [DONE]` sentinel after its `finish_reason` chunk via a shared helper (`test_openai.py::_sse_lines` ~19, `test_ollama.py` openai-compat helper ~18, `tests/parity` fixture builders ~37/~50), so under hunk 3e the done event just moves from the finish_reason chunk to the `[DONE]` frame with the same stashed stop_reason — identical observable event sequence, nothing flips. (A fixture ending at the finish_reason chunk without `[DONE]` would ALSO complete cleanly now — the stash is emitted at EOF — so no fixture completion is needed on this wire either way.) The full suite must pass unchanged. This task lands in the same PR group as the specs/types.md amendment task (E9): specs/types.md ~line 115 ("Exactly one terminal event per stream") is retired there.
 
 **Steps:**
 
@@ -1566,8 +1585,10 @@ All line refs approximate, against origin/main @ acf5d7f.
 Every HTTP provider stream() must raise IncompleteStreamError (a StreamError
 subclass - deliberate migration softener so existing `except StreamError`
 handlers keep catching truncation) when the upstream body ends without that
-provider's terminal event. CLI providers are intentionally not covered: since
-M1 they raise StreamError with returncode/stderr on child-process death.
+provider's terminal event. OpenAI wire (openai, minimax): [DONE] or a
+finish_reason-bearing chunk - either suffices (amended 2026-07-17), so only
+EOF with NEITHER signal raises. CLI providers are intentionally not covered:
+since M1 they raise StreamError with returncode/stderr on child-process death.
 """
 
 from __future__ import annotations
@@ -1689,10 +1710,11 @@ async def test_codex_done_sentinel_alone_is_not_terminal():
 
 @respx.mock
 @pytest.mark.asyncio
-async def test_openai_finish_reason_without_done_is_truncation():
-    # finish_reason is NOT terminal for OpenAI (specs/types.md terminal-event
-    # table: strictly `data: [DONE]`). EOF after a finish_reason chunk without
-    # the sentinel is truncation; the stashed stop_reason is discarded.
+async def test_openai_finish_reason_then_eof_completes_with_stashed_stop_reason():
+    # Amended M3 rule (2026-07-17): finish_reason is the SEMANTIC terminal --
+    # EOF after it is a COMPLETE stream even though the [DONE] transport
+    # epilogue never arrived. The stream ends with a done event carrying the
+    # stashed StopReason; no error is raised.
     body = _sse(
         {"choices": [{"delta": {"content": "par"}, "finish_reason": None}]},
         {"choices": [{"delta": {}, "finish_reason": "stop"}]},
@@ -1701,22 +1723,39 @@ async def test_openai_finish_reason_without_done_is_truncation():
         return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
     )
     p = OpenAIProvider("test-key", base_url="https://mock.openai.com")
-    seen = []
-    with pytest.raises(
-        IncompleteStreamError,
-        match="incomplete stream: openai ended without a terminal event",
-    ):
-        async for event in p.stream(ChatRequest(messages=[Message.user("hi")])):
-            seen.append(event)
-    assert [e.content for e in seen if e.event_type == "text"] == ["par"]
-    assert not any(e.done for e in seen)  # no done event fabricated from finish_reason
+    events = [e async for e in p.stream(ChatRequest(messages=[Message.user("hi")]))]
+    assert [e.content for e in events if e.event_type == "text"] == ["par"]
+    dones = [e for e in events if e.done]
+    assert len(dones) == 1 and events[-1] is dones[0]
+    assert dones[0].stop_reason == StopReason.stop
+
+
+@respx.mock
+@pytest.mark.asyncio
+async def test_minimax_finish_reason_then_eof_completes():
+    # MiniMax (Python OpenAI-compatible wire) follows the same either-suffices
+    # rule: a finish_reason chunk is the semantic terminal. Its done event
+    # carries no stop_reason -- matching the [DONE] branch -- and the
+    # collector heuristic fills it (E2).
+    body = _sse(
+        {"choices": [{"delta": {"content": "par"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    )
+    respx.post("https://api.minimax.chat/v1/text/chatcompletion_v2").mock(
+        return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+    )
+    p = MinimaxProvider("test-key")
+    events = [e async for e in p.stream(ChatRequest(messages=[Message.user("hi")]))]
+    assert [e.content for e in events if e.content] == ["par"]
+    assert events[-1].done and events[-1].stop_reason is None
 
 
 @respx.mock
 @pytest.mark.asyncio
 async def test_openai_finish_reason_then_done_completes_with_stashed_stop_reason():
-    # Happy path: the finish_reason-derived stop_reason is stashed and emitted
-    # with the [DONE] done event — [DONE] is OpenAI's only terminal event.
+    # Transport-epilogue path: the finish_reason-derived stop_reason is
+    # stashed and emitted with the [DONE] done event (either terminal signal
+    # suffices; here [DONE] arrives and carries the stash).
     body = (
         _sse(
             {"choices": [{"delta": {"content": "hi"}, "finish_reason": None}]},
@@ -1820,7 +1859,7 @@ from motosan_ai.error import (
         except StreamError:
 ```
 
-  **3e. `openai.py`** — strict-`[DONE]` termination, two hunks. The locked contract (Task 1 terminal-event table; Rust Task 2 resolution) makes `data: [DONE]` OpenAI's ONLY terminal event: a `finish_reason` chunk stashes its mapped stop_reason and the loop keeps reading; `[DONE]` emits the done event carrying the stash; EOF without `[DONE]` — even after a `finish_reason` chunk — raises `IncompleteStreamError` (the stash is discarded: without `[DONE]` the stream did not terminate).
+  **3e. `openai.py`** — either-suffices termination (amended 2026-07-17), two hunks. The amended contract (Task 1 terminal-event table; Rust Task 2 resolution) makes `data: [DONE]` OR a `finish_reason`-bearing chunk terminal — either suffices: a `finish_reason` chunk stashes its mapped stop_reason (the SEMANTIC terminal) and the loop keeps reading; `[DONE]` emits the done event carrying the stash; EOF WITH a stash emits that same done event and ends normally; only EOF with NEITHER signal raises `IncompleteStreamError`.
 
   First hunk — Current code (approximate lines 244-264, loop state + `[DONE]` branch):
 ```python
@@ -1853,8 +1892,9 @@ from motosan_ai.error import (
             # index -> (id, name); only one tool call is open at a time.
             tool_buffer: dict[int, tuple[str, str]] = {}
             open_tool_index: int | None = None
-            # M3: stop_reason stashed from finish_reason chunks, emitted with
-            # the [DONE] done event -- [DONE] is OpenAI's only terminal event.
+            # M3 (amended): stop_reason stashed from finish_reason chunks --
+            # the semantic terminal -- and emitted with the done event at
+            # [DONE] or, failing that, at EOF (either terminal suffices).
             current_stop_reason: StopReason | None = None
 
             async for line in resp.aiter_lines():
@@ -1907,19 +1947,40 @@ from motosan_ai.error import (
                                 event_type="tool_call_end",
                             )
                             open_tool_index = None
-                        # NOT terminal: stash and keep reading until [DONE].
+                        # Semantic terminal: stash; [DONE] or EOF emits it.
                         current_stop_reason = _FINISH_REASON_TO_STOP.get(
                             finish_reason, StopReason.other
                         )
+
+            if current_stop_reason is not None:
+                # finish_reason arrived: the stream is semantically complete
+                # even though the [DONE] transport epilogue never came
+                # (amended M3 rule -- either terminal signal suffices).
+                yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
+                return
 
             raise IncompleteStreamError(
                 "incomplete stream: openai ended without a terminal event"
             )
         except StreamError:
 ```
-  (The tool_call_end close on `finish_reason == "tool_calls"` is kept where the chunk arrives; the `[DONE]` branch's own close then no-ops because `open_tool_index` is already `None`. `StopReason` is already imported — the `_FINISH_REASON_TO_STOP` fallback uses it.)
+  (The tool_call_end close on `finish_reason == "tool_calls"` is kept where the chunk arrives; the `[DONE]` branch's own close then no-ops because `open_tool_index` is already `None`, and the EOF-with-stash branch needs no close for the same reason. `StopReason` is already imported — the `_FINISH_REASON_TO_STOP` fallback uses it.)
 
-  **3f. `minimax.py`** — Current code (approximate lines 288-292, end of loop inside `async with`):
+  **3f. `minimax.py`** — either-suffices rule (amended 2026-07-17), TWO hunks: MiniMax's OpenAI-compatible chunks carry the same `finish_reason` shape, so a finish_reason chunk is terminal here too. Its done event deliberately carries no stop_reason — matching the `[DONE]` branch — and the collector heuristic fills it (E2).
+
+  First hunk — Current code (approximate line 244, top of the read loop):
+```python
+                async for line in response.aiter_lines():
+```
+  Replace with:
+```python
+                # M3 (amended): any finish_reason chunk marks the stream
+                # semantically complete (either-suffices terminal rule).
+                saw_finish_reason = False
+
+                async for line in response.aiter_lines():
+```
+  Second hunk — Current code (approximate lines 288-292, end of loop inside `async with`):
 ```python
                     finish_reason = choice.get("finish_reason")
                     if finish_reason == "tool_calls":
@@ -1930,9 +1991,19 @@ from motosan_ai.error import (
   Replace with:
 ```python
                     finish_reason = choice.get("finish_reason")
-                    if finish_reason == "tool_calls":
-                        yielded = True
-                        yield StreamEvent(content="", done=False, event_type="tool_call_end")
+                    if finish_reason:
+                        saw_finish_reason = True
+                        if finish_reason == "tool_calls":
+                            yielded = True
+                            yield StreamEvent(content="", done=False, event_type="tool_call_end")
+
+                if saw_finish_reason:
+                    # Semantic terminal seen: complete stream -- emit the same
+                    # no-stop_reason done event as the [DONE] branch (the
+                    # collector heuristic fills stop_reason, E2).
+                    yielded = True
+                    yield StreamEvent(content="", done=True)
+                    return
 
                 raise IncompleteStreamError(
                     "incomplete stream: minimax ended without a terminal event"
@@ -2036,11 +2107,11 @@ from motosan_ai.error import (
 ## [Unreleased]
 
 ### Breaking
-- **Streaming:** HTTP provider streams that end without the provider's terminal event (`message_stop` / `[DONE]` / `finishReason` / `response.completed` / `{"done": true}`) now raise `IncompleteStreamError` instead of ending silently as if complete — truncation is no longer indistinguishable from completion. `IncompleteStreamError` subclasses `StreamError` deliberately (migration softener): existing `except StreamError` handlers keep catching it; catch `IncompleteStreamError` to handle truncation specifically. Not retried (mid-stream errors are never retried, per `specs/retry.md`). CLI providers unchanged — child-process death already raises `StreamError` (M1); child death is not HTTP truncation.
-- **OpenAI streaming:** a `finish_reason` chunk is no longer terminal — per the terminal-event contract (`specs/types.md`), only `data: [DONE]` completes an OpenAI stream. The finish_reason-derived `stop_reason` is stashed and emitted with the `[DONE]` done event; EOF after `finish_reason` without `[DONE]` raises `IncompleteStreamError`. Mirrors the Rust 0.24.0 adapter.
+- **Streaming:** HTTP provider streams that end without the provider's terminal event (`message_stop` / `[DONE]`-or-`finish_reason` on the OpenAI wire / `finishReason` / `response.completed` / `{"done": true}`) now raise `IncompleteStreamError` instead of ending silently as if complete — truncation is no longer indistinguishable from completion. `IncompleteStreamError` subclasses `StreamError` deliberately (migration softener): existing `except StreamError` handlers keep catching it; catch `IncompleteStreamError` to handle truncation specifically. Not retried (mid-stream errors are never retried, per `specs/retry.md`). CLI providers unchanged — child-process death already raises `StreamError` (M1); child death is not HTTP truncation.
+- **OpenAI-wire streaming (openai, minimax):** per the amended terminal-event contract (`specs/types.md`), a stream completes on `data: [DONE]` OR a `finish_reason`-bearing chunk — either suffices (`finish_reason` is the semantic terminal, `[DONE]` the transport epilogue). openai stashes the finish_reason-derived `stop_reason` and emits it with the terminal done event at `[DONE]` or, failing that, at EOF; minimax emits its usual no-stop_reason done at EOF after a finish_reason chunk. Truncation with NEITHER signal raises `IncompleteStreamError`. Mirrors the Rust 0.24.0 adapter.
 ```
 
-- [ ] 4. Run to pass, then the package suite — from `sdks/python`: `uv run pytest tests/test_incomplete_stream.py -v` (13 passed: 7 parametrized + 6 singles), then `uv run pytest` (full suite; live/integration tests self-skip without keys). All M1 retry tests and M2 conformance/parity suites must pass unchanged — zero flips expected (see Scope guards).
+- [ ] 4. Run to pass, then the package suite — from `sdks/python`: `uv run pytest tests/test_incomplete_stream.py -v` (14 passed: 7 parametrized + 7 singles), then `uv run pytest` (full suite; live/integration tests self-skip without keys). All M1 retry tests and M2 conformance/parity suites must pass unchanged — zero flips expected (see Scope guards).
 
 - [ ] 5. Format and lint — from `sdks/python`: `uv run ruff format` then `uv run ruff check motosan_ai/` (tests/ is not linted). Re-run `uv run pytest tests/test_incomplete_stream.py -v` if the formatter touched provider files.
 
@@ -2055,12 +2126,15 @@ terminal event") when the upstream body ends without the provider's
 terminal frame, instead of ending silently as if complete.
 IncompleteStreamError subclasses StreamError (migration softener).
 
-OpenAI is now strictly [DONE]-terminated per the specs/types.md
-terminal-event table: a finish_reason chunk stashes its mapped
-stop_reason (emitted with the [DONE] done event) instead of
-terminating the stream; EOF after finish_reason without [DONE] is
-truncation. Existing openai-wire fixtures all append [DONE], so the
-observable event sequence is unchanged.
+OpenAI-wire termination (openai, minimax) follows the amended
+either-suffices contract in specs/types.md: data: [DONE] OR a
+finish_reason-bearing chunk is terminal (finish_reason is the
+semantic terminal, [DONE] the transport epilogue). openai stashes
+the mapped stop_reason and emits it with the done event at [DONE]
+or at EOF; minimax ends with its no-stop_reason done at EOF after
+a finish_reason chunk. Only EOF with neither signal raises.
+Existing openai-wire fixtures all append [DONE], so the observable
+event sequence is unchanged.
 
 collect_stream unchanged: it propagates the error (M1). CLI providers
 unchanged: child death already raises StreamError; not HTTP truncation.
@@ -2639,7 +2713,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 - Consumes: `StreamError` (`src/error.ts:12`), `parseSse` (`src/http/sse.ts`), `parseNdjson` (`src/http/ndjson.ts`), `collectStream`/`BoxStream`/`doneEvent`/`doneWithStopReason` (`src/stream.ts`). `collectStream` is NOT changed (E2: its stop_reason heuristic stays, for a real done event lacking a reason — pinned green by `tests/stream.test.ts` ~161-167).
 
 **E3 retired-pin flips (M2 regression contract — file-by-file; everything else passes unchanged):**
-1. `tests/edge-cases.test.ts` — flip `'Anthropic: stream that ends without message_stop terminates silently with a partial response'` and `'OpenAI: stream that ends without [DONE]/finish_reason terminates silently with a partial response'` (~124-189).
+1. `tests/edge-cases.test.ts` — flip `'Anthropic: stream that ends without message_stop terminates silently with a partial response'` and `'OpenAI: stream that ends without [DONE]/finish_reason terminates silently with a partial response'` (~124-189). Amended 2026-07-17: the OpenAI pin transcript carries NEITHER signal (no finish_reason, no [DONE]), so it still flips in full; the openai EOF fabrication only PARTIALLY retires — EOF after a stashed finish_reason now completes cleanly with done(stash), pinned by a NEW third test added to the replacement block below.
 2. `tests/providers-gemini.test.ts` — flip `'skips a defensive [DONE] line and does not fabricate a done on EOF (gemini.rs:447-449,531)'` (~352).
 3. `tests/providers-ollama.test.ts` — flip `'ends WITHOUT synthesizing a done event on EOF without done:true'` (~362) and `'ends without throwing when the NDJSON body errors after yielding data'` (~377; body errors now propagate — the swallow's own comment deferred surfacing to M3).
 4. `tests/providers-anthropic.test.ts` — `'streamImpl also adds the MCP beta header'` (~617) drains an EMPTY SSE body; the drain now throws — expect `IncompleteStreamError`, keep the header assertion.
@@ -2761,8 +2835,10 @@ describe('adapter EOF-without-terminal-event enforcement (E2/E3)', () => {
 (b) **Flip the pinned tests.** In `tests/edge-cases.test.ts`: change line ~10 to `import { IncompleteStreamError, MotosanError, ProviderError } from '../src/error.js'`, then replace the whole `describe('mid-stream reset / partial success', ...)` block (~124-189, including its 5-line lead comment) with:
 ```ts
   describe('mid-stream truncation (M3/E3: EOF without a terminal event throws)', () => {
-    // M3 retired the v0.10.1 "fabricate a clean done at EOF" invariant
-    // (anthropic.ts / openai.ts defensive tails removed).
+    // M3 retired the v0.10.1 "fabricate a clean done at EOF" invariant for
+    // the NEITHER-signal case (anthropic.ts defensive tail removed;
+    // openai.ts EOF fabrication narrowed: it survives ONLY when a
+    // finish_reason was stashed — the semantic terminal, amended 2026-07-17).
     async function drainErr(stream: AsyncIterable<StreamEvent>) {
       const events: StreamEvent[] = []
       let error: unknown
@@ -2808,12 +2884,31 @@ describe('adapter EOF-without-terminal-event enforcement (E2/E3)', () => {
         collectStream(provider.stream({ messages: [{ role: 'user', content: 'hi' }] })),
       ).rejects.toBeInstanceOf(IncompleteStreamError)
     })
+
+    it('OpenAI: finish_reason then EOF without [DONE] completes with the stashed stop reason (either signal suffices)', async () => {
+      // Amended M3 rule (2026-07-17): finish_reason is the SEMANTIC terminal;
+      // [DONE] is only the transport epilogue. This pins the narrow surviving
+      // path of the pre-M3 EOF fabrication (openai.ts pendingStopReason).
+      const transcript =
+        'data: {"choices":[{"index":0,"delta":{"content":"partial"}}]}\n\n' +
+        'data: {"choices":[{"index":0,"delta":{},"finish_reason":"length"}]}\n\n'
+      stubSseFetch(transcript)
+      const provider = new OpenAIProvider('sk-test', 'gpt-4o')
+      const events: StreamEvent[] = []
+      for await (const evt of provider.stream({ messages: [{ role: 'user', content: 'hi' }] })) {
+        events.push(evt)
+      }
+      const last = events[events.length - 1]
+      expect(last.done).toBe(true)
+      expect(last.stopReason).toBe('max_tokens')
+      expect(events.filter((e) => e.done)).toHaveLength(1)
+    })
   })
 ```
 In `tests/providers-gemini.test.ts`: change line ~4 to `import { IncompleteStreamError, UnsupportedFeatureError } from '../src/error.js'`; in the test at ~352, rename it to `'skips a defensive [DONE] line and throws IncompleteStreamError on EOF without finishReason (M3/E2)'`, wrap the existing drain loop in try/catch capturing `error`, keep the two existing text-event/no-done assertions, add `expect(error).toBeInstanceOf(IncompleteStreamError)`, and replace the trailing `collectStream` block (`expect(resp.content)...expect(resp.stopReason).toBe('end_turn')`) with `await expect(collectStream(provider.stream({ messages: [{ role: 'user', content: 'hi' }] }))).rejects.toBeInstanceOf(IncompleteStreamError)`.
 In `tests/providers-ollama.test.ts`: add `import { IncompleteStreamError } from '../src/error.js'` after line 2; rewrite the test at ~362 as `'throws IncompleteStreamError on EOF without done:true (M3/E2)'` — same `stubNdjson` fixture, drain in try/catch, then `expect(error).toBeInstanceOf(IncompleteStreamError)`, `expect((error as Error).message).toBe('incomplete stream: ollama ended without a terminal event')`, `expect(events.map((e) => e.content)).toEqual(['a', 'b'])`; rewrite the test at ~377 as `'propagates an NDJSON body error after yielding partial data (M3: swallow removed)'` — keep the erroring-ReadableStream fetch stub verbatim, change the drain assertion from `.resolves.toBeUndefined()` to `.rejects.toThrow('socket closed')`, keep `expect(events).toEqual([{ content: 'partial', done: false, eventType: 'text' }])`.
 In `tests/providers-anthropic.test.ts`: change line 2 to `import { IncompleteStreamError, StreamError } from '../src/error.js'`; in `'streamImpl also adds the MCP beta header'` (~617) wrap the drain in try/catch capturing `error`, drop the unused `events` array, and before the header assertion add `expect(error).toBeInstanceOf(IncompleteStreamError)`.
-- [ ] 2. **Run and watch them fail.** From `sdks/typescript`: `npx vitest run tests/incomplete-stream.test.ts tests/edge-cases.test.ts tests/providers-gemini.test.ts tests/providers-ollama.test.ts tests/providers-anthropic.test.ts`. Expected signature: every file that imports the new class fails at import time with `SyntaxError: The requested module '../src/error.js' does not provide an export named 'IncompleteStreamError'` (same shape as the sibling Task 8 CancelledError red step under this repo's vitest 3 setup), and enforcement/flipped tests in files that do not import it fail with `expected undefined to be an instance of IncompleteStreamError` or `promise resolved ... instead of rejecting` (adapters today fabricate a done — anthropic.ts ~363-368, openai.ts ~428-442, chatgpt_codex.ts ~327-328 — or end silently — gemini.ts ~223, ollama.ts ~329-335).
+- [ ] 2. **Run and watch them fail.** From `sdks/typescript`: `npx vitest run tests/incomplete-stream.test.ts tests/edge-cases.test.ts tests/providers-gemini.test.ts tests/providers-ollama.test.ts tests/providers-anthropic.test.ts`. Expected signature: every file that imports the new class fails at import time with `SyntaxError: The requested module '../src/error.js' does not provide an export named 'IncompleteStreamError'` (same shape as the sibling Task 8 CancelledError red step under this repo's vitest 3 setup), and enforcement/flipped tests in files that do not import it fail with `expected undefined to be an instance of IncompleteStreamError` or `promise resolved ... instead of rejecting` (adapters today fabricate a done — anthropic.ts ~363-368, openai.ts ~428-442, chatgpt_codex.ts ~327-328 — or end silently — gemini.ts ~223, ollama.ts ~329-335). Exception: the new OpenAI finish_reason-then-EOF completeness test PASSES pre-change too — it pins the narrow surviving path of the openai EOF fabrication (amended 2026-07-17), not a retirement.
 - [ ] 3. **Implement.** (a) `src/error.ts` — current code (approximate line 12): `export class StreamError extends MotosanError {}`. Replace with:
 ```ts
 export class StreamError extends MotosanError {}
@@ -2854,14 +2949,32 @@ Replace with:
     )
 ```
 (`doneEvent`/`doneWithStopReason` stay imported — the message_stop branch ~341-346 still uses both.)
-(c) `src/providers/openai.ts` — add `import { IncompleteStreamError } from '../error.js'` as a new first line. Current code (approximate lines 428-442): the `// Defensive: EOF without [DONE] — emit terminal once.` block (`if (!doneEmitted) { ...open-tool flush... yield pendingStopReason !== undefined ? doneWithStopReason(...) : doneEvent() }`). Replace with:
+(c) `src/providers/openai.ts` — add `import { IncompleteStreamError } from '../error.js'` as a new first line. Current code (approximate lines 428-442): the `// Defensive: EOF without [DONE] — emit terminal once.` block (`if (!doneEmitted) { ...open-tool flush... yield pendingStopReason !== undefined ? doneWithStopReason(...) : doneEvent() }`). Replace with (amended 2026-07-17 — either-suffices rule):
 ```ts
-    // EOF without the [DONE] sentinel: truncation, not completion (M3/E3 —
-    // the doneEmitted EOF fabrication is retired; no open-tool flush either).
+    // EOF without the [DONE] sentinel (M3, amended): a stashed finish_reason
+    // means the stream is SEMANTICALLY complete — [DONE] is only the
+    // transport epilogue — so emit the terminal done carrying it, open-tool
+    // flush included (mirrors the [DONE] branch; narrow survival of the
+    // pre-M3 EOF fabrication, ONLY when finish_reason was seen). EOF with
+    // NEITHER signal is truncation: the no-signal fabrication (the
+    // doneEvent() tail) is retired.
     if (!doneEmitted) {
+      if (pendingStopReason !== undefined) {
+        if (openToolIndex !== undefined) {
+          const openId = toolBuffer.get(openToolIndex)?.id
+          if (openId) {
+            yield toolCallEndWithId(openId)
+          }
+          openToolIndex = undefined
+        }
+        doneEmitted = true
+        yield doneWithStopReason(pendingStopReason)
+        return
+      }
       throw new IncompleteStreamError('incomplete stream: openai ended without a terminal event')
     }
 ```
+(`doneEvent` stays imported — the `[DONE]` branch ~331-344 still uses it for the no-stash case.)
 (d) `src/providers/gemini.ts` — add `import { IncompleteStreamError } from '../error.js'` as a new first line. In `streamImpl`, insert `let sawTerminal = false` on its own line directly above `for await (const evt of parseSse(responseBody)) {` (~173). Current code (approximate lines 217-224):
 ```ts
       // done LAST, only when finishReason present — the ONLY terminator
@@ -2930,10 +3043,13 @@ git add sdks/typescript
 git commit -m "feat(typescript)!: throw IncompleteStreamError on stream EOF without a terminal event
 
 BREAKING CHANGE: retires the v0.10.1 'exactly one terminal done event even
-when upstream closes without [DONE]' invariant (M3/E3). Anthropic/OpenAI EOF
-done-fabrication removed; Gemini/Ollama silent EOF removed; ChatGPT-Codex
-defensive done removed; Ollama/Codex post-start body-error swallow removed.
-IncompleteStreamError extends StreamError as a deliberate migration softener.
+when upstream closes without [DONE]' invariant for the neither-signal case
+(M3/E3, amended 2026-07-17). Anthropic EOF done-fabrication removed; OpenAI
+EOF fabrication narrowed to the finish_reason-stashed path ([DONE] or a
+finish_reason chunk terminates — either suffices; EOF with neither throws);
+Gemini/Ollama silent EOF removed; ChatGPT-Codex defensive done removed;
+Ollama/Codex post-start body-error swallow removed. IncompleteStreamError
+extends StreamError as a deliberate migration softener.
 
 Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"
 ```
@@ -3881,7 +3997,7 @@ Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
   1. **Rust suite needs NO change.** Current code (approximate lines 756-894 of `sdks/rust/src/providers/mod.rs`): `mod retry_conformance` asserts only the status-classification table (`RETRYABLE`/`NON_RETRYABLE` arrays), `parse_retry_after` clamping, full-jitter bounds, and `RetryPolicy` defaults. It asserts **no transport-error rows at all**, and M3 does not touch Rust transport classification (`is_retryable_network_error` unchanged) — so the spec's new TS-only `CancelledError` transport row cannot be pinned here. No replacement — record "verified: no change needed" in the PR description.
   2. **Python suite needs NO change.** Current code (approximate lines 57-58 of `sdks/python/tests/test_retry_conformance.py`): `def test_network_error_is_retryable(self): assert _is_retryable(NetworkError("connection reset")) is True` — the only transport assertion in the file, and the Python `NetworkError → always retryable` row in `specs/retry.md` (~line 49) is untouched by M3. No replacement — record the check in the PR description.
   3. **TS suite is NOT edited here.** The `CancelledError` transport-table row (caller-aborted signal → `CancelledError`, never retried) is owned by the ts-timeouts-cancel task. Verify it landed: `grep -n "CancelledError" sdks/typescript/tests/retry-conformance.test.ts` must return at least one match. If it returns nothing, STOP — that task has not landed; do not add the row here.
-  4. **M2 regression contract:** this task flips nothing. The E2/E3 adapter tasks own the file-by-file flips (TS `edge-cases.test.ts` "mid-stream reset / partial success" block ~124-189; Rust `openai_provider.rs` `openai_stream_eof_flush_when_done_sentinel_missing` ~752). Confirm `git status` / `git diff --stat` shows exactly the three Step-1 test files and nothing else.
+  4. **M2 regression contract:** this task flips nothing. The E2/E3 adapter tasks own the file-by-file flips (TS `edge-cases.test.ts` "mid-stream reset / partial success" block ~124-189; Rust `openai_provider.rs` `openai_stream_emits_done_on_eof_without_finish_reason_or_done_sentinel` ~795 — the neither-signal pin; under the amended either-suffices rule `openai_stream_eof_flush_when_done_sentinel_missing` ~752 is an adjusted survival, not a flip). Confirm `git status` / `git diff --stat` shows exactly the three Step-1 test files and nothing else.
 
 - [ ] **4. Run each full package suite.**
   - Rust (from `sdks/rust`): `cargo test --all-features` → all green.
@@ -3984,7 +4100,7 @@ M3 stream-termination + timeout/lifecycle release. **Breaking for all three SDKs
 
 ### Breaking
 
-- **Stream termination contract** (Rust · Python · TypeScript): when the upstream byte/event stream ends WITHOUT the provider terminal event (OpenAI `[DONE]`, Anthropic `message_stop`, Gemini / chatgpt-codex terminal frames), the stream adapter yields a typed error — message `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a terminal `done`. This retires the v0.10.1 "exactly one `done` event even when upstream closes without `[DONE]`" invariant. Collectors keep propagating errors and keep the stop-reason heuristic only for a real terminal event that lacks a reason. See `specs/types.md` § stream termination.
+- **Stream termination contract** (Rust · Python · TypeScript): when the upstream byte/event stream ends WITHOUT the provider terminal event (OpenAI-wire: `[DONE]` or a `finish_reason`-bearing chunk — either suffices; Anthropic `message_stop`; Gemini / chatgpt-codex terminal frames), the stream adapter yields a typed error — message `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a terminal `done`. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (`finish_reason` is the semantic terminal; a stream whose finish_reason arrived is complete even if the connection drops before `[DONE]`); truncation with NEITHER signal raises the error. This retires the v0.10.1 "exactly one `done` event even when upstream closes without `[DONE]`" invariant for that neither-signal case. Collectors keep propagating errors and keep the stop-reason heuristic only for a real terminal event that lacks a reason. See `specs/types.md` § stream termination.
 - **`MotosanError::IncompleteStream(String)`** (Rust): new enum variant — breaking for exhaustive matches. Migration example in `sdks/rust/CHANGELOG.md`.
 - Python `IncompleteStreamError` subclasses `StreamError`; TypeScript `IncompleteStreamError extends StreamError` — existing `except StreamError:` / `instanceof StreamError` handlers keep catching truncation (deliberate migration softener).
 
@@ -4030,7 +4146,7 @@ Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/pytho
   }
   ```
 
-- Stream EOF semantics: a provider stream that ends **without** the provider's terminal event (OpenAI `[DONE]`, Anthropic `message_stop`, Gemini / chatgpt-codex terminal frames) now yields `Err(MotosanError::IncompleteStream(_))` — `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a final `done` event. Retires the v0.10.1 "exactly one `done` event" invariant. Handling truncation:
+- Stream EOF semantics: a provider stream that ends **without** the provider's terminal event now yields `Err(MotosanError::IncompleteStream(_))` — `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a final `done` event. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (either suffices — EOF after a stashed `finish_reason` still emits `done` with the stop reason); truncation with neither signal yields the error. Anthropic requires `message_stop`; Gemini / chatgpt-codex their terminal frames. Retires the v0.10.1 "exactly one `done` event" invariant for the neither-signal case. Handling truncation:
 
   ```rust
   while let Some(item) = stream.next().await {
@@ -4065,7 +4181,7 @@ Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/pytho
 ## [0.17.0] - YYYY-MM-DD
 
 ### Breaking
-- Stream EOF semantics: an HTTP provider stream that ends without the provider's terminal event (OpenAI `[DONE]`, Anthropic `message_stop`, Gemini / chatgpt-codex terminal frames) now raises `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of ending as if the turn had completed. `IncompleteStreamError` subclasses `StreamError`, so existing `except StreamError:` handlers keep working unchanged; catch `IncompleteStreamError` first to treat truncation specially.
+- Stream EOF semantics: an HTTP provider stream that ends without the provider's terminal event now raises `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of ending as if the turn had completed. OpenAI-wire streams (openai, minimax) complete on `[DONE]` or a `finish_reason`-bearing chunk — either suffices; truncation with neither signal raises. Anthropic requires `message_stop`; Gemini / chatgpt-codex their terminal frames. `IncompleteStreamError` subclasses `StreamError`, so existing `except StreamError:` handlers keep working unchanged; catch `IncompleteStreamError` first to treat truncation specially.
 
 ### Added
 - `Client(..., connect_timeout=10.0, read_idle_timeout=120.0, total_timeout=None)` threaded into every provider `httpx.AsyncClient` via `httpx.Timeout(...)`; `total_timeout` applies to blocking `chat()` only, never silently to streams.
@@ -4082,7 +4198,7 @@ Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/pytho
 ## [0.14.0] - YYYY-MM-DD
 
 ### Breaking
-- Stream EOF semantics: a provider stream that ends without the provider's terminal event now throws `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of terminating silently with a partial, success-looking response. `IncompleteStreamError extends StreamError`, so existing `instanceof StreamError` handlers keep working unchanged.
+- Stream EOF semantics: a provider stream that ends without the provider's terminal event now throws `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of terminating silently with a partial, success-looking response. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (either suffices — EOF after a stashed finish_reason still yields `done` with the stop reason); truncation with neither signal throws. `IncompleteStreamError extends StreamError`, so existing `instanceof StreamError` handlers keep working unchanged.
 - Retry classification: a request aborted by a **caller-supplied** `AbortSignal` throws the new `CancelledError extends MotosanError` and is **never retried**; fetch-internal `AbortError` with no caller signal aborted (e.g. `AbortSignal.timeout`) stays retryable. (`specs/retry.md` transport table amended.)
 
 ### Added
@@ -4107,18 +4223,18 @@ Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/pytho
 
   Then insert a new paragraph in `AGENTS.md` directly after the M2 paragraph ("Rust 0.23.0 / Python 0.16.0 / TypeScript 0.13.0 are the M2 retry releases...", ~13, which stays). AGENTS.md is deliberately excluded from the step-1 "exactly one" grep, so this paragraph MAY name the retired invariant:
 
-  > Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 are the M3 stream-contract + timeout releases: a stream that ends without the provider's terminal event raises a typed error (Rust `MotosanError::IncompleteStream` — **breaking** enum addition; Python `IncompleteStreamError(StreamError)`; TS `IncompleteStreamError extends StreamError`), retiring the v0.10.1 "exactly one `done`" invariant; one timeout model (connect 10 s / read-idle 120 s / total opt-in) lands on all three builders; Rust builds the provider once with a shared `reqwest::Client`; TypeScript gains per-request `AbortSignal` + `CancelledError` (never retried) and a `readTimeoutStream` that actually throws; Python gains `Client.aclose()` / async context manager.
+  > Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 are the M3 stream-contract + timeout releases: a stream that ends without the provider's terminal event raises a typed error (Rust `MotosanError::IncompleteStream` — **breaking** enum addition; Python `IncompleteStreamError(StreamError)`; TS `IncompleteStreamError extends StreamError`), retiring the v0.10.1 "exactly one `done`" invariant for the neither-signal case (OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk — either suffices; only EOF with neither errors); one timeout model (connect 10 s / read-idle 120 s / total opt-in) lands on all three builders; Rust builds the provider once with a shared `reqwest::Client`; TypeScript gains per-request `AbortSignal` + `CancelledError` (never retried) and a `readTimeoutStream` that actually throws; Python gains `Client.aclose()` / async context manager.
 
   And insert a matching bullet in `llms.txt` after the chatgpt-codex bullet (~7) — llms.txt IS in the step-1 grep list, so this bullet must NOT contain the literal phrase "exactly one" (the wording below is safe):
 
-  > - Rust 0.24.0 / Python 0.17.0 / TS 0.14.0 (M3): **breaking** stream termination — EOF without the provider terminal event raises Rust `MotosanError::IncompleteStream` / Python `IncompleteStreamError(StreamError)` / TS `IncompleteStreamError extends StreamError`; one timeout model (connect 10 s / read-idle 120 s / total opt-in) on all builders; Rust build-once shared `reqwest::Client`; TS per-request `AbortSignal` + `CancelledError` (never retried); Python `Client.aclose()` / `async with`.
+  > - Rust 0.24.0 / Python 0.17.0 / TS 0.14.0 (M3): **breaking** stream termination — EOF without the provider terminal event (OpenAI wire: `[DONE]` or a `finish_reason` chunk, either suffices) raises Rust `MotosanError::IncompleteStream` / Python `IncompleteStreamError(StreamError)` / TS `IncompleteStreamError extends StreamError`; one timeout model (connect 10 s / read-idle 120 s / total opt-in) on all builders; Rust build-once shared `reqwest::Client`; TS per-request `AbortSignal` + `CancelledError` (never retried); Python `Client.aclose()` / `async with`.
 
   **3g. Retired-invariant prose rewrites (E3)** — run `grep -rn 'exactly one' README.md llms.txt sdks/rust/README.md sdks/typescript/README.md skills/motosan-ai/SKILL.md` and `grep -rn 'terminal \`done\`' README.md llms.txt sdks/rust/README.md sdks/typescript/README.md skills/` and rewrite every hit that states the old guarantee. CONSISTENCY RULE: the step-1 script asserts zero `exactly one` hits remain in these five files, so none of the replacement texts below contains that literal phrase — when describing what was retired, say "the v0.10.1 fabricated-`done` invariant" instead; do not reintroduce the phrase while editing. Five known sites:
-  - `sdks/rust/README.md` ~50 — Current (approximate): the paragraph beginning `Each provider stream emits **exactly one** terminal \`done\` event — guaranteed since v0.10.1...`. Replace with: `A stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\`, Anthropic \`message_stop\`, Gemini / chatgpt-codex terminal frames). Since v0.24.0, EOF without that event yields \`Err(MotosanError::IncompleteStream(_))\` (\`"incomplete stream: <provider> ended without a terminal event"\`) instead of a fabricated clean \`done\` — truncation is distinguishable from completion. \`event.stop_reason\` carries the provider's reported reason when present (\`Anthropic\` \`message_delta.stop_reason\`, \`OpenAI\` / \`MiniMax\` \`finish_reason\`).`
-  - `llms.txt` ~454 — Current: the paragraph beginning `Each provider stream emits **exactly one** \`done\` event — guaranteed since v0.10.1...` (through `...heuristic when none was reported.`). Replace with: `A stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\`, Anthropic \`message_stop\`, Gemini / chatgpt-codex terminal frames). Since rust-0.24.0 / python-0.17.0 / ts-0.14.0, EOF without that event is a typed error — Rust \`MotosanError::IncompleteStream\`, Python \`IncompleteStreamError\` (subclass of \`StreamError\`), TS \`IncompleteStreamError extends StreamError\` — message \`"incomplete stream: <provider> ended without a terminal event"\`. If the provider reports a stop reason it lands on the terminal event; \`collect_stream\` honors it and falls back to the tool-calls heuristic only on a real terminal event that lacks a reason.`
+  - `sdks/rust/README.md` ~50 — Current (approximate): the paragraph beginning `Each provider stream emits **exactly one** terminal \`done\` event — guaranteed since v0.10.1...`. Replace with: `A stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\` or a final \`finish_reason\` chunk — either suffices, Anthropic \`message_stop\`, Gemini / chatgpt-codex terminal frames). Since v0.24.0, EOF without any such event yields \`Err(MotosanError::IncompleteStream(_))\` (\`"incomplete stream: <provider> ended without a terminal event"\`) instead of a fabricated clean \`done\` — truncation is distinguishable from completion. \`event.stop_reason\` carries the provider's reported reason when present (\`Anthropic\` \`message_delta.stop_reason\`, \`OpenAI\` / \`MiniMax\` \`finish_reason\`).`
+  - `llms.txt` ~454 — Current: the paragraph beginning `Each provider stream emits **exactly one** \`done\` event — guaranteed since v0.10.1...` (through `...heuristic when none was reported.`). Replace with: `A stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\` or a final \`finish_reason\` chunk — either suffices, Anthropic \`message_stop\`, Gemini / chatgpt-codex terminal frames). Since rust-0.24.0 / python-0.17.0 / ts-0.14.0, EOF without any such event is a typed error — Rust \`MotosanError::IncompleteStream\`, Python \`IncompleteStreamError\` (subclass of \`StreamError\`), TS \`IncompleteStreamError extends StreamError\` — message \`"incomplete stream: <provider> ended without a terminal event"\`. If the provider reports a stop reason it lands on the terminal event; \`collect_stream\` honors it and falls back to the tool-calls heuristic only on a real terminal event that lacks a reason.`
   - `README.md` ~239 — Current: `// Streams emit exactly one \`done\` event, even on non-conformant proxies.` Replace with: `// EOF without a terminal event is Err(MotosanError::IncompleteStream), not a done event.`
-  - `sdks/typescript/README.md` ~207 — Current: paragraph beginning `Each provider stream emits **exactly one** terminal \`done\` event, even when the upstream provider closes...`. Replace with: `A stream is complete only when the provider sends its terminal event (\`[DONE]\`, \`message_stop\`, ...). Since v0.14.0, if the upstream closes without it the stream throws \`IncompleteStreamError\` (subclass of \`StreamError\`) — \`"incomplete stream: <provider> ended without a terminal event"\`. \`event.stopReason\` carries the provider's reported reason when present.` Also replace the `> **Mid-stream partial success (important):** ... does NOT throw mid-stream ...` blockquote (~211-216) with: `> **Mid-stream failures:** provider \`error\` frames and transport faults reject the stream (since 0.12.0), and truncation (EOF without a terminal event) rejects with \`IncompleteStreamError\` (since 0.14.0). Retries apply only to the *initial* fetch, never mid-stream (see Retry). Aborting via your own \`AbortSignal\` throws \`CancelledError\` and is never retried.`
-  - `skills/motosan-ai/SKILL.md` ~131 — Current: the bullet beginning `- **Stream \`done\` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with \`done == true\`...`. Replace with: `- **Stream termination contract** (Rust 0.24.0 / Python 0.17.0 / TS 0.14.0; replaces the v0.10.1 fabricated-\`done\` invariant): a stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\`, Anthropic \`message_stop\`, Gemini/codex terminal frames). EOF without it errors with Rust \`MotosanError::IncompleteStream\` / Python \`IncompleteStreamError\` (subclass of \`StreamError\`) / TS \`IncompleteStreamError extends StreamError\` — message \`"incomplete stream: <provider> ended without a terminal event"\`. Successful streams still end with one terminal \`done == true\` event carrying \`stop_reason\` when reported; \`collect_stream\` keeps the tool-calls heuristic only for a real terminal event that lacks a reason.`
+  - `sdks/typescript/README.md` ~207 — Current: paragraph beginning `Each provider stream emits **exactly one** terminal \`done\` event, even when the upstream provider closes...`. Replace with: `A stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\` or a final \`finish_reason\` chunk — either suffices, \`message_stop\`, ...). Since v0.14.0, if the upstream closes without any such event the stream throws \`IncompleteStreamError\` (subclass of \`StreamError\`) — \`"incomplete stream: <provider> ended without a terminal event"\`. \`event.stopReason\` carries the provider's reported reason when present.` Also replace the `> **Mid-stream partial success (important):** ... does NOT throw mid-stream ...` blockquote (~211-216) with: `> **Mid-stream failures:** provider \`error\` frames and transport faults reject the stream (since 0.12.0), and truncation (EOF without a terminal event) rejects with \`IncompleteStreamError\` (since 0.14.0). Retries apply only to the *initial* fetch, never mid-stream (see Retry). Aborting via your own \`AbortSignal\` throws \`CancelledError\` and is never retried.`
+  - `skills/motosan-ai/SKILL.md` ~131 — Current: the bullet beginning `- **Stream \`done\` invariant** (Rust, since v0.10.1): every provider stream emits **exactly one** terminal event with \`done == true\`...`. Replace with: `- **Stream termination contract** (Rust 0.24.0 / Python 0.17.0 / TS 0.14.0; replaces the v0.10.1 fabricated-\`done\` invariant): a stream is complete only when the provider sends its terminal event (OpenAI \`[DONE]\` or a final \`finish_reason\` chunk — either suffices, Anthropic \`message_stop\`, Gemini/codex terminal frames). EOF without any such event errors with Rust \`MotosanError::IncompleteStream\` / Python \`IncompleteStreamError\` (subclass of \`StreamError\`) / TS \`IncompleteStreamError extends StreamError\` — message \`"incomplete stream: <provider> ended without a terminal event"\`. Successful streams still end with one terminal \`done == true\` event carrying \`stop_reason\` when reported; \`collect_stream\` keeps the tool-calls heuristic only for a real terminal event that lacks a reason.`
   - `skills/motosan-ai/SKILL.md` ~131 replacement note: the parenthetical deliberately says "fabricated-\`done\` invariant" — NOT the old invariant's name verbatim — because SKILL.md is in the step-1 grep list (see CONSISTENCY RULE above).
 
   **3h. Cross-check against reality.** Run `git log --oneline acf5d7f..HEAD`. Every Breaking/Added/Changed/Fixed bullet written above must map to at least one merged M3 commit: delete bullets whose feature did not merge; add bullets for merged M3 changes not yet covered (tag each with only the SDKs it truly touches); replace the two copy-from-code placeholders (Python E8 facade kwarg name — `grep -n 'timeout' sdks/python/motosan_ai/client.py`; TS E6 signal seam — `grep -n 'signal' sdks/typescript/src/client.ts`) with the exact merged spellings; confirm the Rust `read_idle_timeout` vs `stream_read_timeout_secs` wording matches the E4 task's actual resolution (`grep -n 'read_idle_timeout\|stream_read_timeout' sdks/rust/src/client.rs`) and adjust the "supersedes" bullet if the E4 PR kept the old name as an alias. Finally run the full stale scan `grep -rn '0\.23\.0\|0\.16\.0\|0\.13\.0' --include='*.md' --include='*.txt' --include='*.toml' --include='*.json' . | grep -v node_modules | grep -v CHANGELOG | grep -v docs/superpowers | grep -v package-lock.json` — every remaining hit must be a historical mention (past-release paragraphs in AGENTS.md/llms.txt/SKILL.md, Gemini `v0.13.0` feature notes); anything else gets bumped.
