@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.25.0 / python-0.18.0 / ts-0.15.0] — 2026-07-17
+
+M4 spec-and-parity release. **Breaking for Rust and Python** (CLI backend chat/stream contract; Python typed thinking events); minor for TypeScript (async token source only).
+
+### Breaking
+
+- **CLI chat/stream contract** (Rust · Python): a successfully completed Claude Code / Codex CLI / Gemini CLI turn now always reports `stop_reason = end_turn` on both `chat()` and `stream()`. CLI backends never report `tool_use` — their tools are executed internally by the CLI, and `tool_use` means "caller must execute tools", which a CLI backend never requests; reporting it made agent loops re-execute already-executed tools. Blocking `chat()` for every CLI backend is now implemented as stream delegation (collect the provider's own `stream()`), so `ChatResponse.tool_calls` carries the **record of tools the CLI already executed** — never a request to execute — and content / thinking / usage / session_id parity with collecting `stream()` holds by construction. One documented parity exception: `chat()` may backfill `ChatResponse.model` from provider config when the collected value is empty. The `chat()` failure surface shifts to the stream-path variants: Rust `chat()` errors now arrive as the M3 stream variants (e.g. `StreamReadTimeout`), Python `chat()` nonzero-exit raises `StreamError` (was `ProviderError`), and the timeout scope becomes per-read stall rather than whole-invoke. Rust `codex_cli` `chat()` no longer splits the preamble into `thinking` (the old split was a post-hoc whole-transcript heuristic, unrepresentable in a stream): content is the concatenation, `thinking` is `None`.
+- **Python typed thinking events** (Python): streams emit `StreamEventType.thinking_delta` / `StreamEventType.thinking_done` (string values `"thinking_delta"` / `"thinking_done"`), replacing the ad-hoc `event_type="thinking"` string previously emitted by the anthropic and chatgpt-codex providers. Anthropic additionally emits `thinking_done` carrying the full concatenated thinking text on `content_block_stop` of a thinking block, mirroring Rust; stream collection prefers the `thinking_done` buffer over the concatenated-delta fallback. Consumers matching the old `"thinking"` string break.
+### Added
+
+- **Per-attempt token sources for chatgpt-codex** (Rust · Python · TypeScript): Rust adds the ungated `motosan_ai::auth::TokenSource` trait (+ `StaticTokenSource`), `ChatGptCodexProvider::with_token_source`, and `ClientBuilder::chatgpt_codex_token_source(Arc<dyn TokenSource>)`; Python adds `token_source: Callable[[], Awaitable[str]] | None = None` on `ChatGptCodexProvider` / `Client.chatgpt_codex()` (constructor validation accepts `access_token` OR `token_source`); TypeScript widens `accessToken` to `string | (() => Promise<string>)`. In all three SDKs the bearer token is resolved at the top of **every retry attempt**, so long-lived agents can rotate expiring ChatGPT OAuth tokens without rebuilding the client. The SDKs stay decoupled from the workspace oauth crates — a refreshing `TokenSource` over `codex-oauth` ships as an `#[ignore]`d Rust live test.
+- **`Provider.claude_code`** (Python): new `Provider` StrEnum member, provider-construction routing, and a `Client.claude_code(...)` classmethod mirroring `Client.codex_cli(...)`, exposing the real `ClaudeCodeClient` constructor parameters.
+- **`ollama-native` feature alias** (Rust): hyphenated alias for `ollama_native`, matching every other multi-word feature name.
+
+### Changed
+
+- **Rust feature architecture** (Rust): private umbrella features `_http = [dep:reqwest, dep:chrono, dep:eventsource-stream, dep:tokio]` and `_cli = [dep:tokio, dep:async-stream]` replace the per-provider `dep:` lists; `tokio-stream` is promoted to an unconditional dependency; the HTTP-shared retry/transport helpers move from `providers/mod.rs` to `src/transport/http.rs` behind one `#[cfg(feature = "_http")]` gate. The public feature set is unchanged (plus the new `ollama-native` alias) and the resolved dependency set of every pre-existing feature is identical. CI adds `cargo hack check --each-feature`.
+- **`StreamEventType` vocabulary pinned in the spec** (docs; no SDK behavior change): `specs/types.md` fixes the event-type set to `text | tool_call_start | tool_call_args | tool_call_end | usage | thinking_delta | thinking_done` and documents the real emitters per SDK. `done` is a boolean **field** on `StreamEvent`, never an event type — the old spec line listing it as a member was a spec bug; no SDK's `StreamEventType` ever included it.
+
+Per-SDK detail: [`sdks/rust/CHANGELOG.md`](sdks/rust/CHANGELOG.md), [`sdks/python/CHANGELOG.md`](sdks/python/CHANGELOG.md), [`sdks/typescript/CHANGELOG.md`](sdks/typescript/CHANGELOG.md).
+
 ## [rust-0.24.0 / python-0.17.0 / ts-0.14.0] — 2026-07-17
 
 M3 stream-termination + timeout/lifecycle release. **Breaking for all three SDKs**: a stream that ends without the provider's terminal event is now a typed error, not a fabricated clean `done`.

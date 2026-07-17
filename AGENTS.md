@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.24.0 · Python v0.17.0 (PyPI) · TypeScript v0.14.0 (npm)
+Rust v0.25.0 · Python v0.18.0 (PyPI) · TypeScript v0.15.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
@@ -13,6 +13,8 @@ The M1 reliability releases: retry survives non-JSON 5xx bodies, mid-stream erro
 Rust 0.23.0 / Python 0.16.0 / TypeScript 0.13.0 are the M2 retry releases: errors carry structured metadata (`status_code` / `retry_after` / `request_id`; Rust HTTP variants become struct variants — **breaking**), retry classification is status-based (408/409/429/>=500 plus transport errors), Retry-After honors integer-seconds and HTTP-date capped at 60 s, full jitter replaces the deterministic LCG, `RetryPolicy` gains an `on_retry` observer (and lands in Python as a dataclass threaded through chat and stream), Rust providers share one `send_with_retry` helper, and `specs/retry.md` is the normative cross-SDK retry contract (with one conformance suite per SDK).
 
 Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 are the M3 stream-contract + timeout releases: a stream that ends without the provider's terminal event raises a typed error (Rust `MotosanError::IncompleteStream` — **breaking** enum addition; Python `IncompleteStreamError(StreamError)`; TypeScript `IncompleteStreamError extends StreamError`), retiring the v0.10.1 fabricated-terminal-`done` invariant for the neither-signal case (OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk — either suffices; only EOF with neither errors); one timeout model (connect 10 s / read-idle 120 s / total opt-in) lands on all three builders; Rust builds the provider once with a shared `reqwest::Client`; TypeScript gains per-request `AbortSignal` + `CancelledError` (never retried) and a `readTimeoutStream` that actually throws; Python gains `Client.aclose()` / async context manager.
+
+Rust 0.25.0 / Python 0.18.0 / TypeScript 0.15.0 are the M4 spec-and-parity releases: CLI backends (Claude Code / Codex CLI / Gemini CLI) always finish a completed turn with `stop_reason = end_turn` — never `tool_use` — and blocking `chat()` delegates to `stream()` + collect, so `ChatResponse.tool_calls` records the tools the CLI already executed (**breaking**, Rust + Python); Python thinking events are typed `thinking_delta` / `thinking_done`, replacing the ad-hoc `"thinking"` string (**breaking**); `specs/types.md` pins the `StreamEventType` vocabulary (`done` is a bool field, not an event type); chatgpt-codex gains per-attempt token sources (Rust `motosan_ai::auth::TokenSource` + `ClientBuilder::chatgpt_codex_token_source`, Python `token_source=` callable, TypeScript `accessToken` as `() => Promise<string>`); Python adds `Provider.claude_code` / `Client.claude_code()`; Rust reorganizes features around private `_http`/`_cli` umbrellas with a new `ollama-native` alias (public feature set otherwise unchanged) and CI adds `cargo hack check --each-feature`.
 
 ## Current Rust Tool Schema Note
 
