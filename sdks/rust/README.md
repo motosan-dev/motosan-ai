@@ -47,7 +47,7 @@ while let Some(item) = stream.next().await {
 # }
 ```
 
-Each provider stream emits **exactly one** terminal `done` event — guaranteed since v0.10.1 even when the upstream provider closes the connection without `[DONE]` and without any `finish_reason` chunk. `event.stop_reason` carries the provider's reported reason when present (`Anthropic` `message_delta.stop_reason`, `OpenAI` / `MiniMax` `finish_reason`).
+A stream is complete only when the provider sends its terminal event (OpenAI `[DONE]` or a final `finish_reason` chunk — either suffices, Anthropic `message_stop`, Gemini / chatgpt-codex terminal frames). Since v0.24.0, EOF without any such event yields `Err(MotosanError::IncompleteStream(_))` (`"incomplete stream: <provider> ended without a terminal event"`) rather than reporting completion — truncation is distinguishable from completion. `event.stop_reason` carries the provider's reported reason when present (`Anthropic` `message_delta.stop_reason`, `OpenAI` / `MiniMax` `finish_reason`).
 
 ## Vision / Multimodal
 
@@ -320,7 +320,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.23.0", features = ["claude-code"] }
+motosan-ai = { version = "0.24.0", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -430,7 +430,7 @@ Notes:
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.23.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.24.0", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -494,7 +494,7 @@ Notes:
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
 ```toml
-motosan-ai = { version = "0.23.0", features = ["gemini-cli"] }
+motosan-ai = { version = "0.24.0", features = ["gemini-cli"] }
 ```
 
 **Option A — via `Client::builder()`**:

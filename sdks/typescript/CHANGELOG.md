@@ -4,6 +4,23 @@ All notable changes to `@motosan-ai/sdk` TypeScript SDK are documented in this f
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [0.14.0] - 2026-07-17
+
+### Breaking
+- Stream EOF semantics: a provider stream that ends without the provider's terminal event now throws `IncompleteStreamError` — `"incomplete stream: <provider> ended without a terminal event"` — instead of terminating silently with a partial, success-looking response. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (either suffices — EOF after a stashed finish_reason still yields `done` with the stop reason); truncation with neither signal throws. `IncompleteStreamError extends StreamError`, so existing `instanceof StreamError` handlers keep working unchanged.
+- Retry classification: a request aborted by a **caller-supplied** `AbortSignal` throws the new `CancelledError extends MotosanError` and is **never retried**; fetch-internal `AbortError` with no caller signal aborted (for example `AbortSignal.timeout`) stays retryable. `specs/retry.md` includes the TypeScript-only `CancelledError` row.
+
+### Added
+- Per-request cancellation: caller `AbortSignal` threads through Client `chat` / `stream` options to provider `ProviderRequestOptions.signal` and then `postJson` / `postStream` fetch options.
+- `ClientBuilder.timeouts({ connectMs?, readIdleMs?, totalMs? })` — connect 10 s and total (opt-in, chat only) via `AbortSignal.timeout` composition on fetch; read-idle 120 s via `readTimeoutStream`.
+
+### Changed
+- `streamReadTimeoutSecs(n)` is retained as a deprecated alias for `timeouts({ readIdleMs: n * 1000 })`.
+- Node engine floor is now `>=20.3` for `AbortSignal.any` / `AbortSignal.timeout`.
+
+### Fixed
+- `readTimeoutStream` actually throws `StreamReadTimeoutError` on idle expiry (previously it silently ended the stream).
+
 ## [0.13.0] - 2026-07-16
 
 ### Added

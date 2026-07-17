@@ -4,12 +4,53 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-07-17
+
 ### Breaking
-- **Truncated streams now error instead of ending cleanly.** Every HTTP stream adapter (openai, anthropic, gemini, gemini-code-assist, chatgpt-codex, ollama) yields `Err(MotosanError::IncompleteStream("<provider> ended without a terminal event"))` when the upstream connection closes without the provider terminal event (OpenAI-wire `[DONE]` or a `finish_reason` chunk — either suffices / `message_stop` / `finishReason` / `response.completed` / `"done":true`). OpenAI amendment: `finish_reason` is the semantic terminal — EOF after a stashed finish_reason still emits `done(stop_reason)` and completes cleanly; only EOF with NEITHER signal errors. The v0.10.1 invariant "exactly one terminal done event even when upstream closes without `[DONE]`" is retired for that neither-signal case. New `MotosanError::IncompleteStream(String)` variant — enum addition breaks exhaustive matches.
-- **Timeout API cleanup.** `Client::stream_read_timeout()` getter is removed; `ClientBuilder::stream_read_timeout_secs` is deprecated in favor of `read_idle_timeout(Duration)`. HTTP streams now enforce a 120s default read-idle deadline; idle expiry yields `MotosanError::StreamReadTimeout` and is never retried mid-stream.
+- `MotosanError` gains `#[error("incomplete stream: {0}")] IncompleteStream(String)` — exhaustive `match`es need a new arm:
+
+  ```rust
+  // 0.23 — exhaustive match compiles without the new arm
+  match err {
+      MotosanError::Stream(msg) => eprintln!("stream failed: {msg}"),
+      other => return Err(other),
+  }
+  // 0.24 — add an IncompleteStream arm (or a catch-all)
+  match err {
+      MotosanError::Stream(msg) => eprintln!("stream failed: {msg}"),
+      MotosanError::IncompleteStream(msg) => eprintln!("truncated: {msg}"),
+      other => return Err(other),
+  }
+  ```
+
+- Stream EOF semantics: a provider stream that ends **without** the provider's terminal event now yields `Err(MotosanError::IncompleteStream(_))` — `"incomplete stream: <provider> ended without a terminal event"` — instead of fabricating a final `done` event. OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk (either suffices — EOF after a stashed `finish_reason` still emits `done` with the stop reason); truncation with neither signal yields the error. Anthropic requires `message_stop`; Gemini / chatgpt-codex require their terminal frames. This retires the v0.10.1 fabricated-`done` invariant for the neither-signal case. Handling truncation:
+
+  ```rust
+  while let Some(item) = stream.next().await {
+      match item {
+          Ok(event) => {
+              if event.done { break; }              // real provider terminal event
+              print!("{}", event.content);
+          }
+          Err(MotosanError::IncompleteStream(msg)) => {
+              // Upstream closed without its terminal event; events so far are partial.
+              eprintln!("truncated: {msg}");
+              break;
+          }
+          Err(other) => return Err(other),
+      }
+  }
+  ```
+- Timeout API cleanup: `Client::stream_read_timeout()` getter is removed; `ClientBuilder::stream_read_timeout_secs` is deprecated in favor of `read_idle_timeout(Duration)`. HTTP streams now enforce a 120 s default read-idle deadline; idle expiry yields `MotosanError::StreamReadTimeout` and is never retried mid-stream.
 
 ### Added
-- Unified timeout model: `ClientBuilder::connect_timeout(Duration)` (default 10s on the shared reqwest client), `.read_idle_timeout(Duration)` (default 120s), and `.total_timeout(Duration)` (default off; bounds each blocking `chat()` attempt, never streams; expiry surfaces as retryable `MotosanError::Network`).
+- Unified timeout model: `ClientBuilder::connect_timeout(Duration)` (default 10 s on the shared reqwest client), `.read_idle_timeout(Duration)` (default 120 s; same per-chunk semantics as the old stream read timeout), and `.total_timeout(Duration)` (default off; bounds each blocking `chat()` attempt, never streams; expiry surfaces as retryable `MotosanError::Network`).
+
+### Changed
+- `ClientBuilder::build()` constructs the provider once with a single shared `reqwest::Client` (configured with `connect_timeout`); `dispatch_chat` / `dispatch_stream` no longer rebuild the provider per request.
+
+### Fixed
+- Pre-built `gemini_code_assist` provider honors `ClientBuilder::retry_policy` (previously silently discarded).
 
 ## [0.23.0] - 2026-07-16
 
