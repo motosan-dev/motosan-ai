@@ -73,7 +73,8 @@ jobs:
           set -euo pipefail
 
           crate_name="motosan-ai"
-          package_file="target/package/${crate_name}-${VERSION}.crate"
+          target_dir="$(cargo metadata --format-version 1 --no-deps | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+          package_file="${target_dir}/package/${crate_name}-${VERSION}.crate"
 
           cargo package --locked
           if [ ! -f "$package_file" ]; then
