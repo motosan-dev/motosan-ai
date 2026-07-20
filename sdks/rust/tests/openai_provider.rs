@@ -4,11 +4,274 @@ use mockito::Matcher;
 use motosan_ai::providers::openai::{OpenAIAuthStyle, OpenAIProvider};
 use motosan_ai::providers::ProviderImpl;
 use motosan_ai::{
-    ChatRequest, Message, MotosanError, RetryPolicy, StopReason, StreamEventType, Tool,
-    DEFAULT_OPENAI_MODEL,
+    collect_model_stream, ChatRequest, FreeformTool, FreeformToolFormat, FunctionCallOutputPayload,
+    Message, ModelChatRequest, ModelContextItem, ModelToolCall, ModelToolOutput, ModelToolSpec,
+    MotosanError, RetryPolicy, StopReason, StreamEventType, Tool, DEFAULT_OPENAI_MODEL,
 };
 use serde_json::json;
 use tokio_stream::StreamExt;
+
+fn freeform_exec_tool() -> ModelToolSpec {
+    ModelToolSpec::Freeform(FreeformTool {
+        name: "exec".to_string(),
+        description: "Run JavaScript".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: source".to_string(),
+        },
+    })
+}
+
+fn native_custom_request() -> ModelChatRequest {
+    ModelChatRequest::builder()
+        .model("gpt-5.5-codex")
+        .context_item(ModelContextItem::Message(Message::user("run js")))
+        .tool_spec(freeform_exec_tool())
+        .build()
+}
+
+#[tokio::test]
+async fn native_custom_openai_responses_request_encodes_custom_grammar() {
+    let mut server = mockito::Server::new_async().await;
+    let raw = "const x = {a: 1};\nconsole.log(x.a);\n";
+    let mock = server
+        .mock("POST", "/v1/responses")
+        .match_header("authorization", "Bearer test-key")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex(r#""tools"\s*:"#.to_string()),
+            Matcher::Regex(r#""type"\s*:\s*"custom""#.to_string()),
+            Matcher::Regex(r#""format"\s*:"#.to_string()),
+            Matcher::Regex(r#""syntax"\s*:\s*"lark""#.to_string()),
+            Matcher::Regex(r#""definition"\s*:\s*"start: source""#.to_string()),
+        ]))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.5-codex",
+                "status": "completed",
+                "output": [{
+                    "type": "custom_tool_call",
+                    "call_id": "call_js",
+                    "name": "exec",
+                    "input": raw
+                }],
+                "usage": {"input_tokens": 9, "output_tokens": 7}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_responses_api(true)
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+
+    let response = provider
+        .model_chat(native_custom_request())
+        .await
+        .expect("native response");
+
+    assert_eq!(
+        response.tool_calls,
+        vec![ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: raw.to_string(),
+        }]
+    );
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
+    assert_eq!(response.usage.input_tokens, 9);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn native_openai_responses_request_encodes_image_blocks() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", "/v1/responses")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex(r#""type"\s*:\s*"input_text""#.to_string()),
+            Matcher::Regex(r#""text"\s*:\s*"inspect""#.to_string()),
+            Matcher::Regex(r#""type"\s*:\s*"input_image""#.to_string()),
+            Matcher::Regex(r#""image_url"\s*:\s*"data:image/png;base64,abc123""#.to_string()),
+        ]))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.5-codex",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}]
+                }],
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_responses_api(true)
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+    let request = ModelChatRequest::builder()
+        .context_item(ModelContextItem::Message(Message::user_with_image(
+            "inspect",
+            "abc123",
+            "image/png",
+        )))
+        .build();
+
+    let response = provider.model_chat(request).await.expect("native response");
+
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn native_custom_openai_chat_completions_rejects_before_http() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .expect(0)
+        .with_status(500)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+
+    let err = provider
+        .model_chat(native_custom_request())
+        .await
+        .expect_err("chat completions must reject native freeform tools");
+
+    assert!(matches!(err, MotosanError::UnsupportedFeature(msg) if msg.contains("freeform")));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn native_custom_openai_chat_completions_stream_rejects_before_http() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .expect(0)
+        .with_status(500)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+
+    let err = match provider.model_stream(native_custom_request()).await {
+        Ok(_) => panic!("chat completions must reject native freeform streams"),
+        Err(err) => err,
+    };
+
+    assert!(matches!(err, MotosanError::UnsupportedFeature(msg) if msg.contains("freeform")));
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn native_custom_openai_replays_symmetric_history_byte_exact() {
+    let mut server = mockito::Server::new_async().await;
+    let raw = "{\"this\":\"looks like json\"}\nconsole.log('but is JS');";
+    let mock = server
+        .mock("POST", "/v1/responses")
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex(r#""type"\s*:\s*"custom_tool_call""#.to_string()),
+            Matcher::Regex(r#""type"\s*:\s*"custom_tool_call_output""#.to_string()),
+            Matcher::Regex(r#""input"\s*:\s*"\{\\"this\\":\\"looks like json\\"\}\\nconsole\.log\('but is JS'\);"#.to_string()),
+            Matcher::Regex(r#""call_id"\s*:\s*"call_js""#.to_string()),
+            Matcher::Regex(r#""name"\s*:\s*"exec""#.to_string()),
+        ]))
+        .with_status(200)
+        .with_body(
+            json!({
+                "model": "gpt-5.5-codex",
+                "status": "completed",
+                "output": [{
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}]
+                }],
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_responses_api(true)
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+    let request = ModelChatRequest::builder()
+        .context_item(ModelContextItem::Message(Message::user("run js")))
+        .context_item(ModelContextItem::ToolCall(ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: raw.to_string(),
+        }))
+        .context_item(ModelContextItem::ToolOutput(ModelToolOutput::Custom {
+            call_id: "call_js".to_string(),
+            name: Some("exec".to_string()),
+            output: FunctionCallOutputPayload::Text("done".to_string()),
+        }))
+        .tool_spec(freeform_exec_tool())
+        .build();
+
+    let response = provider.model_chat(request).await.expect("native response");
+
+    assert_eq!(response.content, "ok");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn native_custom_openai_stream_decodes_custom_delta_and_done() {
+    let mut server = mockito::Server::new_async().await;
+    let raw = "console.log(1);\n";
+    let sse = concat!(
+        "data: {\"type\":\"response.custom_tool_call_input.delta\",\"call_id\":\"call_js\",\"delta\":\"console.\"}\n\n",
+        "data: {\"type\":\"response.custom_tool_call_input.delta\",\"call_id\":\"call_js\",\"delta\":\"log(1);\\n\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"custom_tool_call\",\"call_id\":\"call_js\",\"name\":\"exec\",\"input\":\"console.log(1);\\n\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n"
+    );
+    let mock = server
+        .mock("POST", "/v1/responses")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_responses_api(true)
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+
+    let stream = provider
+        .model_stream(native_custom_request())
+        .await
+        .expect("native stream");
+    let response = collect_model_stream(stream)
+        .await
+        .expect("collect native stream");
+
+    assert_eq!(
+        response.tool_calls,
+        vec![ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: raw.to_string(),
+        }]
+    );
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
+    assert_eq!(response.usage.output_tokens, 3);
+    mock.assert_async().await;
+}
 
 #[tokio::test]
 async fn openai_chat_maps_response() {

@@ -55,11 +55,17 @@ DocumentSource::Url    { url: string }
 |-------|------|-------|
 | `supports_image` | `bool` | Provider accepts `ContentBlock::Image` |
 | `supports_document` | `bool` | Provider accepts `ContentBlock::Document` |
+| `supports_freeform_tools` | `bool` | Provider accepts native Rust `ModelToolSpec::Freeform` / `ModelToolCall::Freeform` transport |
 
-Named constructors: `text_only()` / `with_image()` / `full()`.
+Named constructors: `text_only()` / `with_image()` / `with_freeform_tools()` /
+`with_image_and_freeform_tools()` / `full()`.
 
-Default per provider: Anthropic → `full()`, OpenAI/Gemini/GeminiCodeAssist → `with_image()`, all others → `text_only()`.
-Passing unsupported content returns `Err(UnsupportedFeature)` before any network call.
+Default per provider: Anthropic → `full()` (image + document),
+OpenAI Chat Completions/Gemini/GeminiCodeAssist → `with_image()`, OpenAI
+Responses → `with_image_and_freeform_tools()`, ChatGPT Codex →
+`with_freeform_tools()`, all others → `text_only()`. Passing unsupported
+content or native Freeform tools returns `Err(UnsupportedFeature)` before any
+network call.
 
 ## ChatRequest
 
@@ -97,6 +103,110 @@ Passing unsupported content returns `Err(UnsupportedFeature)` before any network
 | `id` | `string` |
 | `name` | `string` |
 | `input` | `object` (parsed JSON) |
+
+## Native Model API (Rust, v0.26.0+)
+
+The legacy cross-SDK `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and
+`StreamEvent` APIs remain function-tool-only. Rust v0.26.0 adds a parallel
+native model API for providers that expose OpenAI Responses-style ordered input
+items and custom tool calls.
+
+### Tool definitions
+
+```
+ModelToolSpec::Function(Tool)              // wire type: "function"
+ModelToolSpec::Freeform(FreeformTool)      // wire type: "custom"
+
+FreeformTool {
+  name: string,
+  description: string,
+  format: FreeformToolFormat {
+    type: string,
+    syntax: string,
+    definition: string,
+  },
+}
+```
+
+Freeform `format` is mandatory. Function tools serialize as Responses
+`{type:"function", name, description, parameters}`. Freeform tools serialize as
+`{type:"custom", name, description, format}`.
+
+### Ordered context and history
+
+```
+ModelContextItem::Message(Message)
+ModelContextItem::ToolCall(ModelToolCall)
+ModelContextItem::ToolOutput(ModelToolOutput)
+```
+
+`ModelChatRequest.context` preserves mixed message / model tool-call / caller
+tool-output order for subsequent requests. This is required for byte-exact
+replay of Freeform inputs in multi-turn histories.
+
+### Calls and outputs
+
+```
+ModelToolCall::Function { id, name, arguments }   // wire type: "function_call"
+ModelToolCall::Freeform { id, name, input }       // wire type: "custom_tool_call"
+
+ModelToolOutput::Function { call_id, output }     // wire type: "function_call_output"
+ModelToolOutput::Custom { call_id, name, output } // wire type: "custom_tool_call_output"
+```
+
+Function `arguments` and Freeform `input` are both strings on the native Rust
+surface, but they are different transports. Freeform `input` is raw model text
+such as JavaScript and MUST be preserved byte-for-byte; providers MUST NOT parse
+it as JSON and MUST NOT lower it into OpenAI function-call `arguments`.
+
+`FunctionCallOutputPayload` supports either plain text or Responses-style
+content items:
+
+```
+Text(string)
+Content([InputText | InputImage | EncryptedContent])
+```
+
+### Requests, responses, and streams
+
+```
+Client::model_chat_with(ModelChatRequest) -> ModelChatResponse
+Client::model_stream_with(ModelChatRequest) -> BoxModelStream
+Client::model_stream_collect_with(ModelChatRequest) -> ModelChatResponse
+
+ModelChatResponse {
+  content: string,
+  thinking: string?,
+  tool_calls: ModelToolCall[],
+  model: string,
+  usage: Usage,
+  stop_reason: StopReason,
+  session_id: string?,
+}
+
+ModelStreamDelta =
+  Text { delta }
+  | ThinkingDelta { delta }
+  | ThinkingDone { thinking }
+  | FunctionArguments { call_id, delta }
+  | FreeformInput { call_id, delta }
+  | ToolCallDone { call }
+  | Usage { usage }
+  | Done { stop_reason }
+```
+
+`ToolCallDone` is authoritative for completed custom calls. Collectors may
+accumulate `FreeformInput` deltas for display, but must preserve the completed
+`ModelToolCall::Freeform.input` when the provider sends it.
+
+### Provider support
+
+OpenAI supports the native API only when Rust callers opt into
+`ClientBuilder::openai_responses_api(true)` or
+`OpenAIProvider::with_responses_api(true)`. ChatGPT Codex supports native
+Freeform transport through its Responses endpoint by default. Unsupported
+providers reject native Freeform specs or history with
+`MotosanError::UnsupportedFeature` before network I/O.
 
 ## Usage
 

@@ -12,6 +12,7 @@ use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::time::Duration;
 
+#[allow(dead_code)]
 pub(crate) struct ChatResponseBuilder {
     content: String,
     thinking: Option<String>,
@@ -21,6 +22,7 @@ pub(crate) struct ChatResponseBuilder {
     stop_reason: StopReason,
 }
 
+#[allow(dead_code)]
 impl ChatResponseBuilder {
     pub(crate) fn new(default_model: impl Into<String>) -> Self {
         Self {
@@ -249,6 +251,7 @@ where
 /// Sync-build convenience over [`send_with_retry_async_build`] — the single
 /// retry engine every HTTP provider shares (normative contract:
 /// specs/retry.md).
+#[allow(dead_code)]
 pub(crate) async fn send_with_retry(
     policy: &RetryPolicy,
     build: impl Fn() -> reqwest::RequestBuilder,
@@ -260,6 +263,7 @@ pub(crate) async fn send_with_retry(
 }
 
 /// Apply the opt-in total timeout to a blocking-chat request.
+#[allow(dead_code)]
 pub(crate) fn apply_total_timeout(
     rb: reqwest::RequestBuilder,
     total: Option<Duration>,
@@ -271,6 +275,7 @@ pub(crate) fn apply_total_timeout(
 }
 
 /// Total-timeout wrapper for providers whose `chat()` is stream+collect.
+#[allow(dead_code)]
 pub(crate) async fn collect_stream_with_total_timeout(
     stream: BoxStream,
     total: Option<Duration>,

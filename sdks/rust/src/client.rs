@@ -1,10 +1,13 @@
 use crate::error::MotosanError;
 use crate::providers::Provider;
 use crate::retry::RetryPolicy;
-use crate::stream::BoxStream;
+use crate::stream::{BoxModelStream, BoxStream};
 use crate::think_stripper::ThinkStripper;
 use crate::transport::{TimeoutConfig, DEFAULT_CONNECT_TIMEOUT, DEFAULT_READ_IDLE_TIMEOUT};
-use crate::types::{ChatRequest, ChatResponse, Message, StreamEvent, StreamEventType};
+use crate::types::{
+    ChatRequest, ChatResponse, Message, ModelChatRequest, ModelChatResponse, StreamEvent,
+    StreamEventType,
+};
 use std::time::Duration;
 
 /// The provider selected and fully constructed at `ClientBuilder::build()`
@@ -77,6 +80,7 @@ pub struct Client {
     model: Option<String>,
     openai_auth_header: Option<String>,
     openai_responses_fallback: bool,
+    openai_responses_api: bool,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
     anthropic_base_url: Option<String>,
@@ -179,6 +183,10 @@ impl Client {
         self.openai_responses_fallback
     }
 
+    pub fn openai_responses_api(&self) -> bool {
+        self.openai_responses_api
+    }
+
     /// The custom Anthropic base URL, if one was set via
     /// [`ClientBuilder::anthropic_base_url`]. Returns `None` when the client
     /// uses the default `https://api.anthropic.com`.
@@ -253,6 +261,37 @@ impl Client {
         Ok(response)
     }
 
+    pub async fn model_chat_with(
+        &self,
+        request: ModelChatRequest,
+    ) -> Result<ModelChatResponse, MotosanError> {
+        self.dispatch_model_chat(request).await
+    }
+
+    pub async fn model_stream_with(
+        &self,
+        request: ModelChatRequest,
+    ) -> Result<BoxModelStream, MotosanError> {
+        self.dispatch_model_stream(request).await
+    }
+
+    pub async fn model_stream_collect_with(
+        &self,
+        request: ModelChatRequest,
+    ) -> Result<ModelChatResponse, MotosanError> {
+        let model_hint = request
+            .model
+            .clone()
+            .or_else(|| self.model.clone())
+            .unwrap_or_default();
+        let stream = self.model_stream_with(request).await?;
+        let mut response = crate::stream::collect_model_stream(stream).await?;
+        if response.model.is_empty() {
+            response.model = model_hint;
+        }
+        Ok(response)
+    }
+
     fn wrap_with_think_stripper(raw: BoxStream) -> BoxStream {
         Box::pin(ThinkStripperStream {
             inner: raw,
@@ -265,6 +304,15 @@ impl Client {
         let provider = self.built.as_impl()?;
         self.validate_for_dispatch(provider, &request)?;
         provider.chat(request).await
+    }
+
+    async fn dispatch_model_chat(
+        &self,
+        request: ModelChatRequest,
+    ) -> Result<ModelChatResponse, MotosanError> {
+        let provider = self.built.as_impl()?;
+        self.validate_for_model_dispatch(provider, &request)?;
+        provider.model_chat(request).await
     }
 
     async fn dispatch_stream(&self, request: ChatRequest) -> Result<BoxStream, MotosanError> {
@@ -283,6 +331,23 @@ impl Client {
         let provider = self.built.as_impl()?;
         self.validate_for_dispatch(provider, &request)?;
         provider.stream(request).await
+    }
+
+    async fn dispatch_model_stream(
+        &self,
+        request: ModelChatRequest,
+    ) -> Result<BoxModelStream, MotosanError> {
+        let provider = self.built.as_impl()?;
+        self.validate_for_model_dispatch(provider, &request)?;
+        let raw = provider.model_stream(request).await?;
+        #[cfg(feature = "_http")]
+        if self.provider.uses_http_transport() {
+            return Ok(Box::pin(ReadTimeoutModelStream::new(
+                raw,
+                self.timeouts.read_idle,
+            )));
+        }
+        Ok(raw)
     }
 
     fn validate_for_dispatch(
@@ -307,6 +372,14 @@ impl Client {
         }
 
         provider.validate_request(request)
+    }
+
+    fn validate_for_model_dispatch(
+        &self,
+        provider: &dyn crate::providers::ProviderImpl,
+        request: &ModelChatRequest,
+    ) -> Result<(), MotosanError> {
+        provider.validate_model_request(request)
     }
 
     fn construct_built_provider(&self) -> BuiltProvider {
@@ -447,6 +520,7 @@ impl Client {
         let mut provider = OpenAIProvider::new(self.api_key.clone(), self.model.clone())
             .with_auth_style(auth_style)
             .with_responses_fallback(self.openai_responses_fallback)
+            .with_responses_api(self.openai_responses_api)
             .with_retry_policy(self.retry_policy.clone())
             .with_total_timeout(self.timeouts.total)
             .with_http_client(self.http.clone());
@@ -639,6 +713,7 @@ pub struct ClientBuilder {
     model: Option<String>,
     openai_auth_header: Option<String>,
     openai_responses_fallback: Option<bool>,
+    openai_responses_api: Option<bool>,
     openai_chat_url: Option<String>,
     openai_responses_url: Option<String>,
     anthropic_base_url: Option<String>,
@@ -712,6 +787,11 @@ impl ClientBuilder {
 
     pub fn openai_responses_fallback(mut self, enabled: bool) -> Self {
         self.openai_responses_fallback = Some(enabled);
+        self
+    }
+
+    pub fn openai_responses_api(mut self, enabled: bool) -> Self {
+        self.openai_responses_api = Some(enabled);
         self
     }
 
@@ -1051,6 +1131,7 @@ impl ClientBuilder {
             model: self.model,
             openai_auth_header: self.openai_auth_header,
             openai_responses_fallback: self.openai_responses_fallback.unwrap_or(false),
+            openai_responses_api: self.openai_responses_api.unwrap_or(false),
             openai_chat_url: self.openai_chat_url,
             openai_responses_url: self.openai_responses_url,
             anthropic_base_url: self.anthropic_base_url,
@@ -1120,6 +1201,63 @@ impl ReadTimeoutStream {
 #[cfg(feature = "_http")]
 impl futures_core::Stream for ReadTimeoutStream {
     type Item = Result<StreamEvent, MotosanError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::future::Future;
+        use std::task::Poll;
+
+        if self.done {
+            return Poll::Ready(None);
+        }
+
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(item)) => {
+                let timeout = self.timeout;
+                self.deadline
+                    .as_mut()
+                    .reset(tokio::time::Instant::now() + timeout);
+                Poll::Ready(Some(item))
+            }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => match self.deadline.as_mut().poll(cx) {
+                Poll::Ready(()) => {
+                    self.done = true;
+                    Poll::Ready(Some(Err(MotosanError::StreamReadTimeout(
+                        self.timeout.as_secs(),
+                    ))))
+                }
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
+
+#[cfg(feature = "_http")]
+struct ReadTimeoutModelStream {
+    inner: BoxModelStream,
+    timeout: Duration,
+    deadline: std::pin::Pin<Box<tokio::time::Sleep>>,
+    done: bool,
+}
+
+#[cfg(feature = "_http")]
+impl ReadTimeoutModelStream {
+    fn new(inner: BoxModelStream, timeout: Duration) -> Self {
+        Self {
+            inner,
+            timeout,
+            deadline: Box::pin(tokio::time::sleep(timeout)),
+            done: false,
+        }
+    }
+}
+
+#[cfg(feature = "_http")]
+impl futures_core::Stream for ReadTimeoutModelStream {
+    type Item = Result<crate::types::ModelStreamDelta, MotosanError>;
 
     fn poll_next(
         mut self: std::pin::Pin<&mut Self>,

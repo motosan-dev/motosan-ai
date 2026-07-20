@@ -4,6 +4,8 @@ use futures_core::Stream;
 use std::pin::Pin;
 
 pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>;
+pub type BoxModelStream =
+    Pin<Box<dyn Stream<Item = Result<crate::types::ModelStreamDelta, MotosanError>> + Send>>;
 
 /// Collect a streaming response into a single [`ChatResponse`].
 ///
@@ -143,6 +145,96 @@ pub async fn collect_stream(
         stop_reason,
         session_id,
         tool_calls,
+    })
+}
+
+/// Collect a native model stream into a single [`ModelChatResponse`].
+///
+/// Unlike [`collect_stream`], this collector carries native function and
+/// freeform tool calls without lowering freeform input into JSON arguments.
+pub async fn collect_model_stream(
+    mut stream: BoxModelStream,
+) -> Result<crate::types::ModelChatResponse, MotosanError> {
+    use crate::types::{ModelChatResponse, ModelStreamDelta, ModelToolCall, StopReason, Usage};
+    use std::collections::BTreeMap;
+    use tokio_stream::StreamExt;
+
+    let mut content = String::new();
+    let mut thinking_delta_buf = String::new();
+    let mut thinking_done_buf: Option<String> = None;
+    let mut function_arguments: BTreeMap<String, String> = BTreeMap::new();
+    let mut freeform_inputs: BTreeMap<String, String> = BTreeMap::new();
+    let mut tool_calls: Vec<ModelToolCall> = Vec::new();
+    let mut usage = Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: None,
+        cache_read_input_tokens: None,
+    };
+    let mut explicit_stop_reason: Option<StopReason> = None;
+
+    while let Some(item) = stream.next().await {
+        match item? {
+            ModelStreamDelta::Text { delta } => content.push_str(&delta),
+            ModelStreamDelta::ThinkingDelta { delta } => thinking_delta_buf.push_str(&delta),
+            ModelStreamDelta::ThinkingDone { thinking } => {
+                thinking_done_buf = Some(thinking);
+                thinking_delta_buf.clear();
+            }
+            ModelStreamDelta::FunctionArguments { call_id, delta } => {
+                function_arguments
+                    .entry(call_id)
+                    .or_default()
+                    .push_str(&delta);
+            }
+            ModelStreamDelta::FreeformInput { call_id, delta } => {
+                freeform_inputs.entry(call_id).or_default().push_str(&delta);
+            }
+            ModelStreamDelta::ToolCallDone { call } => {
+                match &call {
+                    ModelToolCall::Function { id, .. } => {
+                        function_arguments.remove(id);
+                    }
+                    ModelToolCall::Freeform { id, .. } => {
+                        freeform_inputs.remove(id);
+                    }
+                }
+                tool_calls.push(call);
+            }
+            ModelStreamDelta::Usage {
+                usage: stream_usage,
+            } => {
+                usage = stream_usage;
+            }
+            ModelStreamDelta::Done { stop_reason } => {
+                explicit_stop_reason = Some(stop_reason);
+                break;
+            }
+        }
+    }
+
+    let thinking = match thinking_done_buf {
+        Some(text) if !text.is_empty() => Some(text),
+        Some(_) => None,
+        None if !thinking_delta_buf.is_empty() => Some(thinking_delta_buf),
+        None => None,
+    };
+    let stop_reason = explicit_stop_reason.unwrap_or({
+        if tool_calls.is_empty() {
+            StopReason::EndTurn
+        } else {
+            StopReason::ToolUse
+        }
+    });
+
+    Ok(ModelChatResponse {
+        content,
+        thinking,
+        tool_calls,
+        model: String::new(),
+        usage,
+        stop_reason,
+        session_id: None,
     })
 }
 

@@ -1,11 +1,17 @@
 use crate::error::MotosanError;
-use crate::stream::BoxStream;
-use crate::types::{ChatRequest, ChatResponse, ContentBlock, ProviderCapabilities};
+use crate::stream::{BoxModelStream, BoxStream};
+use crate::types::{
+    ChatRequest, ChatResponse, ContentBlock, ModelChatRequest, ModelChatResponse, ModelContextItem,
+    ModelToolCall, ModelToolOutput, ModelToolSpec, ProviderCapabilities,
+};
 use async_trait::async_trait;
+
+pub mod responses;
 
 // Shared transport helpers moved to src/transport/ (M4 Task 1). Re-exported
 // pub(crate) at their old paths so provider files need no import churn.
 #[cfg(feature = "_http")]
+#[allow(unused_imports)]
 pub(crate) use crate::transport::http::{
     apply_total_timeout, collect_stream_with_total_timeout, extract_error_message,
     extract_request_id, map_http_error, parse_retry_after, send_with_retry, ChatResponseBuilder,
@@ -73,8 +79,82 @@ pub trait ProviderImpl: Send + Sync {
         Ok(())
     }
 
+    fn validate_model_request(&self, req: &ModelChatRequest) -> Result<(), MotosanError> {
+        let caps = self.capabilities();
+        let has_freeform_spec = req
+            .tool_specs
+            .iter()
+            .any(|spec| matches!(spec, ModelToolSpec::Freeform(_)));
+        let has_freeform_history = req.context.iter().any(|item| {
+            matches!(
+                item,
+                ModelContextItem::ToolCall(ModelToolCall::Freeform { .. })
+                    | ModelContextItem::ToolOutput(ModelToolOutput::Custom { .. })
+            )
+        });
+        if (has_freeform_spec || has_freeform_history) && !caps.supports_freeform_tools {
+            return Err(MotosanError::UnsupportedFeature(
+                "provider does not support native freeform tools".into(),
+            ));
+        }
+        if req.thinking.is_some() {
+            return Err(MotosanError::UnsupportedFeature(
+                "native model request thinking is not supported; use provider_options for provider-specific reasoning controls".into(),
+            ));
+        }
+        if req
+            .mcp_servers
+            .as_ref()
+            .is_some_and(|servers| !servers.is_empty())
+            || req
+                .mcp_tool_configs
+                .as_ref()
+                .is_some_and(|configs| !configs.is_empty())
+        {
+            return Err(MotosanError::UnsupportedFeature(
+                "native model requests do not support MCP servers".into(),
+            ));
+        }
+
+        for item in &req.context {
+            if let ModelContextItem::Message(msg) = item {
+                for block in &msg.content_blocks {
+                    match block {
+                        ContentBlock::Image { .. } if !caps.supports_image => {
+                            return Err(MotosanError::UnsupportedFeature(
+                                "provider does not support image input".into(),
+                            ));
+                        }
+                        ContentBlock::Document { .. } if !caps.supports_document => {
+                            return Err(MotosanError::UnsupportedFeature(
+                                "provider does not support document input".into(),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn chat(&self, _req: ChatRequest) -> Result<ChatResponse, MotosanError>;
     async fn stream(&self, _req: ChatRequest) -> Result<BoxStream, MotosanError>;
+
+    async fn model_chat(&self, req: ModelChatRequest) -> Result<ModelChatResponse, MotosanError> {
+        self.validate_model_request(&req)?;
+        Err(MotosanError::UnsupportedFeature(
+            "provider does not support native model requests".into(),
+        ))
+    }
+
+    async fn model_stream(&self, req: ModelChatRequest) -> Result<BoxModelStream, MotosanError> {
+        self.validate_model_request(&req)?;
+        Err(MotosanError::UnsupportedFeature(
+            "provider does not support native model streams".into(),
+        ))
+    }
 }
 
 #[cfg(feature = "anthropic")]
@@ -110,7 +190,7 @@ pub mod chatgpt_codex;
 #[cfg(test)]
 mod validate_tests {
     use super::*;
-    use crate::types::{Message, ProviderCapabilities};
+    use crate::types::{McpServerConfig, McpServerType, Message, ProviderCapabilities};
 
     struct TextOnlyProvider;
 
@@ -185,5 +265,40 @@ mod validate_tests {
     fn any_provider_accepts_plain_text() {
         let p = TextOnlyProvider;
         assert!(p.validate_request(&req_text_only()).is_ok());
+    }
+
+    #[test]
+    fn native_model_request_rejects_thinking_before_provider_io() {
+        let p = FullProvider;
+        let req = ModelChatRequest::builder()
+            .context_item(ModelContextItem::Message(Message::user("hello")))
+            .thinking(1024)
+            .build();
+
+        let result = p.validate_model_request(&req);
+
+        assert!(
+            matches!(result, Err(MotosanError::UnsupportedFeature(msg)) if msg.contains("thinking"))
+        );
+    }
+
+    #[test]
+    fn native_model_request_rejects_mcp_servers_before_provider_io() {
+        let p = FullProvider;
+        let req = ModelChatRequest::builder()
+            .context_item(ModelContextItem::Message(Message::user("hello")))
+            .mcp_server(McpServerConfig {
+                kind: McpServerType::Url,
+                url: "https://mcp.example.test".to_string(),
+                name: "tools".to_string(),
+                authorization_token: None,
+            })
+            .build();
+
+        let result = p.validate_model_request(&req);
+
+        assert!(
+            matches!(result, Err(MotosanError::UnsupportedFeature(msg)) if msg.contains("MCP"))
+        );
     }
 }

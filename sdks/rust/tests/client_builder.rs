@@ -1,4 +1,8 @@
 use motosan_ai::{Client, Message, MotosanError, Provider, RetryPolicy};
+#[cfg(feature = "openai")]
+use motosan_ai::{
+    FreeformTool, FreeformToolFormat, ModelChatRequest, ModelContextItem, ModelToolSpec,
+};
 
 #[test]
 fn builder_requires_provider_and_api_key() {
@@ -252,16 +256,19 @@ fn builder_defaults_openai_options_and_allows_override() {
         .expect("build client");
     assert_eq!(default_client.openai_auth_header(), None);
     assert!(!default_client.openai_responses_fallback());
+    assert!(!default_client.openai_responses_api());
 
     let custom_client = Client::builder()
         .provider(Provider::OpenAI)
         .api_key("k")
         .openai_auth_x_api_key()
         .openai_responses_fallback(true)
+        .openai_responses_api(true)
         .build()
         .expect("build client");
     assert_eq!(custom_client.openai_auth_header(), Some("x-api-key"));
     assert!(custom_client.openai_responses_fallback());
+    assert!(custom_client.openai_responses_api());
 
     let custom_header_client = Client::builder()
         .provider(Provider::OpenAI)
@@ -282,6 +289,45 @@ fn builder_defaults_openai_options_and_allows_override() {
         .build()
         .expect("build client");
     assert_eq!(reset_to_bearer_client.openai_auth_header(), None);
+}
+
+#[cfg(feature = "openai")]
+#[tokio::test]
+async fn freeform_capability_client_rejects_openai_chat_completions_before_http() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("POST", mockito::Matcher::Any)
+        .expect(0)
+        .with_status(500)
+        .create_async()
+        .await;
+    let client = Client::builder()
+        .provider(Provider::OpenAI)
+        .api_key("test-key")
+        .openai_chat_url(format!("{}/v1/chat/completions", server.url()))
+        .openai_responses_url(format!("{}/v1/responses", server.url()))
+        .build()
+        .expect("build client");
+    let request = ModelChatRequest::builder()
+        .context_item(ModelContextItem::Message(Message::user("run js")))
+        .tool_spec(ModelToolSpec::Freeform(FreeformTool {
+            name: "exec".to_string(),
+            description: "Run JavaScript".to_string(),
+            format: FreeformToolFormat {
+                r#type: "grammar".to_string(),
+                syntax: "lark".to_string(),
+                definition: "start: source".to_string(),
+            },
+        }))
+        .build();
+
+    let err = client
+        .model_chat_with(request)
+        .await
+        .expect_err("OpenAI Chat Completions must reject native freeform");
+
+    assert!(matches!(err, MotosanError::UnsupportedFeature(msg) if msg.contains("freeform")));
+    mock.assert_async().await;
 }
 
 #[test]

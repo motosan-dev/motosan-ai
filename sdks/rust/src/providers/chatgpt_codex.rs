@@ -4,10 +4,11 @@ use crate::providers::{
     extract_error_message, extract_request_id, map_http_error, parse_retry_after, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
-use crate::stream::BoxStream;
+use crate::stream::{BoxModelStream, BoxStream};
 use crate::transport::http::send_with_retry_async_build;
 use crate::types::{
-    ChatRequest, ChatResponse, ProviderCapabilities, Role, StopReason, StreamEvent, Usage,
+    ChatRequest, ChatResponse, ModelChatRequest, ModelChatResponse, ProviderCapabilities, Role,
+    StopReason, StreamEvent, Usage,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -282,13 +283,43 @@ impl ChatGptCodexProvider {
 
         body
     }
+
+    pub fn build_model_responses_body(&self, req: &ModelChatRequest) -> Value {
+        let mut body = crate::providers::responses::build_model_request_body(
+            req,
+            &self.model,
+            true,
+            Some("You are a helpful assistant."),
+        );
+        body["store"] = json!(false);
+        body["include"] = json!(["reasoning.encrypted_content"]);
+        body["tool_choice"] = json!("auto");
+        body["parallel_tool_calls"] = json!(true);
+
+        let effort = req
+            .provider_options
+            .as_ref()
+            .and_then(|opts| opts.get("reasoning_effort"))
+            .and_then(Value::as_str)
+            .or(self.reasoning_effort.as_deref());
+        if let Some(effort) = effort {
+            body["reasoning"] = json!({"effort": effort, "summary": "auto"});
+            if body.get("reasoning_effort").is_some() {
+                body.as_object_mut()
+                    .expect("responses request body is an object")
+                    .remove("reasoning_effort");
+            }
+        }
+
+        body
+    }
 }
 
 #[async_trait]
 impl ProviderImpl for ChatGptCodexProvider {
     fn capabilities(&self) -> ProviderCapabilities {
         // v1 is text-only; multimodal `input_image` passthrough is a phase-2 hook.
-        ProviderCapabilities::text_only()
+        ProviderCapabilities::with_freeform_tools()
     }
 
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -345,6 +376,52 @@ impl ProviderImpl for ChatGptCodexProvider {
             saw_terminal: false,
         };
         Ok(Box::pin(adapter))
+    }
+
+    async fn model_chat(&self, req: ModelChatRequest) -> Result<ModelChatResponse, MotosanError> {
+        let model = req.model.clone().unwrap_or_else(|| self.model.clone());
+        let stream = self.model_stream(req).await?;
+        let mut response = crate::stream::collect_model_stream(stream).await?;
+        if response.model.is_empty() {
+            response.model = model;
+        }
+        Ok(response)
+    }
+
+    async fn model_stream(&self, req: ModelChatRequest) -> Result<BoxModelStream, MotosanError> {
+        self.validate_model_request(&req)?;
+        let url = self.url();
+        let body = self.build_model_responses_body(&req);
+
+        let response = send_with_retry_async_build(&self.retry_policy, || {
+            let url = &url;
+            let body = &body;
+            async move {
+                let token = self.token_source.access_token().await?;
+                Ok(self
+                    .apply_auth(
+                        self.http
+                            .post(url)
+                            .header("content-type", "application/json"),
+                        &token,
+                    )
+                    .json(body))
+            }
+        })
+        .await?;
+
+        let status = response.status().as_u16();
+        if status != 200 {
+            let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
+            let payload: Value = response.json().await.unwrap_or(json!({}));
+            let msg = extract_error_message(&payload, "ChatGPT-backend error");
+            return Err(map_http_error(status, msg, retry_after, request_id));
+        }
+
+        Ok(crate::providers::responses::model_stream_adapter(
+            response.bytes_stream().eventsource(),
+        ))
     }
 }
 
@@ -634,6 +711,14 @@ mod tests {
 
     fn simple_user_request(text: &str) -> ChatRequest {
         ChatRequest::builder().message(Message::user(text)).build()
+    }
+
+    #[test]
+    fn freeform_capability_chatgpt_codex_supports_freeform_tools_but_not_images() {
+        let caps = test_provider().capabilities();
+        assert!(!caps.supports_image);
+        assert!(!caps.supports_document);
+        assert!(caps.supports_freeform_tools);
     }
 
     #[test]

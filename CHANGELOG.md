@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.26.0 / python-0.18.0 / ts-0.15.0] — 2026-07-21
+
+AI0 native Freeform/custom tool transport release for the Rust SDK. No Python
+or TypeScript package version changed.
+
+### Added
+
+- **Native model tool API** (Rust): `ModelChatRequest`, `ModelContextItem`,
+  `ModelToolSpec`, `FreeformTool`, `ModelToolCall`, `ModelToolOutput`,
+  `ModelChatResponse`, `ModelStreamDelta`, `BoxModelStream`, and
+  `collect_model_stream` add an ordered transport surface for Function and
+  Freeform/custom tools. The legacy function-only `ChatRequest`, `Tool`,
+  `ToolCall`, `ChatResponse`, and `StreamEvent` APIs remain supported.
+- **Responses codec** (Rust): OpenAI Responses and ChatGPT Codex share one
+  encoder/decoder for native input history, tool definitions, tool calls, tool
+  outputs, blocking responses, streaming text/thinking/tool deltas, usage, and
+  terminal state. Freeform inputs stay raw strings byte-for-byte and are never
+  lowered into JSON function arguments.
+- **Provider capability guardrail** (Rust): `ProviderCapabilities` now includes
+  `supports_freeform_tools`; unsupported providers reject native Freeform
+  requests with `MotosanError::UnsupportedFeature` before network I/O.
+- **OpenAI Responses mode** (Rust): `OpenAIProvider::with_responses_api(true)`
+  and `ClientBuilder::openai_responses_api(true)` opt the OpenAI provider into
+  `/v1/responses` for native model requests. ChatGPT Codex supports native
+  Freeform transport by default.
+
+### Changed
+
+- **Rust release workflow**: `publish-rust.yml` now validates tag/version
+  consistency, packages with a lockfile, compares the local `.crate` SHA-256
+  against crates.io when the version already exists, and verifies the published
+  checksum after `cargo publish`.
+
 ## [rust-0.25.0 / python-0.18.0 / ts-0.15.0] — 2026-07-17
 
 M4 spec-and-parity release. **Breaking for Rust and Python** (CLI backend chat/stream contract; Python typed thinking events); minor for TypeScript (async token source only).
