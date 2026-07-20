@@ -297,6 +297,584 @@ impl From<motosan_agent_primitives::ToolSchema> for Tool {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FreeformToolFormat {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub syntax: String,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreeformTool {
+    pub name: String,
+    pub description: String,
+    pub format: FreeformToolFormat,
+}
+
+impl Serialize for FreeformTool {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("FreeformTool", 4)?;
+        state.serialize_field("type", "custom")?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("description", &self.description)?;
+        state.serialize_field("format", &self.format)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for FreeformTool {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Wire {
+            #[serde(rename = "type")]
+            kind: String,
+            name: String,
+            description: String,
+            format: FreeformToolFormat,
+        }
+
+        let wire = Wire::deserialize(deserializer)?;
+        if wire.kind != "custom" {
+            return Err(serde::de::Error::custom(format!(
+                "expected custom freeform tool, got {}",
+                wire.kind
+            )));
+        }
+        Ok(Self {
+            name: wire.name,
+            description: wire.description,
+            format: wire.format,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum ModelToolSpec {
+    Function(Tool),
+    Freeform(FreeformTool),
+}
+
+impl Serialize for ModelToolSpec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Self::Function(tool) => serde_json::json!({
+                "type": "function",
+                "name": tool.schema.name,
+                "description": tool.schema.description,
+                "parameters": tool.schema.input_schema,
+            }),
+            Self::Freeform(tool) => {
+                serde_json::to_value(tool).map_err(serde::ser::Error::custom)?
+            }
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelToolSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("function") => {
+                let name = value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing function tool name"))?;
+                let description = value
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing function tool description"))?;
+                let parameters = value
+                    .get("parameters")
+                    .cloned()
+                    .ok_or_else(|| serde::de::Error::custom("missing function tool parameters"))?;
+                Ok(Self::Function(Tool::from(
+                    motosan_agent_primitives::ToolSchema::new(name, description, parameters),
+                )))
+            }
+            Some("custom") => serde_json::from_value(value)
+                .map(Self::Freeform)
+                .map_err(serde::de::Error::custom),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "unsupported model tool spec type {other}"
+            ))),
+            None => Err(serde::de::Error::custom("missing model tool spec type")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageDetail {
+    Auto,
+    Low,
+    High,
+    Original,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum FunctionCallOutputContentItem {
+    InputText {
+        text: String,
+    },
+    InputImage {
+        image_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<ImageDetail>,
+    },
+    EncryptedContent {
+        encrypted_content: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum FunctionCallOutputPayload {
+    Text(String),
+    Content(Vec<FunctionCallOutputContentItem>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelToolCall {
+    Function {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    Freeform {
+        id: String,
+        name: String,
+        input: String,
+    },
+}
+
+impl ModelToolCall {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Function { id, .. } | Self::Freeform { id, .. } => id,
+        }
+    }
+}
+
+impl Serialize for ModelToolCall {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Self::Function {
+                id,
+                name,
+                arguments,
+            } => serde_json::json!({
+                "type": "function_call",
+                "call_id": id,
+                "name": name,
+                "arguments": arguments,
+            }),
+            Self::Freeform { id, name, input } => serde_json::json!({
+                "type": "custom_tool_call",
+                "call_id": id,
+                "name": name,
+                "input": input,
+            }),
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelToolCall {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let call_id = |value: &Value| {
+            value
+                .get("call_id")
+                .or_else(|| value.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        };
+        match value.get("type").and_then(Value::as_str) {
+            Some("function_call") => Ok(Self::Function {
+                id: call_id(&value)
+                    .ok_or_else(|| serde::de::Error::custom("missing function call id"))?,
+                name: value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing function call name"))?
+                    .to_string(),
+                arguments: value
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }),
+            Some("custom_tool_call") => Ok(Self::Freeform {
+                id: call_id(&value)
+                    .ok_or_else(|| serde::de::Error::custom("missing custom call id"))?,
+                name: value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing custom call name"))?
+                    .to_string(),
+                input: value
+                    .get("input")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            }),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "unsupported model tool call type {other}"
+            ))),
+            None => Err(serde::de::Error::custom("missing model tool call type")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ModelToolOutput {
+    Function {
+        call_id: String,
+        output: FunctionCallOutputPayload,
+    },
+    Custom {
+        call_id: String,
+        name: Option<String>,
+        output: FunctionCallOutputPayload,
+    },
+}
+
+impl Serialize for ModelToolOutput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let value = match self {
+            Self::Function { call_id, output } => serde_json::json!({
+                "type": "function_call_output",
+                "call_id": call_id,
+                "output": output,
+            }),
+            Self::Custom {
+                call_id,
+                name,
+                output,
+            } => {
+                let mut value = serde_json::json!({
+                    "type": "custom_tool_call_output",
+                    "call_id": call_id,
+                    "output": output,
+                });
+                if let Some(name) = name {
+                    value["name"] = serde_json::json!(name);
+                }
+                value
+            }
+        };
+        value.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ModelToolOutput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = Value::deserialize(deserializer)?;
+        let output = value
+            .get("output")
+            .cloned()
+            .ok_or_else(|| serde::de::Error::custom("missing tool output payload"))
+            .and_then(|value| serde_json::from_value(value).map_err(serde::de::Error::custom))?;
+        match value.get("type").and_then(Value::as_str) {
+            Some("function_call_output") => Ok(Self::Function {
+                call_id: value
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing function output call_id"))?
+                    .to_string(),
+                output,
+            }),
+            Some("custom_tool_call_output") => Ok(Self::Custom {
+                call_id: value
+                    .get("call_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| serde::de::Error::custom("missing custom output call_id"))?
+                    .to_string(),
+                name: value
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                output,
+            }),
+            Some(other) => Err(serde::de::Error::custom(format!(
+                "unsupported model tool output type {other}"
+            ))),
+            None => Err(serde::de::Error::custom("missing model tool output type")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum ModelContextItem {
+    Message(Message),
+    ToolCall(ModelToolCall),
+    ToolOutput(ModelToolOutput),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelChatRequest {
+    pub context: Vec<ModelContextItem>,
+    pub tool_specs: Vec<ModelToolSpec>,
+    pub model: Option<String>,
+    pub system: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_blocks: Option<Vec<SystemBlock>>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub system_cache: bool,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<ToolChoice>,
+    pub provider_options: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<McpServerConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mcp_tool_configs: Option<Vec<McpToolConfig>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_sequences: Option<Vec<String>>,
+}
+
+impl ModelChatRequest {
+    pub fn builder() -> ModelChatRequestBuilder {
+        ModelChatRequestBuilder::default()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ModelChatRequestBuilder {
+    context: Vec<ModelContextItem>,
+    tool_specs: Vec<ModelToolSpec>,
+    model: Option<String>,
+    system: Option<String>,
+    system_blocks: Option<Vec<SystemBlock>>,
+    system_cache: bool,
+    temperature: Option<f32>,
+    max_tokens: Option<u32>,
+    tool_choice: Option<ToolChoice>,
+    provider_options: Option<Value>,
+    mcp_servers: Option<Vec<McpServerConfig>>,
+    mcp_tool_configs: Option<Vec<McpToolConfig>>,
+    thinking: Option<ThinkingConfig>,
+    stop_sequences: Option<Vec<String>>,
+}
+
+impl ModelChatRequestBuilder {
+    pub fn context(mut self, context: Vec<ModelContextItem>) -> Self {
+        self.context = context;
+        self
+    }
+
+    pub fn context_item(mut self, item: ModelContextItem) -> Self {
+        self.context.push(item);
+        self
+    }
+
+    pub fn tool_specs(mut self, tool_specs: Vec<ModelToolSpec>) -> Self {
+        self.tool_specs = tool_specs;
+        self
+    }
+
+    pub fn tool_spec(mut self, tool_spec: ModelToolSpec) -> Self {
+        self.tool_specs.push(tool_spec);
+        self
+    }
+
+    pub fn model(mut self, model: impl Into<String>) -> Self {
+        self.model = Some(model.into());
+        self
+    }
+
+    pub fn system(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(system.into());
+        self
+    }
+
+    pub fn system_cached(mut self, system: impl Into<String>) -> Self {
+        self.system = Some(system.into());
+        self.system_cache = true;
+        self
+    }
+
+    pub fn system_block(mut self, block: SystemBlock) -> Self {
+        self.system_blocks.get_or_insert_with(Vec::new).push(block);
+        self
+    }
+
+    pub fn system_blocks(mut self, blocks: Vec<SystemBlock>) -> Self {
+        self.system_blocks = Some(blocks);
+        self
+    }
+
+    pub fn temperature(mut self, temperature: f32) -> Self {
+        self.temperature = Some(temperature);
+        self
+    }
+
+    pub fn max_tokens(mut self, max_tokens: u32) -> Self {
+        self.max_tokens = Some(max_tokens);
+        self
+    }
+
+    pub fn tool_choice(mut self, choice: ToolChoice) -> Self {
+        self.tool_choice = Some(choice);
+        self
+    }
+
+    pub fn provider_options(mut self, provider_options: Value) -> Self {
+        self.provider_options = Some(provider_options);
+        self
+    }
+
+    pub fn mcp_server(mut self, server: McpServerConfig) -> Self {
+        self.mcp_tool_configs
+            .get_or_insert_with(Vec::new)
+            .push(McpToolConfig::All {
+                mcp_server_name: server.name.clone(),
+            });
+        self.mcp_servers.get_or_insert_with(Vec::new).push(server);
+        self
+    }
+
+    pub fn mcp_servers(mut self, servers: Vec<McpServerConfig>) -> Self {
+        self.mcp_tool_configs = Some(
+            servers
+                .iter()
+                .map(|s| McpToolConfig::All {
+                    mcp_server_name: s.name.clone(),
+                })
+                .collect(),
+        );
+        self.mcp_servers = Some(servers);
+        self
+    }
+
+    pub fn mcp_tool_config(mut self, config: McpToolConfig) -> Self {
+        let name = match &config {
+            McpToolConfig::All { mcp_server_name }
+            | McpToolConfig::Allowed {
+                mcp_server_name, ..
+            }
+            | McpToolConfig::Denied {
+                mcp_server_name, ..
+            } => mcp_server_name.clone(),
+        };
+        let configs = self.mcp_tool_configs.get_or_insert_with(Vec::new);
+        if let Some(pos) = configs.iter().position(|c| match c {
+            McpToolConfig::All { mcp_server_name }
+            | McpToolConfig::Allowed {
+                mcp_server_name, ..
+            }
+            | McpToolConfig::Denied {
+                mcp_server_name, ..
+            } => *mcp_server_name == name,
+        }) {
+            configs[pos] = config;
+        } else {
+            configs.push(config);
+        }
+        self
+    }
+
+    pub fn mcp_tool_configs(mut self, configs: Vec<McpToolConfig>) -> Self {
+        self.mcp_tool_configs = Some(configs);
+        self
+    }
+
+    pub fn thinking(mut self, budget_tokens: u32) -> Self {
+        self.thinking = Some(ThinkingConfig { budget_tokens });
+        self
+    }
+
+    pub fn stop(mut self, sequence: impl Into<String>) -> Self {
+        self.stop_sequences
+            .get_or_insert_with(Vec::new)
+            .push(sequence.into());
+        self
+    }
+
+    pub fn stop_sequences(mut self, sequences: Vec<String>) -> Self {
+        self.stop_sequences = Some(sequences);
+        self
+    }
+
+    pub fn build(self) -> ModelChatRequest {
+        ModelChatRequest {
+            context: self.context,
+            tool_specs: self.tool_specs,
+            model: self.model,
+            system: self.system,
+            system_blocks: self.system_blocks,
+            system_cache: self.system_cache,
+            temperature: self.temperature,
+            max_tokens: self.max_tokens,
+            tool_choice: self.tool_choice,
+            provider_options: self.provider_options,
+            mcp_servers: self.mcp_servers,
+            mcp_tool_configs: self.mcp_tool_configs,
+            thinking: self.thinking,
+            stop_sequences: self.stop_sequences,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModelChatResponse {
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    pub tool_calls: Vec<ModelToolCall>,
+    pub model: String,
+    pub usage: Usage,
+    pub stop_reason: StopReason,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ModelStreamDelta {
+    Text { delta: String },
+    ThinkingDelta { delta: String },
+    ThinkingDone { thinking: String },
+    FunctionArguments { call_id: String, delta: String },
+    FreeformInput { call_id: String, delta: String },
+    ToolCallDone { call: ModelToolCall },
+    Usage { usage: Usage },
+    Done { stop_reason: StopReason },
+}
+
 /// Server-side MCP server transport type.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -941,6 +1519,7 @@ impl StreamEvent {
 pub struct ProviderCapabilities {
     pub supports_image: bool,
     pub supports_document: bool,
+    pub supports_freeform_tools: bool,
 }
 
 impl ProviderCapabilities {
@@ -948,6 +1527,7 @@ impl ProviderCapabilities {
         Self {
             supports_image: false,
             supports_document: false,
+            supports_freeform_tools: false,
         }
     }
 
@@ -955,6 +1535,23 @@ impl ProviderCapabilities {
         Self {
             supports_image: true,
             supports_document: false,
+            supports_freeform_tools: false,
+        }
+    }
+
+    pub fn with_freeform_tools() -> Self {
+        Self {
+            supports_image: false,
+            supports_document: false,
+            supports_freeform_tools: true,
+        }
+    }
+
+    pub fn with_image_and_freeform_tools() -> Self {
+        Self {
+            supports_image: true,
+            supports_document: false,
+            supports_freeform_tools: true,
         }
     }
 
@@ -962,6 +1559,7 @@ impl ProviderCapabilities {
         Self {
             supports_image: true,
             supports_document: true,
+            supports_freeform_tools: false,
         }
     }
 }
@@ -1229,6 +1827,7 @@ mod capabilities_tests {
         let caps = ProviderCapabilities::text_only();
         assert!(!caps.supports_image);
         assert!(!caps.supports_document);
+        assert!(!caps.supports_freeform_tools);
     }
 
     #[test]
@@ -1236,6 +1835,15 @@ mod capabilities_tests {
         let caps = ProviderCapabilities::with_image();
         assert!(caps.supports_image);
         assert!(!caps.supports_document);
+        assert!(!caps.supports_freeform_tools);
+    }
+
+    #[test]
+    fn with_freeform_supports_freeform_only() {
+        let caps = ProviderCapabilities::with_freeform_tools();
+        assert!(!caps.supports_image);
+        assert!(!caps.supports_document);
+        assert!(caps.supports_freeform_tools);
     }
 
     #[test]
@@ -1243,6 +1851,7 @@ mod capabilities_tests {
         let caps = ProviderCapabilities::full();
         assert!(caps.supports_image);
         assert!(caps.supports_document);
+        assert!(!caps.supports_freeform_tools);
     }
 }
 

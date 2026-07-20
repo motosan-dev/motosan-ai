@@ -4,7 +4,7 @@
 
 ```toml
 [dependencies]
-motosan-ai = { version = "0.25.0", features = ["anthropic"] }
+motosan-ai = { version = "0.26.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex | claude-code | codex-cli | gemini-cli
 ```
@@ -17,8 +17,12 @@ use motosan_ai::{
     Client, ClientBuilder, Provider,
     Message, Role, Tool, ToolCall,
     ChatRequest, ChatRequestBuilder, ChatResponse,
+    FreeformTool, FreeformToolFormat, ModelToolSpec,
+    ModelToolCall, ModelToolOutput, ModelContextItem,
+    ModelChatRequest, ModelChatRequestBuilder, ModelChatResponse,
+    ModelStreamDelta,
     Usage, StopReason,
-    StreamEvent, StreamEventType, BoxStream,
+    StreamEvent, StreamEventType, BoxStream, BoxModelStream,
     RetryPolicy, MotosanError,
 };
 ```
@@ -36,7 +40,7 @@ let client = Client::builder()
     .build()?;  // -> Result<Client, MotosanError>
 ```
 
-Provider variants: `Provider::Anthropic` | `Provider::OpenAI` | `Provider::Minimax` | `Provider::Ollama`
+Provider variants: `Provider::Anthropic` | `Provider::OpenAI` | `Provider::Minimax` | `Provider::Ollama` | `Provider::Gemini` | `Provider::GeminiCodeAssist` | `Provider::OpenAiChatGpt` | `Provider::ClaudeCode` | `Provider::CodexCli` | `Provider::GeminiCli`
 
 Anthropic Opus 4.8/4.7/4.6 use adaptive thinking when `.thinking(...)` is set (`thinking.type = "adaptive"`, summarized display, `output_config.effort = "high"`), matching pi. Other thinking-capable Claude models use the budget-token shape.
 
@@ -48,6 +52,7 @@ Anthropic Opus 4.8/4.7/4.6 use adaptive thinking when `.thinking(...)` is set (`
 .openai_auth_x_api_key()                  // X-Api-Key header
 .openai_auth_custom_header("X-Auth-Token") // custom header name
 .openai_responses_fallback(true)           // fallback to /v1/responses on 404
+.openai_responses_api(true)                // route native ModelChatRequest through /v1/responses
 
 // MiniMax
 .minimax_base_url("https://api.minimaxi.com/anthropic")  // optional CN endpoint override
@@ -159,13 +164,67 @@ let request = ChatRequest::builder()
 let resp = client.stream_collect_with(request).await?;
 ```
 
+## Native Model API (Rust v0.26.0+)
+
+Use this parallel API for OpenAI Responses-style ordered Function and
+Freeform/custom tool transport. The legacy `ChatRequest` / `Tool` / `ToolCall`
+API remains function-tool-only.
+
+```rust
+use motosan_ai::{
+    Client, FreeformTool, FreeformToolFormat, Message, ModelChatRequest,
+    ModelContextItem, ModelToolSpec, Provider,
+};
+
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key(std::env::var("OPENAI_API_KEY")?)
+    .openai_responses_api(true)
+    .build()?;
+
+let request = ModelChatRequest::builder()
+    .context_item(ModelContextItem::Message(Message::user("Write JavaScript.")))
+    .tool_spec(ModelToolSpec::Freeform(FreeformTool {
+        name: "javascript".to_string(),
+        description: "Execute raw JavaScript source.".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "javascript".to_string(),
+            definition: "program ::= .*".to_string(),
+        },
+    }))
+    .build();
+
+let resp = client.model_chat_with(request).await?;
+```
+
+Core methods:
+
+```rust
+client.model_chat_with(request).await?          // -> ModelChatResponse
+client.model_stream_with(request).await?        // -> BoxModelStream
+client.model_stream_collect_with(request).await? // -> ModelChatResponse
+```
+
+Native context items preserve subsequent-request history order:
+`ModelContextItem::Message`, `ModelContextItem::ToolCall`, and
+`ModelContextItem::ToolOutput`. Function calls use `arguments: String`.
+Freeform calls use `input: String`; this raw input must remain byte-for-byte
+intact and must never be parsed as JSON or lowered into function arguments.
+
+Supported providers: OpenAI with `.openai_responses_api(true)` and ChatGPT
+Codex by default. Unsupported providers return `MotosanError::UnsupportedFeature`
+before network I/O.
+
 ## BoxStream Type
 
 ```rust
-pub type BoxStream = Pin<Box<dyn Stream<Item = StreamEvent> + Send>>;
+pub type BoxStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, MotosanError>> + Send>>;
+pub type BoxModelStream = Pin<Box<dyn Stream<Item = Result<ModelStreamDelta, MotosanError>> + Send>>;
 ```
 
-**Important**: Items are `StreamEvent` directly — NOT wrapped in `Result`. Consume with `futures_util::StreamExt::next()`.
+**Important**: Stream items are fallible. Consume with
+`while let Some(item) = stream.next().await { let event = item?; ... }`.
 
 ## StreamEvent
 

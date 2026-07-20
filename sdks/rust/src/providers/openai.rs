@@ -5,10 +5,10 @@ use crate::providers::{
     parse_retry_after, send_with_retry, ChatResponseBuilder, ProviderImpl,
 };
 use crate::retry::RetryPolicy;
-use crate::stream::BoxStream;
+use crate::stream::{BoxModelStream, BoxStream};
 use crate::types::{
-    ChatRequest, ChatResponse, ContentBlock, ImageSource, Role, StopReason, StreamEvent, ToolCall,
-    ToolChoice,
+    ChatRequest, ChatResponse, ContentBlock, ImageSource, ModelChatRequest, ModelChatResponse,
+    ProviderCapabilities, Role, StopReason, StreamEvent, ToolCall, ToolChoice,
 };
 
 use async_trait::async_trait;
@@ -47,6 +47,7 @@ pub struct OpenAIProvider {
     responses_url: String,
     auth_style: OpenAIAuthStyle,
     responses_fallback: bool,
+    responses_api: bool,
     retry_policy: RetryPolicy,
     total_timeout: Option<Duration>,
 }
@@ -67,6 +68,7 @@ impl OpenAIProvider {
             responses_url: DEFAULT_OPENAI_RESPONSES_URL.to_string(),
             auth_style: OpenAIAuthStyle::Bearer,
             responses_fallback: false,
+            responses_api: false,
             retry_policy: RetryPolicy::default(),
             total_timeout: None,
         }
@@ -79,6 +81,11 @@ impl OpenAIProvider {
 
     pub fn with_responses_fallback(mut self, enabled: bool) -> Self {
         self.responses_fallback = enabled;
+        self
+    }
+
+    pub fn with_responses_api(mut self, enabled: bool) -> Self {
+        self.responses_api = enabled;
         self
     }
 
@@ -507,8 +514,12 @@ impl OpenAIRequestBuilder {
 
 #[async_trait]
 impl ProviderImpl for OpenAIProvider {
-    fn capabilities(&self) -> crate::types::ProviderCapabilities {
-        crate::types::ProviderCapabilities::with_image()
+    fn capabilities(&self) -> ProviderCapabilities {
+        if self.responses_api {
+            ProviderCapabilities::with_image_and_freeform_tools()
+        } else {
+            ProviderCapabilities::with_image()
+        }
     }
 
     async fn chat(&self, req: ChatRequest) -> Result<ChatResponse, MotosanError> {
@@ -657,6 +668,87 @@ impl ProviderImpl for OpenAIProvider {
         };
 
         Ok(Box::pin(adapter))
+    }
+
+    async fn model_chat(&self, req: ModelChatRequest) -> Result<ModelChatResponse, MotosanError> {
+        self.validate_model_request(&req)?;
+        if !self.responses_api {
+            return Err(MotosanError::UnsupportedFeature(
+                "OpenAI Chat Completions does not support native model requests; enable OpenAI Responses API".into(),
+            ));
+        }
+
+        let body =
+            crate::providers::responses::build_model_request_body(&req, &self.model, false, None);
+        let response = send_with_retry(&self.retry_policy, || {
+            apply_total_timeout(
+                self.apply_auth(self.http.post(&self.responses_url).json(&body)),
+                self.total_timeout,
+            )
+        })
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
+            let error_payload: Value = response.json().await.unwrap_or_else(|_| json!({}));
+            let message = extract_error_message(&error_payload, "openai responses request failed");
+            return Err(map_http_error(
+                status.as_u16(),
+                message,
+                retry_after,
+                request_id,
+            ));
+        }
+
+        let payload: Value =
+            response
+                .json()
+                .await
+                .map_err(|error| MotosanError::ProviderError {
+                    message: error.to_string(),
+                    status_code: None,
+                    retry_after: None,
+                    request_id: None,
+                })?;
+
+        Ok(crate::providers::responses::model_chat_response_from_output(&payload, &self.model))
+    }
+
+    async fn model_stream(&self, req: ModelChatRequest) -> Result<BoxModelStream, MotosanError> {
+        self.validate_model_request(&req)?;
+        if !self.responses_api {
+            return Err(MotosanError::UnsupportedFeature(
+                "OpenAI Chat Completions does not support native model streams; enable OpenAI Responses API".into(),
+            ));
+        }
+
+        let body =
+            crate::providers::responses::build_model_request_body(&req, &self.model, true, None);
+        let response = send_with_retry(&self.retry_policy, || {
+            self.apply_auth(self.http.post(&self.responses_url).json(&body))
+        })
+        .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let retry_after = parse_retry_after(response.headers());
+            let request_id = extract_request_id(response.headers());
+            let error_payload: Value = response.json().await.unwrap_or_else(|_| json!({}));
+            let message =
+                extract_error_message(&error_payload, "openai responses stream request failed");
+            return Err(map_http_error(
+                status.as_u16(),
+                message,
+                retry_after,
+                request_id,
+            ));
+        }
+
+        Ok(crate::providers::responses::model_stream_adapter(
+            response.bytes_stream().eventsource(),
+        ))
     }
 }
 
@@ -902,11 +994,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn capabilities_support_image_only() {
+    fn freeform_capability_openai_responses_only() {
         let p = OpenAIProvider::new("key", None);
         let caps = p.capabilities();
         assert!(caps.supports_image);
         assert!(!caps.supports_document);
+        assert!(!caps.supports_freeform_tools);
+
+        let p = OpenAIProvider::new("key", None).with_responses_api(true);
+        let caps = p.capabilities();
+        assert!(caps.supports_image);
+        assert!(!caps.supports_document);
+        assert!(caps.supports_freeform_tools);
     }
 
     #[tokio::test]

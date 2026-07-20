@@ -13,7 +13,11 @@ use mockito::Matcher;
 use motosan_ai::auth::{async_trait, TokenSource};
 use motosan_ai::providers::chatgpt_codex::ChatGptCodexProvider;
 use motosan_ai::providers::ProviderImpl;
-use motosan_ai::{ChatRequest, Message, MotosanError, RetryPolicy, StopReason, StreamEventType};
+use motosan_ai::{
+    collect_model_stream, ChatRequest, FreeformTool, FreeformToolFormat, FunctionCallOutputPayload,
+    Message, ModelChatRequest, ModelContextItem, ModelToolCall, ModelToolOutput, ModelToolSpec,
+    MotosanError, RetryPolicy, StopReason, StreamEventType,
+};
 use std::sync::Arc;
 use tokio_stream::StreamExt;
 
@@ -31,6 +35,173 @@ fn no_retry() -> RetryPolicy {
         .max_retries(0)
         .base_delay_ms(0)
         .max_delay_ms(0)
+}
+
+fn freeform_exec_tool() -> ModelToolSpec {
+    ModelToolSpec::Freeform(FreeformTool {
+        name: "exec".to_string(),
+        description: "Run JavaScript".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "lark".to_string(),
+            definition: "start: source".to_string(),
+        },
+    })
+}
+
+fn native_custom_request() -> ModelChatRequest {
+    ModelChatRequest::builder()
+        .context_item(ModelContextItem::Message(Message::user("run js")))
+        .tool_spec(freeform_exec_tool())
+        .build()
+}
+
+#[tokio::test]
+async fn custom_tool_stream_decodes_custom_delta_and_done() {
+    let mut server = mockito::Server::new_async().await;
+    let sse = concat!(
+        "data: {\"type\":\"response.custom_tool_call_input.delta\",\"call_id\":\"call_js\",\"delta\":\"console.\"}\n\n",
+        "data: {\"type\":\"response.custom_tool_call_input.delta\",\"call_id\":\"call_js\",\"delta\":\"log(1);\\n\"}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"custom_tool_call\",\"call_id\":\"call_js\",\"name\":\"exec\",\"input\":\"console.log(1);\\n\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":3}}}\n\n"
+    );
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let stream = provider
+        .model_stream(native_custom_request())
+        .await
+        .expect("native stream");
+    let response = collect_model_stream(stream)
+        .await
+        .expect("collect native stream");
+
+    assert_eq!(
+        response.tool_calls,
+        vec![ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: "console.log(1);\n".to_string(),
+        }]
+    );
+    assert_eq!(response.stop_reason, StopReason::ToolUse);
+    assert_eq!(response.usage.output_tokens, 3);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn custom_tool_chat_collects_native_stream() {
+    let mut server = mockito::Server::new_async().await;
+    let sse = concat!(
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"custom_tool_call\",\"call_id\":\"call_js\",\"name\":\"exec\",\"input\":\"text('captured');\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":5}}}\n\n"
+    );
+    server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let response = provider
+        .model_chat(native_custom_request())
+        .await
+        .expect("native chat");
+
+    assert_eq!(
+        response.tool_calls,
+        vec![ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: "text('captured');".to_string(),
+        }]
+    );
+    assert_eq!(response.model, "gpt-5.5");
+}
+
+#[tokio::test]
+async fn native_stream_maps_response_incomplete_to_max_tokens_done() {
+    let mut server = mockito::Server::new_async().await;
+    let sse = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
+        "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\",\"usage\":{\"input_tokens\":6,\"output_tokens\":7},\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n"
+    );
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let response = provider
+        .model_chat(
+            ModelChatRequest::builder()
+                .context_item(ModelContextItem::Message(Message::user("short")))
+                .build(),
+        )
+        .await
+        .expect("native chat");
+
+    assert_eq!(response.content, "partial");
+    assert_eq!(response.stop_reason, StopReason::MaxTokens);
+    assert_eq!(response.usage.output_tokens, 7);
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn custom_tool_request_sends_custom_tool_and_history_byte_exact() {
+    let mut server = mockito::Server::new_async().await;
+    let raw = "{\"this\":\"looks like json\"}\nconsole.log('but is JS');";
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .match_body(Matcher::AllOf(vec![
+            Matcher::Regex(r#""type"\s*:\s*"custom""#.to_string()),
+            Matcher::Regex(r#""type"\s*:\s*"custom_tool_call""#.to_string()),
+            Matcher::Regex(r#""type"\s*:\s*"custom_tool_call_output""#.to_string()),
+            Matcher::Regex(r#""input"\s*:\s*"\{\\"this\\":\\"looks like json\\"\}\\nconsole\.log\('but is JS'\);"#.to_string()),
+        ]))
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(
+            "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+        )
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let request = ModelChatRequest::builder()
+        .context_item(ModelContextItem::Message(Message::user("run js")))
+        .context_item(ModelContextItem::ToolCall(ModelToolCall::Freeform {
+            id: "call_js".to_string(),
+            name: "exec".to_string(),
+            input: raw.to_string(),
+        }))
+        .context_item(ModelContextItem::ToolOutput(ModelToolOutput::Custom {
+            call_id: "call_js".to_string(),
+            name: Some("exec".to_string()),
+            output: FunctionCallOutputPayload::Text("done".to_string()),
+        }))
+        .tool_spec(freeform_exec_tool())
+        .build();
+
+    let response = provider.model_chat(request).await.expect("native chat");
+
+    assert_eq!(response.stop_reason, StopReason::EndTurn);
+    mock.assert_async().await;
 }
 
 #[tokio::test]

@@ -26,7 +26,7 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.25.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.26.0 |
 | Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.18.0 |
 | TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.15.0 |
 
@@ -35,7 +35,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.25.0", features = ["anthropic"] }
+motosan-ai = { version = "0.26.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex | claude-code | codex-cli | gemini-cli
 ```
@@ -87,6 +87,53 @@ Rust `Tool` now composes `motosan_agent_primitives::ToolSchema`, re-exported as
 `agent-tool` feature and `ToolDef` compatibility conversions were removed;
 use `ChatRequest::builder().tool_schemas(&schemas)` when bridging from agent
 framework tool definitions.
+
+### Native Freeform/custom tools (Rust)
+
+Rust v0.26.0 adds a native model API for ordered Function and
+Freeform/custom tools without changing the legacy `ChatRequest` API. Use it
+when a provider must receive raw Freeform input such as JavaScript, grammar, or
+other non-JSON text:
+
+```rust
+use motosan_ai::{
+    Client, FreeformTool, FreeformToolFormat, Message, ModelChatRequest,
+    ModelContextItem, ModelToolSpec, Provider,
+};
+
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key(std::env::var("OPENAI_API_KEY")?)
+    .openai_responses_api(true)
+    .build()?;
+
+let request = ModelChatRequest::builder()
+    .context_item(ModelContextItem::Message(Message::user(
+        "Write and call a JavaScript snippet.",
+    )))
+    .tool_spec(ModelToolSpec::Freeform(FreeformTool {
+        name: "javascript".to_string(),
+        description: "Execute raw JavaScript source.".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "javascript".to_string(),
+            definition: "program ::= .*".to_string(),
+        },
+    }))
+    .build();
+
+let response = client.model_chat_with(request).await?;
+println!("{:?}", response.tool_calls);
+# Ok(())
+# }
+```
+
+OpenAI supports this path only when `openai_responses_api(true)` is enabled;
+ChatGPT Codex supports it through its native Responses transport. Providers
+that do not support native Freeform tools return `UnsupportedFeature` before
+network I/O. Freeform input is preserved byte-for-byte and is never converted
+into JSON function arguments.
 
 ## Backends (Rust)
 

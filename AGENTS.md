@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.25.0 · Python v0.18.0 (PyPI) · TypeScript v0.15.0 (npm)
+Rust v0.26.0 · Python v0.18.0 (PyPI) · TypeScript v0.15.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
@@ -15,6 +15,8 @@ Rust 0.23.0 / Python 0.16.0 / TypeScript 0.13.0 are the M2 retry releases: error
 Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 are the M3 stream-contract + timeout releases: a stream that ends without the provider's terminal event raises a typed error (Rust `MotosanError::IncompleteStream` — **breaking** enum addition; Python `IncompleteStreamError(StreamError)`; TypeScript `IncompleteStreamError extends StreamError`), retiring the v0.10.1 fabricated-terminal-`done` invariant for the neither-signal case (OpenAI-wire streams complete on `[DONE]` or a `finish_reason` chunk — either suffices; only EOF with neither errors); one timeout model (connect 10 s / read-idle 120 s / total opt-in) lands on all three builders; Rust builds the provider once with a shared `reqwest::Client`; TypeScript gains per-request `AbortSignal` + `CancelledError` (never retried) and a `readTimeoutStream` that actually throws; Python gains `Client.aclose()` / async context manager.
 
 Rust 0.25.0 / Python 0.18.0 / TypeScript 0.15.0 are the M4 spec-and-parity releases: CLI backends (Claude Code / Codex CLI / Gemini CLI) always finish a completed turn with `stop_reason = end_turn` — never `tool_use` — and blocking `chat()` delegates to `stream()` + collect, so `ChatResponse.tool_calls` records the tools the CLI already executed (**breaking**, Rust + Python); Python thinking events are typed `thinking_delta` / `thinking_done`, replacing the ad-hoc `"thinking"` string (**breaking**); `specs/types.md` pins the `StreamEventType` vocabulary (`done` is a bool field, not an event type); chatgpt-codex gains per-attempt token sources (Rust `motosan_ai::auth::TokenSource` + `ClientBuilder::chatgpt_codex_token_source`, Python `token_source=` callable, TypeScript `accessToken` as `() => Promise<string>`); Python adds `Provider.claude_code` / `Client.claude_code()`; Rust reorganizes features around private `_http`/`_cli` umbrellas with a new `ollama-native` alias (public feature set otherwise unchanged) and CI adds `cargo hack check --each-feature`.
+
+Rust 0.26.0 is the AI0 native Freeform/custom tool transport release. It preserves the legacy function-only `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and `StreamEvent` APIs, and adds a parallel ordered native model API (`ModelChatRequest`, `ModelContextItem`, `ModelToolSpec`, `FreeformTool`, `ModelToolCall`, `ModelToolOutput`, `ModelChatResponse`, `ModelStreamDelta`, `BoxModelStream`) for Function and Freeform tool definitions/calls/outputs, blocking responses, streaming deltas, and subsequent-request history. OpenAI Responses and ChatGPT Codex share one Responses codec. Raw Freeform input (for example JavaScript) must remain byte-for-byte intact and must never be lowered into JSON function arguments. Providers without native Freeform support must reject before network I/O with `MotosanError::UnsupportedFeature`.
 
 ## Current Rust Tool Schema Note
 
@@ -57,6 +59,10 @@ Anthropic and OpenAI use completely different wire formats. Mixing them up cause
 - Tool calls: `"tool_calls":[{"id":...,"type":"function","function":{"name":...,"arguments":"<JSON string>"}}]`
 - `arguments` is a **JSON string**, not an object
 - Tool result: `role:"tool", tool_call_id:..., content:...`
+- Native Responses Freeform/custom tools (Rust 0.26.0+): `type:"custom"`,
+  `custom_tool_call`, `custom_tool_call_output`, and raw `input` strings are
+  distinct from function `arguments`. Do not parse, reserialize, or JSON-lower
+  custom input.
 
 **MiniMax (Rust v0.14+):**
 - Routed through Anthropic-compatible `/anthropic/v1/messages`
@@ -77,10 +83,10 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 ## Adding a New Provider (Rust)
 
 1. Implement `ProviderImpl` in `sdks/rust/src/providers/<name>.rs`
-2. Override `capabilities()` if the provider supports image or document content:
+2. Override `capabilities()` if the provider supports image, document, or native Freeform/custom tool content:
    ```rust
    fn capabilities(&self) -> ProviderCapabilities {
-       ProviderCapabilities::with_image()  // or full() or text_only() (default)
+       ProviderCapabilities::with_image()  // or with_freeform_tools(), full(), text_only() (default)
    }
    ```
    — `text_only()` is the safe default; no override needed for text-only providers.

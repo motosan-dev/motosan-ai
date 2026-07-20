@@ -1,6 +1,6 @@
 [package]
 name = "motosan-ai"
-version = "0.25.0"
+version = "0.26.0"
 edition = "2021"
 rust-version = "1.82"
 license = "MIT"
@@ -114,6 +114,10 @@ required-features = ["anthropic"]
 [[test]]
 name = "collect_stream"
 required-features = ["anthropic"]
+
+[[test]]
+name = "native_collect_stream"
+required-features = ["chatgpt-codex"]
 
 [[test]]
 name = "mcp_servers"

@@ -192,9 +192,10 @@ let proxy = OpenAIProvider::new("api-key", None)
 ```
 
 - `with_chat_url(url)`: full URL POSTed for chat completions. Defaults to `DEFAULT_OPENAI_CHAT_URL`. A single trailing `/` is trimmed defensively; no other normalization.
-- `with_responses_url(url)`: full URL for the Responses API fallback. Defaults to `DEFAULT_OPENAI_RESPONSES_URL`. Only used when `with_responses_fallback(true)`.
+- `with_responses_url(url)`: full URL for the Responses API fallback and native model API. Defaults to `DEFAULT_OPENAI_RESPONSES_URL`. Used when `with_responses_fallback(true)` or `with_responses_api(true)`.
 - `with_auth_style(...)`: supports `Bearer`, `XApiKey`, or custom header.
 - `with_responses_fallback(true)`: when chat completions returns `404`, fall back to the Responses endpoint (OpenAI-specific; most compatible providers don't expose it).
+- `with_responses_api(true)`: route native `model_chat_with` / `model_stream_with` requests through `/v1/responses`. This is required for native Freeform/custom tools on OpenAI.
 
 The same options are available from `Client::builder()`:
 
@@ -207,8 +208,66 @@ let client = Client::builder()
     .openai_auth_x_api_key() // or .openai_auth_custom_header("X-Auth-Token")
     .openai_chat_url("https://api.groq.com/openai/v1/chat/completions") // optional
     .openai_responses_fallback(true)
+    .openai_responses_api(true)
     .build()?;
 ```
+
+## Native Freeform/custom Tools
+
+The legacy `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and
+`StreamEvent` APIs remain function-tool-only. Rust v0.26.0 adds a parallel
+native model API for ordered Function and Freeform/custom transport:
+
+- `ModelChatRequest` / `ModelContextItem` preserve mixed message, tool-call,
+  and tool-output history order for subsequent requests.
+- `ModelToolSpec::Function(Tool)` sends a normal JSON-schema function tool.
+- `ModelToolSpec::Freeform(FreeformTool)` sends an OpenAI Responses
+  `custom` tool with mandatory `format` metadata.
+- `ModelToolCall::Freeform { input, .. }` carries raw custom input exactly as
+  received; the SDK never parses it as JSON or rewrites it into function
+  arguments.
+- `ModelStreamDelta::FreeformInput` streams raw input deltas and
+  `ModelStreamDelta::ToolCallDone` carries the final authoritative call.
+
+```rust
+use motosan_ai::{
+    Client, FreeformTool, FreeformToolFormat, Message, ModelChatRequest,
+    ModelContextItem, ModelToolSpec, Provider,
+};
+
+# async fn demo() -> Result<(), Box<dyn std::error::Error>> {
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key(std::env::var("OPENAI_API_KEY")?)
+    .openai_responses_api(true)
+    .build()?;
+
+let request = ModelChatRequest::builder()
+    .context_item(ModelContextItem::Message(Message::user(
+        "Write a JavaScript snippet.",
+    )))
+    .tool_spec(ModelToolSpec::Freeform(FreeformTool {
+        name: "javascript".to_string(),
+        description: "Execute raw JavaScript source.".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "javascript".to_string(),
+            definition: "program ::= .*".to_string(),
+        },
+    }))
+    .build();
+
+let response = client.model_chat_with(request).await?;
+println!("{:?}", response.tool_calls);
+# Ok(())
+# }
+```
+
+Supported providers fail fast when the selected transport is unavailable:
+OpenAI requires `openai_responses_api(true)`; ChatGPT Codex supports the native
+API through its existing Responses endpoint. Other providers return
+`MotosanError::UnsupportedFeature` before network I/O for native Freeform
+requests.
 
 ## Retry Policy
 
@@ -335,7 +394,7 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
 ```toml
-motosan-ai = { version = "0.25.0", features = ["claude-code"] }
+motosan-ai = { version = "0.26.0", features = ["claude-code"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -445,7 +504,7 @@ Notes:
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
 ```toml
-motosan-ai = { version = "0.25.0", features = ["codex-cli"] }
+motosan-ai = { version = "0.26.0", features = ["codex-cli"] }
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -508,7 +567,7 @@ Notes:
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
 ```toml
-motosan-ai = { version = "0.25.0", features = ["gemini-cli"] }
+motosan-ai = { version = "0.26.0", features = ["gemini-cli"] }
 ```
 
 **Option A — via `Client::builder()`**:

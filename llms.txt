@@ -2,11 +2,12 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.18.0 · TypeScript 0.15.0 · Rust 0.25.0
+- Python 0.18.0 · TypeScript 0.15.0 · Rust 0.26.0
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - Python 0.14.0 / TypeScript 0.11.0: **chatgpt-codex** provider — native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python `Client.chatgpt_codex(...)`, TypeScript `Client.builder().chatgptCodex(...)`.
 - Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 (M3): **breaking** stream termination — EOF without the provider terminal event (OpenAI wire: `[DONE]` or a `finish_reason` chunk, either suffices) raises Rust `MotosanError::IncompleteStream` / Python `IncompleteStreamError(StreamError)` / TypeScript `IncompleteStreamError extends StreamError`; one timeout model (connect 10 s / read-idle 120 s / total opt-in) on all builders; Rust build-once shared `reqwest::Client`; TypeScript per-request `AbortSignal` + `CancelledError` (never retried); Python `Client.aclose()` / `async with`.
 - Rust 0.25.0 / Python 0.18.0 / TypeScript 0.15.0 (M4): **breaking** CLI chat/stream contract (Rust + Python) — a completed Claude Code / Codex CLI / Gemini CLI turn always reports `stop_reason = end_turn` (never `tool_use`) and `chat()` delegates to `stream()` + collect, so `tool_calls` records the tools the CLI already executed; **breaking** Python typed thinking events `thinking_delta` / `thinking_done` (replacing ad-hoc `"thinking"`); chatgpt-codex per-attempt token sources (Rust `TokenSource` / Python `token_source=` / TypeScript async `accessToken`); Python `Provider.claude_code` + `Client.claude_code()`; Rust `_http`/`_cli` feature umbrellas + `ollama-native` alias (public features otherwise unchanged).
+- Rust 0.26.0 (AI0): native Rust model API for ordered Function + Freeform/custom tools (`ModelChatRequest`, `ModelToolSpec`, `FreeformTool`, `ModelToolCall`, `ModelToolOutput`, `ModelStreamDelta`, `BoxModelStream`). Legacy `ChatRequest` / `Tool` / `ToolCall` APIs stay function-only. OpenAI Responses and ChatGPT Codex share one Responses codec; Freeform input stays raw byte-for-byte and is never lowered into JSON function arguments. Unsupported providers reject before HTTP with `UnsupportedFeature`.
 - GitHub: https://github.com/motosan-dev/motosan-ai
 - PyPI: https://pypi.org/project/motosan-ai/
 - crates.io: https://crates.io/crates/motosan-ai
@@ -23,7 +24,7 @@ pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```toml
 # Rust — pick features in Cargo.toml
 [dependencies]
-motosan-ai = { version = "0.25.0", features = ["anthropic"] }
+motosan-ai = { version = "0.26.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient/GeminiCliClient):
@@ -207,7 +208,7 @@ Provider variants: `Anthropic` | `OpenAI` | `Minimax` | `Ollama` | `Gemini` | `G
 
 `GeminiCodeAssist` (Rust v0.13.0 feature `gemini-code-assist`; Python v0.10.0 `GeminiCodeAssistProvider` / `Provider.gemini_code_assist`) — HTTP client for `cloudcode-pa.googleapis.com/v1internal`. OAuth Bearer token (`ya29.*` from `motosan-ai-oauth` in Rust or `motosan_ai.oauth` PKCE flow in Python). Requires GCP project ID. Default model `gemini-2.5-flash`. Billing is subscription-based (not per-token). `chat()` implemented internally as `stream()` + collect (no non-streaming endpoint). Python Anthropic Claude Pro/Max OAuth is available via `motosan_ai.oauth.claude_pro_max_config()` + `login()` (returns an `sk-ant-oat01-*` token).
 
-`ChatGptCodex` (Python v0.14.0 `ChatGptCodexProvider` / `Provider.openai_chatgpt` / `Client.chatgpt_codex(access_token, account_id, model)`) — HTTP client for the OpenAI **Responses API** at `chatgpt.com/backend-api/codex/responses`. Pre-obtained ChatGPT OAuth bearer token + `chatgpt-account-id` + codex CLI headers (`originator: codex_cli_rs`, `openai-beta: responses=experimental`). No `api_key`. Default model `gpt-5.5`. Text-only. `chat()` = `stream()` + collect (no non-streaming endpoint). Reasoning effort via `provider_options["reasoning_effort"]` or a provider-level default (`ChatGptCodexProvider.reasoning_effort(...)`). Mirrors the Rust `ChatGptCodexProvider`. TypeScript v0.11.0: `ChatGptCodexProvider` / `Provider` variant `'chatgpt_codex'` / `Client.builder().chatgptCodex(accessToken, accountId, model?, { reasoningEffort? })` — same wire/behavior; per-request `providerOptions.reasoning_effort` (string) overrides the provider default; mid-stream `error`/`response.failed` frames terminate the stream silently (TS convention).
+`ChatGptCodex` (Rust `Provider::OpenAiChatGpt`; Python v0.14.0 `ChatGptCodexProvider` / `Provider.openai_chatgpt` / `Client.chatgpt_codex(access_token, account_id, model)`) — HTTP client for the OpenAI **Responses API** at `chatgpt.com/backend-api/codex/responses`. Pre-obtained ChatGPT OAuth bearer token + `chatgpt-account-id` + codex CLI headers (`originator: codex_cli_rs`, `openai-beta: responses=experimental`). No `api_key`. Default model `gpt-5.5`. Text-only, plus Rust v0.26.0 native Freeform/custom tool transport through `model_chat_with` / `model_stream_with`. Legacy `chat()` = `stream()` + collect (no non-streaming endpoint). Reasoning effort via `provider_options["reasoning_effort"]` or a provider-level default (`ChatGptCodexProvider.reasoning_effort(...)`). TypeScript v0.11.0: `ChatGptCodexProvider` / `Provider` variant `'chatgpt_codex'` / `Client.builder().chatgptCodex(accessToken, accountId, model?, { reasoningEffort? })` — same wire/behavior; per-request `providerOptions.reasoning_effort` (string) overrides the provider default; mid-stream `error`/`response.failed` frames terminate the stream silently (TS convention).
 
 CLI backends (`ClaudeCode` / `CodexCli` / `GeminiCli`) go through the **same** `client.chat(...)` / `client.stream(...)` API. `api_key` is optional on the builder for these paths; configure provider-specific flags by passing a pre-built `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` via `.claude_code(...)` / `.codex_cli(...)` / `.gemini_cli(...)`. `ClaudeCode` and `CodexCli` landed in v0.11.0; `GeminiCli` followed in the same generation. See the CLI Backends section under Provider-Specific Notes for a full example.
 
@@ -236,6 +237,52 @@ let request = ChatRequest::builder()
 
 let resp = client.chat_with(request).await?;
 ```
+
+### native model API — Freeform/custom tools (Rust v0.26.0+)
+
+Use the native model API when a Responses provider must receive ordered
+Function + Freeform tool history or raw custom input such as JavaScript. Do not
+use legacy `ChatRequest.tools` for Freeform tools.
+
+```rust
+use motosan_ai::{
+    Client, FreeformTool, FreeformToolFormat, Message, ModelChatRequest,
+    ModelContextItem, ModelToolSpec, Provider,
+};
+
+let client = Client::builder()
+    .provider(Provider::OpenAI)
+    .api_key(std::env::var("OPENAI_API_KEY")?)
+    .openai_responses_api(true)
+    .build()?;
+
+let request = ModelChatRequest::builder()
+    .context_item(ModelContextItem::Message(Message::user("Write JavaScript.")))
+    .tool_spec(ModelToolSpec::Freeform(FreeformTool {
+        name: "javascript".to_string(),
+        description: "Execute raw JavaScript source.".to_string(),
+        format: FreeformToolFormat {
+            r#type: "grammar".to_string(),
+            syntax: "javascript".to_string(),
+            definition: "program ::= .*".to_string(),
+        },
+    }))
+    .build();
+
+let resp = client.model_chat_with(request).await?;
+```
+
+For subsequent requests, append prior `ModelToolCall` and `ModelToolOutput`
+items to `ModelChatRequest.context` in exact chronological order. A
+`ModelToolCall::Freeform { input, .. }` carries raw text and must remain
+byte-for-byte intact; never parse it as JSON or move it into function
+`arguments`. Streaming uses `BoxModelStream<Item = Result<ModelStreamDelta,
+MotosanError>>`; `FreeformInput` carries raw input deltas and `ToolCallDone`
+carries the authoritative completed call.
+
+OpenAI requires `.openai_responses_api(true)` for native requests. ChatGPT
+Codex supports native Freeform transport by default. Providers without native
+Freeform support return `UnsupportedFeature` before network I/O.
 
 ### stream() — streaming text
 
@@ -527,14 +574,18 @@ let tail = stripper.flush();  // call at stream end
 
 ### Provider Capabilities (Rust, v0.13.1+)
 
-Providers declare which content types they accept. Passing unsupported content returns `Err(MotosanError::UnsupportedFeature(...))` **before** any network call.
+Providers declare which content types and native transports they accept.
+Passing unsupported content returns `Err(MotosanError::UnsupportedFeature(...))`
+**before** any network call.
 
-| Provider | Image | Document |
-|----------|-------|----------|
-| Anthropic | ✓ | ✓ |
-| OpenAI | ✓ | ✗ |
-| Gemini / GeminiCodeAssist | ✓ | ✗ |
-| MiniMax / Ollama / ChatGptCodex / CLI backends | ✗ | ✗ |
+| Provider | Image | Document | Native Freeform |
+|----------|-------|----------|-----------------|
+| Anthropic | yes | yes | no |
+| OpenAI Chat Completions | yes | no | no |
+| OpenAI Responses | yes | no | yes |
+| Gemini / GeminiCodeAssist | yes | no | no |
+| ChatGptCodex | no | no | yes |
+| MiniMax / Ollama / CLI backends | no | no | no |
 
 ```rust
 use motosan_ai::ProviderCapabilities;
@@ -542,13 +593,14 @@ use motosan_ai::ProviderCapabilities;
 // Check programmatically
 let caps = provider.capabilities();
 if caps.supports_image { /* send image */ }
+if caps.supports_freeform_tools { /* send native Freeform tools */ }
 ```
 
 When implementing a custom `ProviderImpl`, override `capabilities()` to declare what the provider supports:
 
 ```rust
 fn capabilities(&self) -> ProviderCapabilities {
-    ProviderCapabilities::with_image()   // or full() / text_only()
+    ProviderCapabilities::with_image()   // or with_freeform_tools() / full() / text_only()
 }
 ```
 
@@ -654,6 +706,8 @@ client_builder.openai_chat_url("https://my-proxy.example.com/any/path")
 
 // Fallback to the Responses API when chat completions returns 404
 client_builder.openai_responses_fallback(true)
+// Route native model_chat_with/model_stream_with requests through Responses
+client_builder.openai_responses_api(true)
 // Override the Responses URL (only needed for non-OpenAI hosts that expose it)
 client_builder.openai_responses_url("https://api.openai.com/v1/responses")
 ```

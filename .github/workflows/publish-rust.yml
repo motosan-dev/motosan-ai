@@ -5,6 +5,10 @@ on:
     tags:
       - "rust-v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Rust crate version to publish; defaults to sdks/rust/Cargo.toml"
+        required: false
 
 jobs:
   publish:
@@ -14,16 +18,143 @@ jobs:
         working-directory: sdks/rust
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: sdks/rust
+      - name: Resolve release version
+        id: release
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version || '' }}
+        run: |
+          set -euo pipefail
+
+          cargo_version="$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          text = Path("Cargo.toml").read_text()
+          match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.M)
+          if not match:
+              raise SystemExit("Cargo.toml package version not found")
+          print(match.group(1))
+          PY
+          )"
+
+          version="${REQUESTED_VERSION:-$cargo_version}"
+          if [ "$version" != "$cargo_version" ]; then
+            echo "::error::Requested version $version does not match Cargo.toml version $cargo_version"
+            exit 1
+          fi
+
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            expected_tag="rust-v${version}"
+            if [ "${GITHUB_REF_NAME:-}" != "$expected_tag" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME:-<none>} does not match Cargo.toml version ${expected_tag}"
+              exit 1
+            fi
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: cargo generate-lockfile
       - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-features --all-targets -- -D warnings
-      - run: cargo test --all-features
+      - run: cargo clippy --locked --all-features --all-targets -- -D warnings
+      - run: cargo test --locked --all-features
+      - run: cargo test --locked --doc --all-features
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          crate_name="motosan-ai"
+          package_file="target/package/${crate_name}-${VERSION}.crate"
+
+          cargo package --locked
+          if [ ! -f "$package_file" ]; then
+            echo "::error::cargo package did not produce ${package_file}"
+            exit 1
+          fi
+
+          local_checksum="$(sha256sum "$package_file" | awk '{print $1}')"
+          echo "Local crate checksum: ${local_checksum}"
+
+          registry_checksum() {
+            python3 - "$crate_name" "$VERSION" <<'PY'
+          import json
+          import sys
+          import urllib.error
+          import urllib.request
+
+          crate, version = sys.argv[1:]
+          url = f"https://crates.io/api/v1/crates/{crate}/{version}"
+          request = urllib.request.Request(
+              url,
+              headers={"User-Agent": "motosan-ai publish-rust workflow"},
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=20) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code == 404:
+                  raise SystemExit(2)
+              raise
+          print(payload["version"]["checksum"])
+          PY
+          }
+
+          if existing_checksum="$(registry_checksum)"; then
+            echo "Registry crate checksum: ${existing_checksum}"
+            if [ "$existing_checksum" != "$local_checksum" ]; then
+              echo "::error::Published checksum mismatch for ${crate_name} ${VERSION}: registry=${existing_checksum} local=${local_checksum}"
+              exit 1
+            fi
+            echo "${crate_name} ${VERSION} is already published with the expected checksum; skipping publish."
+            exit 0
+          else
+            status=$?
+            if [ "$status" -ne 2 ]; then
+              echo "::error::Unable to query crates.io checksum for ${crate_name} ${VERSION}"
+              exit "$status"
+            fi
+          fi
+
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN secret is required to publish ${crate_name} ${VERSION}"
+            exit 1
+          fi
+
+          publish_log="$(mktemp)"
+          if cargo publish --locked --token "$CARGO_REGISTRY_TOKEN" 2>"$publish_log"; then
+            cat "$publish_log" >&2
+          else
+            publish_status=$?
+            cat "$publish_log" >&2
+            if grep -Eiq 'already (been )?uploaded|already exists|previously uploaded' "$publish_log"; then
+              echo "${crate_name} ${VERSION} appeared on crates.io during publish; verifying checksum."
+            else
+              exit "$publish_status"
+            fi
+          fi
+
+          for attempt in $(seq 1 30); do
+            if published_checksum="$(registry_checksum)"; then
+              echo "Registry crate checksum: ${published_checksum}"
+              if [ "$published_checksum" != "$local_checksum" ]; then
+                echo "::error::Published checksum mismatch for ${crate_name} ${VERSION}: registry=${published_checksum} local=${local_checksum}"
+                exit 1
+              fi
+              echo "Published ${crate_name} ${VERSION} with checksum ${published_checksum}"
+              exit 0
+            fi
+            echo "Waiting for crates.io checksum for ${crate_name} ${VERSION} (attempt ${attempt}/30)"
+            sleep 10
+          done
+
+          echo "::error::Published ${crate_name} ${VERSION}, but crates.io checksum did not become visible"
+          exit 1

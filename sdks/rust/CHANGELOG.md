@@ -4,6 +4,38 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-07-21
+
+### Added
+- Native model transport API for ordered Function and Freeform/custom tools:
+  `FreeformToolFormat`, `FreeformTool`, `ModelToolSpec`,
+  `FunctionCallOutputContentItem`, `FunctionCallOutputPayload`,
+  `ModelToolCall`, `ModelToolOutput`, `ModelContextItem`,
+  `ModelChatRequest`, `ModelChatRequestBuilder`, `ModelChatResponse`,
+  `ModelStreamDelta`, `BoxModelStream`, and `collect_model_stream`.
+- `Client::model_chat_with`, `Client::model_stream_with`, and
+  `Client::model_stream_collect_with` dispatch the native API while preserving
+  the legacy `chat`, `stream`, `chat_with`, `stream_with`, and
+  `stream_collect_with` function-tool APIs.
+- Shared OpenAI Responses codec for request encoding, blocking response
+  decoding, SSE streaming, function/custom calls, tool outputs, mixed
+  subsequent-request history, thinking, usage, and stop reasons.
+- `OpenAIProvider::with_responses_api(true)` and
+  `ClientBuilder::openai_responses_api(true)` opt OpenAI into native
+  `/v1/responses` requests. `ChatGptCodexProvider` supports the native model
+  API through its existing Responses transport.
+
+### Changed
+- `ProviderCapabilities` gains `supports_freeform_tools` plus
+  `with_freeform_tools()` and `with_image_and_freeform_tools()` constructors.
+  Unsupported providers reject native Freeform specs/history with
+  `MotosanError::UnsupportedFeature` before network I/O.
+- Freeform/custom tool input is preserved as raw string transport data. The
+  SDK never parses or reserializes it as JSON function arguments.
+- The Rust publish workflow packages with a generated lockfile and verifies
+  crates.io SHA-256 checksums before treating a publish as successful or
+  already complete.
+
 ## [0.25.0] - 2026-07-17
 
 ### Breaking

@@ -34,10 +34,13 @@ pub use models::{
 pub use motosan_agent_primitives::ToolSchema;
 pub use providers::Provider;
 pub use retry::{RetryCause, RetryEvent, RetryPolicy};
-pub use stream::collect_stream;
-pub use stream::{BoxStream, StreamEvent};
+pub use stream::{collect_model_stream, collect_stream};
+pub use stream::{BoxModelStream, BoxStream, StreamEvent};
 pub use types::{
-    ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, DocumentSource, ImageSource,
-    McpServerConfig, McpServerType, McpToolConfig, Message, ProviderCapabilities, Role, StopReason,
-    StreamEventType, SystemBlock, ThinkingConfig, Tool, ToolCall, ToolChoice, Usage,
+    ChatRequest, ChatRequestBuilder, ChatResponse, ContentBlock, DocumentSource, FreeformTool,
+    FreeformToolFormat, FunctionCallOutputContentItem, FunctionCallOutputPayload, ImageDetail,
+    ImageSource, McpServerConfig, McpServerType, McpToolConfig, Message, ModelChatRequest,
+    ModelChatRequestBuilder, ModelChatResponse, ModelContextItem, ModelStreamDelta, ModelToolCall,
+    ModelToolOutput, ModelToolSpec, ProviderCapabilities, Role, StopReason, StreamEventType,
+    SystemBlock, ThinkingConfig, Tool, ToolCall, ToolChoice, Usage,
 };
