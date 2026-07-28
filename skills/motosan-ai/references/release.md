@@ -129,6 +129,21 @@ registry verifies the workflow's GitHub identity:
 | PyPI      | `pypa/gh-action-pypi-publish` with no `password:`               |
 | npm       | `npm publish` with npm >= 11.5.1 (provenance attached by default) |
 
+## Publish Verification
+
+crates.io, PyPI, and npm publishes are all gated on what the registry actually
+serves, via `scripts/verify-published.py`: before publishing, a matching
+version already on the registry short-circuits the upload, and a *differing*
+one fails the run; after publishing, the workflow polls until the registry
+serves the artifact and compares digests. Re-running a half-finished release
+is therefore safe.
+
+The comparison is by construction rather than by reproducible build: PyPI
+receives the exact `dist/*` files that were hashed, and npm receives the exact
+tarball `npm pack` produced and reported an integrity for. (`npm pack` is *not*
+byte-reproducible across npm versions, so re-packing at verification time would
+compare two different tarballs.)
+
 Each registry must have a trusted publisher registered for the specific
 repository *and* workflow file, otherwise publishing fails with an auth error.
 

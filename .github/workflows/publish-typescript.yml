@@ -37,12 +37,49 @@ jobs:
       - run: npm run build
       - run: npm run test
       - name: Verify tag matches package.json version
+        id: release
         run: |
+          PKG=$(node -p "require('./package.json').version")
           if [ "${GITHUB_REF_TYPE:-}" != "tag" ]; then
             echo "::notice::Not a tag ref (workflow_dispatch) — skipping tag check; publishing package.json version as-is"
-            exit 0
+          else
+            TAG="${GITHUB_REF_NAME#ts-v}"
+            test "$TAG" = "$PKG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
           fi
-          TAG="${GITHUB_REF_NAME#ts-v}"
-          PKG=$(node -p "require('./package.json').version")
-          test "$TAG" = "$PKG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
-      - run: npm publish --access public
+          echo "version=$PKG" >> "$GITHUB_OUTPUT"
+      # Pack once, then publish *that* tarball, so the bytes npm serves are the
+      # bytes whose integrity we recorded. Letting `npm publish` re-pack would
+      # make the comparison a guess: packing is not byte-reproducible across
+      # npm versions (verified — a fresh pack of the ts-v0.15.0 tree does not
+      # reproduce the integrity npm 10 published for 0.15.0). Packing to a
+      # directory outside the package also keeps the tarball out of itself.
+      - name: Pack the tarball to publish
+        id: pack
+        run: |
+          set -euo pipefail
+          output=$(npm pack --json --pack-destination "$RUNNER_TEMP")
+          integrity=$(node -p "JSON.parse(process.argv[1])[0].integrity" "$output")
+          filename=$(node -p "JSON.parse(process.argv[1])[0].filename" "$output")
+          echo "integrity=$integrity" >> "$GITHUB_OUTPUT"
+          echo "tarball=$RUNNER_TEMP/$filename" >> "$GITHUB_OUTPUT"
+          echo "Packed $filename with integrity $integrity"
+      # Publishing is gated on what npm already serves, so a re-run of a
+      # partially-failed release is safe: it either finds its own tarball and
+      # skips, or finds nothing and uploads.
+      - name: Is this version already on npm?
+        id: precheck
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/verify-published.py" \
+            --registry npm --package @motosan-ai/sdk \
+            --version "${{ steps.release.outputs.version }}" \
+            --digest "integrity=${{ steps.pack.outputs.integrity }}" \
+            --mode precheck
+      - run: npm publish "${{ steps.pack.outputs.tarball }}" --access public
+        if: steps.precheck.outputs.published != 'true'
+      - name: Verify npm serves the tarball this run built
+        run: |
+          python3 "$GITHUB_WORKSPACE/scripts/verify-published.py" \
+            --registry npm --package @motosan-ai/sdk \
+            --version "${{ steps.release.outputs.version }}" \
+            --digest "integrity=${{ steps.pack.outputs.integrity }}" \
+            --mode verify
