@@ -109,6 +109,56 @@ describe('ChatGPT-Codex public surface (index re-exports)', () => {
   })
 })
 
+describe('native model API public surface', () => {
+  it('re-exports the native capability factories and validator', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.withFreeformTools).toBe('function')
+    expect(typeof mod.withImageAndFreeformTools).toBe('function')
+    expect(typeof mod.validateModelRequest).toBe('function')
+    expect(mod.withFreeformTools()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+    expect(mod.withImageAndFreeformTools().supportsImage).toBe(true)
+  })
+
+  it('re-exports collectModelStream from the root', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.collectModelStream).toBe('function')
+  })
+
+  it('accepts the native types from the root entrypoint', async () => {
+    const mod = await import('../src/index.js')
+    const request: import('../src/index.js').ModelChatRequest = {
+      context: [{ kind: 'message', message: { role: 'user', content: 'hi' } }],
+      toolSpecs: [
+        {
+          kind: 'freeform',
+          tool: {
+            name: 'exec',
+            description: 'Run JavaScript',
+            format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+          },
+        },
+      ],
+    }
+    expect(() => mod.validateModelRequest(request, mod.withFreeformTools())).not.toThrow()
+    expect(() => mod.validateModelRequest(request, mod.withImage())).toThrow(
+      'provider does not support native freeform tools',
+    )
+  })
+
+  it('exposes the native methods on Client and ClientBuilder', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.Client.prototype.modelChat).toBe('function')
+    expect(typeof mod.Client.prototype.modelStream).toBe('function')
+    expect(typeof mod.Client.prototype.modelStreamCollect).toBe('function')
+    expect(typeof mod.ClientBuilder.prototype.openaiResponsesApi).toBe('function')
+  })
+})
+
 describe('M6 Gemini done-criteria smoke (builder round-trip)', () => {
   afterEach(() => {
     vi.unstubAllGlobals()

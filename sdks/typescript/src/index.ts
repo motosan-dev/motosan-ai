@@ -31,8 +31,36 @@ export {
 } from './models.js'
 export { serializeGeminiRequest } from './serialize/gemini.js'
 export type { ProviderCapabilities, Provider, RequestOptions, ProviderRequestOptions } from './provider.js'
-export { textOnly, withImage, fullCaps, minimaxCaps, validateRequest } from './provider.js'
+export {
+  textOnly,
+  withImage,
+  fullCaps,
+  minimaxCaps,
+  withFreeformTools,
+  withImageAndFreeformTools,
+  validateRequest,
+  validateModelRequest,
+} from './provider.js'
 
 // M4: server-side MCP types (also covered by `export * from './types.js'`; listed
 // explicitly for discoverability). No internal http/serialize symbols are exported.
 export type { McpServerType, McpServerConfig, McpToolConfig } from './types.js'
+
+// Native model API (specs/types.md § Native Model API). Also covered by
+// `export * from './types.js'`; listed explicitly for discoverability.
+// `collectModelStream` / `BoxModelStream` ride `export * from './stream.js'`.
+// The Responses codec stays internal; src/serialize/responses.ts is a test seam.
+export type {
+  FreeformTool,
+  FreeformToolFormat,
+  FunctionCallOutputContentItem,
+  FunctionCallOutputPayload,
+  ImageDetail,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelContextItem,
+  ModelStreamDelta,
+  ModelToolCall,
+  ModelToolOutput,
+  ModelToolSpec,
+} from './types.js'
