@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest'
 import {
-  textOnly,
-  withImage,
   fullCaps,
   minimaxCaps,
+  textOnly,
   validateRequest,
+  withFreeformTools,
+  withImage,
+  withImageAndFreeformTools,
   type Provider,
   type ProviderCapabilities,
 } from '../src/provider.js'
@@ -12,27 +14,30 @@ import { UnsupportedFeatureError } from '../src/error.js'
 import type { ChatRequest } from '../src/types.js'
 
 describe('ProviderCapabilities factories', () => {
-  it('textOnly() returns {false, false, supportsMcp:false}', () => {
+  it('textOnly() returns all-false', () => {
     expect(textOnly()).toEqual({
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
   })
 
-  it('withImage() returns {true, false, supportsMcp:false}', () => {
+  it('withImage() adds images only', () => {
     expect(withImage()).toEqual({
       supportsImage: true,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
   })
 
-  it('fullCaps() returns {true, true, supportsMcp:true}', () => {
+  it('fullCaps() keeps supportsFreeformTools FALSE (mirrors Rust full())', () => {
     expect(fullCaps()).toEqual({
       supportsImage: true,
       supportsDocument: true,
       supportsMcp: true,
+      supportsFreeformTools: false,
     })
   })
 
@@ -41,6 +46,25 @@ describe('ProviderCapabilities factories', () => {
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: true,
+      supportsFreeformTools: false,
+    })
+  })
+
+  it('withFreeformTools() is text-only plus native freeform', () => {
+    expect(withFreeformTools()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+  })
+
+  it('withImageAndFreeformTools() adds images to native freeform', () => {
+    expect(withImageAndFreeformTools()).toEqual({
+      supportsImage: true,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
     })
   })
 })

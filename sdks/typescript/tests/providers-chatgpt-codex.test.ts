@@ -429,6 +429,7 @@ describe('ChatGptCodexProvider HTTP', () => {
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
   })
 

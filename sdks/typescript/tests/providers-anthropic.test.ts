@@ -219,6 +219,7 @@ describe('AnthropicProvider chat', () => {
       supportsImage: true,
       supportsDocument: true,
       supportsMcp: true,
+      supportsFreeformTools: false,
     })
   })
 })

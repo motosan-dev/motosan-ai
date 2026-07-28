@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
+import { StreamReadTimeoutError, UnsupportedFeatureError } from '../src/error.js'
+import {
+  dispatchModelChat,
+  dispatchModelStream,
+  readTimeoutModelStream,
+  textOnly,
+  validateModelRequest,
+  withFreeformTools,
+  withImage,
+  withImageAndFreeformTools,
+  type ProviderImpl,
+} from '../src/provider.js'
 import { collectModelStream } from '../src/stream.js'
-import type { ModelStreamDelta } from '../src/types.js'
+import type { ModelChatRequest, ModelStreamDelta } from '../src/types.js'
 
 async function* deltas(items: ModelStreamDelta[]): AsyncGenerator<ModelStreamDelta> {
   for (const item of items) yield item
@@ -110,5 +122,186 @@ describe('collectModelStream', () => {
       throw new Error('boom')
     }
     await expect(collectModelStream(failing())).rejects.toThrow('boom')
+  })
+})
+
+const FREEFORM_SPEC_REQUEST: ModelChatRequest = {
+  context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+  toolSpecs: [
+    {
+      kind: 'freeform',
+      tool: {
+        name: 'exec',
+        description: 'Run JavaScript',
+        format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+      },
+    },
+  ],
+}
+
+describe('freeform capability factories (D5)', () => {
+  it('withFreeformTools() is text-only plus freeform', () => {
+    expect(withFreeformTools()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+  })
+
+  it('withImageAndFreeformTools() adds images', () => {
+    expect(withImageAndFreeformTools()).toEqual({
+      supportsImage: true,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+  })
+
+  it('the pre-existing factories keep freeform false', () => {
+    expect(textOnly().supportsFreeformTools).toBe(false)
+    expect(withImage().supportsFreeformTools).toBe(false)
+  })
+})
+
+describe('validateModelRequest', () => {
+  it('rejects a freeform tool spec on a non-freeform provider', () => {
+    expect(() => validateModelRequest(FREEFORM_SPEC_REQUEST, withImage())).toThrow(
+      UnsupportedFeatureError,
+    )
+    expect(() => validateModelRequest(FREEFORM_SPEC_REQUEST, withImage())).toThrow(
+      'provider does not support native freeform tools',
+    )
+  })
+
+  it('rejects freeform history even without a freeform spec', () => {
+    const withCall: ModelChatRequest = {
+      context: [
+        { kind: 'toolCall', call: { kind: 'freeform', id: 'c', name: 'exec', input: 'x' } },
+      ],
+    }
+    const withOutput: ModelChatRequest = {
+      context: [{ kind: 'toolOutput', output: { kind: 'custom', callId: 'c', output: 'x' } }],
+    }
+    expect(() => validateModelRequest(withCall, withImage())).toThrow(UnsupportedFeatureError)
+    expect(() => validateModelRequest(withOutput, withImage())).toThrow(UnsupportedFeatureError)
+  })
+
+  it('accepts freeform on a freeform-capable provider', () => {
+    expect(() => validateModelRequest(FREEFORM_SPEC_REQUEST, withFreeformTools())).not.toThrow()
+  })
+
+  it('accepts function specs and function history everywhere', () => {
+    const req: ModelChatRequest = {
+      context: [
+        { kind: 'toolCall', call: { kind: 'function', id: 'c', name: 'f', arguments: '{}' } },
+        { kind: 'toolOutput', output: { kind: 'function', callId: 'c', output: 'ok' } },
+      ],
+      toolSpecs: [{ kind: 'function', tool: { name: 'f', description: 'F', inputSchema: {} } }],
+    }
+    expect(() => validateModelRequest(req, textOnly())).not.toThrow()
+  })
+
+  it('rejects image blocks in context on a text-only provider', () => {
+    const req: ModelChatRequest = {
+      context: [
+        {
+          kind: 'message',
+          message: {
+            role: 'user',
+            content: '',
+            contentBlocks: [
+              { type: 'image', source: { type: 'url', url: 'https://e.example/a.png' } },
+            ],
+          },
+        },
+      ],
+    }
+    expect(() => validateModelRequest(req, withFreeformTools())).toThrow(
+      'provider does not support image input',
+    )
+    expect(() => validateModelRequest(req, withImageAndFreeformTools())).not.toThrow()
+  })
+
+  it('rejects document blocks in context', () => {
+    const req: ModelChatRequest = {
+      context: [
+        {
+          kind: 'message',
+          message: {
+            role: 'user',
+            content: '',
+            contentBlocks: [
+              { type: 'document', source: { type: 'url', url: 'https://e.example/a.pdf' } },
+            ],
+          },
+        },
+      ],
+    }
+    expect(() => validateModelRequest(req, withImageAndFreeformTools())).toThrow(
+      'provider does not support document input',
+    )
+  })
+})
+
+describe('native dispatch', () => {
+  const bareProvider: ProviderImpl = {
+    capabilities: withFreeformTools,
+    chat: async () => {
+      throw new Error('unused')
+    },
+    stream: () => {
+      throw new Error('unused')
+    },
+  }
+
+  it('rejects modelChat on a provider that implements no native surface', async () => {
+    await expect(dispatchModelChat(bareProvider, { context: [] })).rejects.toThrow(
+      'provider does not support native model requests',
+    )
+  })
+
+  it('rejects modelStream on a provider that implements no native surface', () => {
+    expect(() => dispatchModelStream(bareProvider, { context: [] })).toThrow(
+      'provider does not support native model streams',
+    )
+  })
+
+  it('validates BEFORE consulting the native surface', async () => {
+    const imageOnly: ProviderImpl = { ...bareProvider, capabilities: withImage }
+    await expect(dispatchModelChat(imageOnly, FREEFORM_SPEC_REQUEST)).rejects.toThrow(
+      'provider does not support native freeform tools',
+    )
+  })
+})
+
+describe('readTimeoutModelStream', () => {
+  it('passes deltas through untouched', async () => {
+    const out: ModelStreamDelta[] = []
+    for await (const delta of readTimeoutModelStream(
+      deltas([{ type: 'text', delta: 'a' }, { type: 'done', stopReason: 'end_turn' }]),
+      5,
+    )) {
+      out.push(delta)
+    }
+    expect(out).toEqual([{ type: 'text', delta: 'a' }, { type: 'done', stopReason: 'end_turn' }])
+  })
+
+  it('throws StreamReadTimeoutError on an idle gap and fabricates no done', async () => {
+    async function* stalls(): AsyncGenerator<ModelStreamDelta> {
+      yield { type: 'text', delta: 'tick' }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      yield { type: 'done', stopReason: 'end_turn' }
+    }
+
+    const out: ModelStreamDelta[] = []
+    let caught: unknown
+    try {
+      for await (const delta of readTimeoutModelStream(stalls(), 0.05)) out.push(delta)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(StreamReadTimeoutError)
+    expect(out).toEqual([{ type: 'text', delta: 'tick' }])
   })
 })

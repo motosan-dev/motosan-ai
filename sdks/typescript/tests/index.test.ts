@@ -22,16 +22,19 @@ describe('index.ts public exports', () => {
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
     expect(mod.withImage()).toEqual({
       supportsImage: true,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
     expect(mod.fullCaps()).toEqual({
       supportsImage: true,
       supportsDocument: true,
       supportsMcp: true,
+      supportsFreeformTools: false,
     })
 
     expect(typeof mod.DEFAULT_ANTHROPIC_MODEL).toBe('string')
