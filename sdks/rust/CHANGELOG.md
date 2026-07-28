@@ -4,6 +4,8 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-07-28
+
 ### Changed
 - Native model streams (`model_stream_with`) now report EOF-truncation as
   `incomplete stream: <provider> ended without a terminal event`

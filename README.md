@@ -26,8 +26,8 @@ response = await client.chat([Message.user("Hello")])
 
 | Language | Package | Version |
 |----------|---------|---------|
-| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.26.0 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.18.0 |
+| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.27.0 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.19.0 |
 | TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.15.0 |
 
 ## Install
@@ -35,7 +35,7 @@ response = await client.chat([Message.user("Hello")])
 ```toml
 # Rust (Cargo.toml)
 [dependencies]
-motosan-ai = { version = "0.26.0", features = ["anthropic"] }
+motosan-ai = { version = "0.27.0", features = ["anthropic"] }
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex | claude-code | codex-cli | gemini-cli
 ```
