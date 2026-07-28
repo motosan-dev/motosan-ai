@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from motosan_ai.providers.responses import (
+    build_model_request_body,
     decode_function_call_output_payload,
     decode_output_text,
     decode_tool_call,
@@ -27,6 +28,7 @@ from motosan_ai.types import (
     FunctionCallOutputText,
     ImageDetail,
     Message,
+    ModelChatRequest,
     ModelContextMessage,
     ModelContextToolCall,
     ModelContextToolOutput,
@@ -37,6 +39,7 @@ from motosan_ai.types import (
     ModelToolSpecFreeform,
     ModelToolSpecFunction,
     StopReason,
+    SystemBlock,
     Tool,
     ToolCall,
     ToolChoice,
@@ -446,3 +449,141 @@ def test_model_chat_response_from_output_defaults_and_output_text_field():
     assert response.tool_calls == []
     assert response.stop_reason == StopReason.max_tokens
     assert model_chat_response_from_output({}, "fallback-model").stop_reason == StopReason.end_turn
+
+
+def test_build_body_minimum_shape_and_stream_flag():
+    request = ModelChatRequest.builder().message(Message.user("hi")).build()
+
+    body = build_model_request_body(request, "gpt-test", stream=False)
+    assert body["model"] == "gpt-test"
+    assert body["input"] == [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    ]
+    assert "stream" not in body
+    assert "tools" not in body
+    assert "instructions" not in body
+
+    streamed = build_model_request_body(request, "gpt-test", stream=True)
+    assert streamed["stream"] is True
+
+
+def test_build_body_prefers_request_model_over_default():
+    request = ModelChatRequest.builder().model("gpt-5.5-codex").build()
+    assert build_model_request_body(request, "gpt-test", stream=False)["model"] == "gpt-5.5-codex"
+
+
+def test_build_body_hoists_system_messages_out_of_input():
+    request = (
+        ModelChatRequest.builder()
+        .message(Message.system("  first  "))
+        .message(Message.user("run it"))
+        .message(Message.system("second"))
+        .build()
+    )
+    body = build_model_request_body(request, "gpt-test", stream=False)
+
+    assert body["instructions"] == "first\n\nsecond"
+    assert [item["type"] for item in body["input"]] == ["message"]
+    assert body["input"][0]["role"] == "user"
+
+
+def test_build_body_system_blocks_beat_system_string_and_prefix_hoisted():
+    from_blocks = (
+        ModelChatRequest.builder()
+        .system("ignored")
+        .system_block(SystemBlock.new("  block a  "))
+        .system_block(SystemBlock.new(""))
+        .system_block(SystemBlock.new("block b"))
+        .message(Message.system("from context"))
+        .build()
+    )
+    body = build_model_request_body(from_blocks, "gpt-test", stream=False)
+    assert body["instructions"] == "block a\n\nblock b\n\nfrom context"
+
+    from_string = ModelChatRequest.builder().system("  plain  ").build()
+    assert (
+        build_model_request_body(from_string, "gpt-test", stream=False)["instructions"] == "plain"
+    )
+
+
+def test_build_body_default_instructions_are_a_fallback_only():
+    empty = ModelChatRequest.builder().message(Message.user("hi")).build()
+    assert (
+        build_model_request_body(
+            empty, "gpt-test", stream=True, default_instructions="You are a helpful assistant."
+        )["instructions"]
+        == "You are a helpful assistant."
+    )
+    assert "instructions" not in build_model_request_body(empty, "gpt-test", stream=True)
+
+    with_system = ModelChatRequest.builder().system("be terse").build()
+    assert (
+        build_model_request_body(
+            with_system,
+            "gpt-test",
+            stream=True,
+            default_instructions="You are a helpful assistant.",
+        )["instructions"]
+        == "be terse"
+    )
+
+
+def test_build_body_scalar_fields_use_wire_key_names():
+    request = (
+        ModelChatRequest.builder()
+        .temperature(0.5)
+        .max_tokens(256)
+        .tool_choice(ToolChoice.required())
+        .stop("END")
+        .build()
+    )
+    body = build_model_request_body(request, "gpt-test", stream=False)
+
+    assert body["temperature"] == 0.5
+    # max_tokens -> max_output_tokens on the wire.
+    assert body["max_output_tokens"] == 256
+    assert "max_tokens" not in body
+    assert body["tool_choice"] == "required"
+    assert body["stop"] == ["END"]
+
+    forced = build_model_request_body(
+        ModelChatRequest.builder().tool_choice(ToolChoice.tool("run_js")).build(),
+        "gpt-test",
+        stream=False,
+    )
+    assert forced["tool_choice"] == {"type": "function", "name": "run_js"}
+
+    assert "stop" not in build_model_request_body(
+        ModelChatRequest.builder().stop_sequences([]).build(), "gpt-test", stream=False
+    )
+
+
+def test_build_body_encodes_tool_specs():
+    request = (
+        ModelChatRequest.builder()
+        .tool_spec(ModelToolSpecFreeform(tool=grammar_fixture()))
+        .tool_spec(ModelToolSpecFunction(tool=Tool(name="sum", description="Add", input_schema={})))
+        .build()
+    )
+    body = build_model_request_body(request, "gpt-test", stream=False)
+    assert body["tools"][0]["type"] == "custom"
+    assert body["tools"][0]["format"]["syntax"] == "lark"
+    assert body["tools"][1]["type"] == "function"
+    assert body["tools"][1]["name"] == "sum"
+
+
+def test_build_body_shallow_merges_provider_options_last():
+    request = (
+        ModelChatRequest.builder()
+        .model("gpt-5.5-codex")
+        .temperature(0.1)
+        .provider_options({"temperature": 0.9, "reasoning_effort": "high", "extra": True})
+        .build()
+    )
+    body = build_model_request_body(request, "gpt-test", stream=False)
+
+    # provider_options wins over everything the encoder produced.
+    assert body["temperature"] == 0.9
+    assert body["reasoning_effort"] == "high"
+    assert body["extra"] is True
+    assert body["model"] == "gpt-5.5-codex"

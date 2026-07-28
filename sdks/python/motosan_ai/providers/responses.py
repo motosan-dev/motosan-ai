@@ -28,6 +28,7 @@ from motosan_ai.types import (
     ImageSourceBase64,
     ImageSourceUrl,
     Message,
+    ModelChatRequest,
     ModelChatResponse,
     ModelContextItem,
     ModelContextMessage,
@@ -433,3 +434,71 @@ def model_chat_response_from_output(payload: Any, default_model: str) -> ModelCh
         ),
         session_id=None,
     )
+
+
+def build_model_request_body(
+    request: ModelChatRequest,
+    default_model: str,
+    *,
+    stream: bool,
+    default_instructions: str | None = None,
+) -> dict[str, Any]:
+    """Encode a ModelChatRequest into an OpenAI Responses request body.
+
+    Two rules here are load-bearing and easy to miss:
+
+    1. ``Role.system`` messages inside ``context`` are hoisted into
+       ``instructions`` AND removed from ``input``.
+    2. ``provider_options`` is shallow-merged LAST, so it can override
+       anything this encoder produced. Callers that must win over
+       ``provider_options`` (ChatGPT Codex does) have to apply their
+       overrides after calling this function.
+    """
+    model = request.model or default_model
+
+    instructions_parts: list[str] = []
+    if request.system_blocks is not None:
+        for block in request.system_blocks:
+            trimmed = block.text.strip()
+            if trimmed:
+                instructions_parts.append(trimmed)
+    elif request.system is not None:
+        trimmed = request.system.strip()
+        if trimmed:
+            instructions_parts.append(trimmed)
+
+    input_context: list[ModelContextItem] = []
+    for item in request.context:
+        if isinstance(item, ModelContextMessage) and item.message.role == Role.system:
+            trimmed = item.message.content.strip()
+            if trimmed:
+                instructions_parts.append(trimmed)
+            continue
+        input_context.append(item)
+
+    body: dict[str, Any] = {"model": model, "input": encode_input(input_context)}
+
+    if stream:
+        body["stream"] = True
+    if request.tool_specs:
+        body["tools"] = encode_tools(request.tool_specs)
+
+    instructions = "\n\n".join(instructions_parts) if instructions_parts else default_instructions
+    if instructions is not None:
+        body["instructions"] = instructions
+
+    if request.temperature is not None:
+        body["temperature"] = request.temperature
+    if request.max_tokens is not None:
+        # Wire key differs from the field name.
+        body["max_output_tokens"] = request.max_tokens
+    if request.tool_choice is not None:
+        body["tool_choice"] = encode_tool_choice(request.tool_choice)
+    if request.stop_sequences:
+        body["stop"] = list(request.stop_sequences)
+
+    # Shallow merge, LAST.
+    if request.provider_options:
+        body.update(request.provider_options)
+
+    return body
