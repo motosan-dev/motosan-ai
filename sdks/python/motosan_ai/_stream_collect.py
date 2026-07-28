@@ -6,7 +6,25 @@ import json
 from collections.abc import AsyncIterator
 from typing import Any
 
-from motosan_ai.types import ChatResponse, StopReason, StreamEvent, ToolCall, Usage
+from motosan_ai.types import (
+    ChatResponse,
+    ModelChatResponse,
+    ModelStreamDelta,
+    ModelStreamDone,
+    ModelStreamFreeformInput,
+    ModelStreamFunctionArguments,
+    ModelStreamText,
+    ModelStreamThinkingDelta,
+    ModelStreamThinkingDone,
+    ModelStreamToolCallDone,
+    ModelStreamUsage,
+    ModelToolCall,
+    ModelToolCallFreeform,
+    StopReason,
+    StreamEvent,
+    ToolCall,
+    Usage,
+)
 
 
 async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
@@ -105,4 +123,77 @@ async def collect_stream(events: AsyncIterator[StreamEvent]) -> ChatResponse:
         stop_reason=stop_reason,
         thinking=thinking,
         session_id=session_id,
+    )
+
+
+async def collect_model_stream(deltas: AsyncIterator[ModelStreamDelta]) -> ModelChatResponse:
+    """Collect a native model stream into one ModelChatResponse.
+
+    Unlike ``collect_stream``, this carries native function and freeform tool
+    calls without lowering freeform input into JSON arguments.
+
+    Three rules differ from the legacy collector and are contract, not taste:
+    ``ModelStreamToolCallDone`` is authoritative (accumulated deltas are
+    discarded, never merged); ``ModelStreamUsage`` REPLACES rather than
+    merging field-by-field; and ``model`` is left empty for the caller to
+    backfill. A mid-stream provider error raised by ``deltas`` propagates out
+    uncollected.
+    """
+    content = ""
+    thinking_delta_buf = ""
+    thinking_done_buf: str | None = None
+    function_arguments: dict[str, str] = {}
+    freeform_inputs: dict[str, str] = {}
+    tool_calls: list[ModelToolCall] = []
+    usage = Usage(0, 0)
+    explicit_stop_reason: StopReason | None = None
+
+    async for delta in deltas:
+        if isinstance(delta, ModelStreamText):
+            content += delta.delta
+        elif isinstance(delta, ModelStreamThinkingDelta):
+            thinking_delta_buf += delta.delta
+        elif isinstance(delta, ModelStreamThinkingDone):
+            # Carries the full text; wins over the accumulator. Clearing the
+            # delta buffer lets a second block start fresh.
+            thinking_done_buf = delta.thinking
+            thinking_delta_buf = ""
+        elif isinstance(delta, ModelStreamFunctionArguments):
+            function_arguments[delta.call_id] = (
+                function_arguments.get(delta.call_id, "") + delta.delta
+            )
+        elif isinstance(delta, ModelStreamFreeformInput):
+            freeform_inputs[delta.call_id] = freeform_inputs.get(delta.call_id, "") + delta.delta
+        elif isinstance(delta, ModelStreamToolCallDone):
+            # Authoritative: drop the bookkeeping, keep what the provider sent.
+            if isinstance(delta.call, ModelToolCallFreeform):
+                freeform_inputs.pop(delta.call.id, None)
+            else:
+                function_arguments.pop(delta.call.id, None)
+            tool_calls.append(delta.call)
+        elif isinstance(delta, ModelStreamUsage):
+            # Replaces, never merges.
+            usage = delta.usage
+        elif isinstance(delta, ModelStreamDone):
+            explicit_stop_reason = delta.stop_reason
+            break
+
+    if thinking_done_buf is not None:
+        thinking = thinking_done_buf or None
+    else:
+        thinking = thinking_delta_buf or None
+
+    if explicit_stop_reason is not None:
+        stop_reason = explicit_stop_reason
+    else:
+        stop_reason = StopReason.tool_use if tool_calls else StopReason.end_turn
+
+    return ModelChatResponse(
+        content=content,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        model="",
+        usage=usage,
+        stop_reason=stop_reason,
+        session_id=None,
     )

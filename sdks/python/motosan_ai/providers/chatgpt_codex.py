@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from motosan_ai._stream_collect import collect_stream
+from motosan_ai._stream_collect import collect_model_stream, collect_stream
 from motosan_ai.error import (
     AuthError,
     ConfigError,
@@ -19,10 +19,19 @@ from motosan_ai.error import (
     StreamReadTimeoutError,
 )
 from motosan_ai.provider_base import BaseProvider, ProviderCapabilities
+from motosan_ai.providers.responses import (
+    ModelStreamState,
+    build_model_request_body,
+    parse_model_sse_event,
+)
 from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
     ChatResponse,
+    ModelChatRequest,
+    ModelChatResponse,
+    ModelStreamDelta,
+    ModelStreamDone,
     Role,
     StopReason,
     StreamEvent,
@@ -197,7 +206,7 @@ def _parse_sse_event(data: str, state: _ChatGptCodexAdapterState) -> list[Stream
 
 
 class ChatGptCodexProvider(BaseProvider):
-    capabilities: ProviderCapabilities = ProviderCapabilities.text_only()
+    capabilities: ProviderCapabilities = ProviderCapabilities.with_freeform_tools()
 
     def __init__(
         self,
@@ -378,6 +387,42 @@ class ChatGptCodexProvider(BaseProvider):
 
         return body
 
+    def build_model_responses_body(self, request: ModelChatRequest) -> dict[str, Any]:
+        """Encode a native ModelChatRequest into the ChatGPT-backend body.
+
+        The four hard overrides below are applied AFTER the shared codec, and
+        the codec already shallow-merged ``provider_options`` — so these beat
+        both the caller's ``provider_options`` AND an explicit
+        ``request.tool_choice``. That is deliberate Rust parity.
+        """
+        body = build_model_request_body(
+            request,
+            self.model,
+            stream=True,
+            default_instructions="You are a helpful assistant.",
+        )
+        body["store"] = False
+        body["include"] = ["reasoning.encrypted_content"]
+        body["tool_choice"] = "auto"
+        body["parallel_tool_calls"] = True
+
+        # Effort: per-request provider_options wins, then the provider default,
+        # else the `reasoning` object is omitted entirely.
+        effort: str | None = None
+        if request.provider_options is not None:
+            candidate = request.provider_options.get("reasoning_effort")
+            if isinstance(candidate, str):
+                effort = candidate
+        if effort is None:
+            effort = self._reasoning_effort
+        if effort is not None:
+            body["reasoning"] = {"effort": effort, "summary": "auto"}
+            # The codec's shallow merge will have injected the raw key onto the
+            # body. It must never reach the wire.
+            body.pop("reasoning_effort", None)
+
+        return body
+
     @staticmethod
     def _map_http_error(
         status: int, message: str, headers: httpx.Headers | None = None
@@ -457,3 +502,65 @@ class ChatGptCodexProvider(BaseProvider):
             stop_reason=response.stop_reason,
             thinking=response.thinking,
         )
+
+    async def model_stream(self, request: ModelChatRequest) -> AsyncIterator[ModelStreamDelta]:
+        self.validate_model_request(request)
+        body = self.build_model_responses_body(request)
+        bearer = await self._bearer()
+        try:
+            resp = await self._http.send(
+                self._http.build_request(
+                    "POST", self._stream_url(), headers=self._headers(bearer), json=body
+                ),
+                stream=True,
+            )
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
+
+        try:
+            if not resp.is_success:
+                error_body = await resp.aread()
+                message = f"HTTP {resp.status_code}: {error_body.decode()}"
+                retry_after = resp.headers.get("retry-after")
+                if retry_after:
+                    message = f"Retry-After: {retry_after}\n{message}"
+                raise self._map_http_error(resp.status_code, message, resp.headers)
+
+            state = ModelStreamState()
+            try:
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    for delta in parse_model_sse_event(line[len("data: ") :], state):
+                        yield delta
+                        if isinstance(delta, ModelStreamDone):
+                            return
+                    if state.error is not None:
+                        raise StreamError(state.error)
+
+                # Provider string is `chatgpt-codex` (hyphen) on the native
+                # path; the legacy adapter above uses `chatgpt_codex`.
+                raise IncompleteStreamError(
+                    "incomplete stream: chatgpt-codex ended without a terminal event"
+                )
+            except (StreamError, AuthError, RateLimitError, ProviderError, NetworkError):
+                raise
+            except httpx.ReadTimeout as exc:
+                raise StreamReadTimeoutError(
+                    f"stream read timed out after {self._read_idle_timeout}s"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise StreamError(f"stream transport error: {exc}") from exc
+        except httpx.ReadTimeout as exc:
+            raise StreamReadTimeoutError(
+                f"stream read timed out after {self._read_idle_timeout}s"
+            ) from exc
+        finally:
+            await resp.aclose()
+
+    async def model_chat(self, request: ModelChatRequest) -> ModelChatResponse:
+        """Native chat = native stream + collect: there is no blocking endpoint."""
+        response = await collect_model_stream(self.model_stream(request))
+        if not response.model:
+            response.model = request.model or self.model
+        return response
