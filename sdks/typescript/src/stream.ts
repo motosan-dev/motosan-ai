@@ -1,4 +1,13 @@
-import type { ChatResponse, StopReason, StreamEvent, ToolCall, Usage } from './types.js'
+import type {
+  ChatResponse,
+  ModelChatResponse,
+  ModelStreamDelta,
+  ModelToolCall,
+  StopReason,
+  StreamEvent,
+  ToolCall,
+  Usage,
+} from './types.js'
 
 export type BoxStream = AsyncIterable<StreamEvent>
 
@@ -214,4 +223,105 @@ export async function collectStream(stream: BoxStream): Promise<ChatResponse> {
     usage,
     stopReason,
   }
+}
+
+/** An async iterable of native model stream deltas. Mirrors Rust `BoxModelStream`. */
+export type BoxModelStream = AsyncIterable<ModelStreamDelta>
+
+/**
+ * Reassemble a native model stream into a ModelChatResponse.
+ *
+ * Mirrors Rust `collect_model_stream` (stream.rs:155-239). Three rules differ
+ * from `collectStream` above and are contract, not implementation detail
+ * (milestone D8):
+ *
+ *   1. `tool_call_done` is AUTHORITATIVE. The accumulated `function_arguments`
+ *      / `freeform_input` buffers exist so a caller can render progress; they
+ *      are discarded for the completed call and NEVER lowered into it. In
+ *      particular a freeform `input` is never JSON-parsed.
+ *   2. `usage` REPLACES the running value. (collectStream uses
+ *      replace-with-fallback because Anthropic's message_delta usage is
+ *      cumulative; the Responses terminal frame is not.)
+ *   3. `thinking_done` wins over concatenated `thinking_delta` content, and an
+ *      empty `thinking_done` payload means "no thinking", not "empty string".
+ *
+ * `model` is returned EMPTY — the caller (provider or Client) backfills it
+ * from the request/provider default.
+ */
+export async function collectModelStream(stream: BoxModelStream): Promise<ModelChatResponse> {
+  let content = ''
+  let thinkingDeltaBuf = ''
+  let thinkingDoneBuf: string | undefined
+  const functionArguments = new Map<string, string>()
+  const freeformInputs = new Map<string, string>()
+  const toolCalls: ModelToolCall[] = []
+  let usage: Usage = { inputTokens: 0, outputTokens: 0 }
+  let explicitStopReason: StopReason | undefined
+
+  for await (const delta of stream) {
+    if (delta.type === 'done') {
+      explicitStopReason = delta.stopReason
+      break
+    }
+
+    switch (delta.type) {
+      case 'text':
+        content += delta.delta
+        break
+
+      case 'thinking_delta':
+        thinkingDeltaBuf += delta.delta
+        break
+
+      case 'thinking_done':
+        thinkingDoneBuf = delta.thinking
+        thinkingDeltaBuf = ''
+        break
+
+      case 'function_arguments':
+        functionArguments.set(
+          delta.callId,
+          (functionArguments.get(delta.callId) ?? '') + delta.delta,
+        )
+        break
+
+      case 'freeform_input':
+        freeformInputs.set(delta.callId, (freeformInputs.get(delta.callId) ?? '') + delta.delta)
+        break
+
+      case 'tool_call_done':
+        // Discard the bookkeeping buffer; the completed call is the truth.
+        if (delta.call.kind === 'function') {
+          functionArguments.delete(delta.call.id)
+        } else {
+          freeformInputs.delete(delta.call.id)
+        }
+        toolCalls.push(delta.call)
+        break
+
+      case 'usage':
+        usage = delta.usage
+        break
+    }
+  }
+
+  let thinking: string | undefined
+  if (thinkingDoneBuf !== undefined) {
+    thinking = thinkingDoneBuf.length > 0 ? thinkingDoneBuf : undefined
+  } else if (thinkingDeltaBuf.length > 0) {
+    thinking = thinkingDeltaBuf
+  }
+
+  const stopReason: StopReason =
+    explicitStopReason ?? (toolCalls.length > 0 ? 'tool_use' : 'end_turn')
+
+  const response: ModelChatResponse = {
+    content,
+    toolCalls,
+    model: '',
+    usage,
+    stopReason,
+  }
+  if (thinking !== undefined) response.thinking = thinking
+  return response
 }
