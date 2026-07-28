@@ -996,165 +996,91 @@ The per-SDK steps below describe what the script automates.
 | codex-oauth      | `codex-oauth-vX.Y.Z`      |
 | anthropic-oauth  | `anthropic-oauth-vX.Y.Z`  |
 
-### Release Steps (Python)
+### Releasing an SDK
+
+The three SDK versions move independently, but the mechanical edits are shared,
+so one script covers all of them:
 
 ```bash
-# 1. Bump version
-#    sdks/python/pyproject.toml → version = "X.Y.Z"
+# 1. Bump — manifests, lockfiles, CHANGELOG headings, doc version banners.
+#    Several SDKs in one run; --dry-run previews; re-running is a no-op.
+python3 scripts/bump-version.py --rust 0.28.0 --python 0.20.0
 
-# 2. Update CHANGELOG
-#    sdks/python/CHANGELOG.md → ## [X.Y.Z] - YYYY-MM-DD
+# 2. Write the prose the script cannot: the root CHANGELOG.md entry and the
+#    AGENTS.md release paragraph.
 
-# 3. Update version references in:
-#    - README.md (root) — Languages table, provider table
-#    - AGENTS.md — "Current versions" section, Releasing table
-#    - llms.txt — header version line, Install section
-#    - skills/motosan-ai/SKILL.md — header version, Install section
+# 3. Commit and open a PR — releases go through review like any other change.
+git add -A
+git commit -m "chore(release): rust-v0.28.0 and python-v0.20.0 (#<issue>)"
+gh pr create --title "chore(release): rust-v0.28.0 and python-v0.20.0"
 
-# 4. Commit
-git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
-git commit -m "chore: release python-vX.Y.Z"
-
-# 5. Tag + push (triggers publish-python.yml → PyPI)
-git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
-git push origin main python-vX.Y.Z
+# 4. After the PR merges, tag the MERGE COMMIT on main and push the tags.
+#    Create them from a checkout of origin/main, not a stale branch.
+git tag -a rust-v0.28.0 -m "rust-v0.28.0 — summary"
+git tag -a python-v0.20.0 -m "python-v0.20.0 — summary"
+git push origin rust-v0.28.0 python-v0.20.0
 ```
 
-### Release Steps (Rust)
+`chore(release):` is the one place the `fix:` / `feat:` / `refactor:` commit-type
+rule does not apply — a release ships no new change of its own, so dressing it
+as a feature or fix would be inaccurate.
+
+Each tag push runs that SDK's publish workflow, which re-verifies the tag
+against the manifest, runs the SDK's gates, publishes via Trusted Publishing,
+and then confirms the registry serves the exact artifact it built. Nothing here
+requires a registry secret, and a re-run of a half-finished release is safe.
+
+### Releasing an OAuth Helper Crate
+
+The helper crates are not covered by `bump-version.py` — bump them by hand:
 
 ```bash
-# 1. Bump version
-#    sdks/rust/Cargo.toml → version = "0.4.1"
-
-# 2. Update CHANGELOG
-#    sdks/rust/CHANGELOG.md → ## [0.4.1] - YYYY-MM-DD
-
-# 3. Update version references in:
-#    - README.md (root) — Languages table, provider table
-#    - AGENTS.md — "Current versions" section, Releasing table
-#    - llms.txt — header version line, Install section
-#    - skills/motosan-ai/SKILL.md — header version, Install section
-
-# 4. Commit
-git add sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
-git commit -m "chore: release rust-v0.4.1"
-
-# 5. Tag + push (triggers publish-rust.yml → crates.io)
-git tag -a rust-v0.4.1 -m "rust-v0.4.1 — summary"
-git push origin main rust-v0.4.1
+# 1. sdks/rust/crates/<crate>/Cargo.toml → version = "X.Y.Z"
+# 2. sdks/rust/crates/<crate>/CHANGELOG.md → ## [X.Y.Z] - YYYY-MM-DD
+# 3. Commit, PR, merge as above with a chore(release): subject.
+# 4. Tag the merge commit:
+git tag -a codex-oauth-vX.Y.Z -m "codex-oauth-vX.Y.Z — summary"
+git push origin codex-oauth-vX.Y.Z
 ```
 
-### Release Steps (TypeScript)
-
-```bash
-# 1. Bump version
-#    sdks/typescript/package.json → "version": "X.Y.Z"
-
-# 2. Update CHANGELOG
-#    sdks/typescript/CHANGELOG.md → ## [X.Y.Z] - YYYY-MM-DD
-
-# 3. Update version references in:
-#    - README.md (root) — Languages table
-#    - AGENTS.md — Releasing paragraph
-#    - llms.txt — Tag Convention + this section
-
-# 4. Commit
-git add sdks/typescript/package.json sdks/typescript/CHANGELOG.md README.md AGENTS.md llms.txt skills/motosan-ai/SKILL.md
-git commit -m "chore: release ts-vX.Y.Z"
-
-# 5. Tag + push (triggers publish-typescript.yml → npm)
-git tag ts-vX.Y.Z
-git push origin main ts-vX.Y.Z
-```
-
-### Release Steps (motosan-ai-oauth)
-
-```bash
-# 1. Bump version
-#    sdks/rust/crates/motosan-ai-oauth/Cargo.toml → version = "0.2.0"
-
-# 2. Update CHANGELOG
-#    sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md → ## [0.2.0] - YYYY-MM-DD
-
-# 3. Commit
-git add sdks/rust/crates/motosan-ai-oauth/Cargo.toml sdks/rust/crates/motosan-ai-oauth/CHANGELOG.md
-git commit -m "chore: release motosan-ai-oauth-v0.2.0"
-
-# 4. Tag + push (triggers publish-motosan-ai-oauth.yml → crates.io)
-git tag -a motosan-ai-oauth-v0.2.0 -m "motosan-ai-oauth-v0.2.0 — summary"
-git push origin main motosan-ai-oauth-v0.2.0
-```
-
-Publish `motosan-ai-oauth` before publishing wrapper crates (`codex-oauth`,
+Publish `motosan-ai-oauth` before the wrapper crates (`codex-oauth`,
 `anthropic-oauth`) that depend on its new version.
-
-### Release Steps (codex-oauth)
-
-```bash
-# 1. Bump version
-#    sdks/rust/crates/codex-oauth/Cargo.toml → version = "0.1.1"
-
-# 2. Update CHANGELOG
-#    sdks/rust/crates/codex-oauth/CHANGELOG.md → ## [0.1.1] - YYYY-MM-DD
-
-# 3. Commit
-git add sdks/rust/crates/codex-oauth/Cargo.toml sdks/rust/crates/codex-oauth/CHANGELOG.md
-git commit -m "chore: release codex-oauth-v0.1.1"
-
-# 4. Tag + push (triggers publish-codex-oauth.yml → crates.io)
-git tag -a codex-oauth-v0.1.1 -m "codex-oauth-v0.1.1 — summary"
-git push origin main codex-oauth-v0.1.1
-```
-
-### Release Steps (anthropic-oauth)
-
-```bash
-# 1. Bump version
-#    sdks/rust/crates/anthropic-oauth/Cargo.toml → version = "0.1.1"
-
-# 2. Update CHANGELOG
-#    sdks/rust/crates/anthropic-oauth/CHANGELOG.md → ## [0.1.1] - YYYY-MM-DD
-
-# 3. Commit
-git add sdks/rust/crates/anthropic-oauth/Cargo.toml sdks/rust/crates/anthropic-oauth/CHANGELOG.md
-git commit -m "chore: release anthropic-oauth-v0.1.1"
-
-# 4. Tag + push (triggers publish-anthropic-oauth.yml → crates.io)
-git tag -a anthropic-oauth-v0.1.1 -m "anthropic-oauth-v0.1.1 — summary"
-git push origin main anthropic-oauth-v0.1.1
-```
 
 ### CI Pipeline
 
-Tag push triggers GitHub Actions:
-- **publish-python.yml**: tag-vs-pyproject guard → sync/lint/format/test → `uv build` → `pypa/gh-action-pypi-publish` (Trusted Publishing, no token)
-- **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `crates-io-auth-action` → `cargo publish` + checksum verify (Trusted Publishing, no token)
-- **publish-typescript.yml**: `npm ci` → `npm run build` → `npm run test` → version-matches-tag guard → `npm publish --access public` (Trusted Publishing, no token; needs npm >= 11.5.1, provenance is automatic)
-- **publish-motosan-ai-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
-- **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
-- **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
+Tag push triggers GitHub Actions. Every workflow authenticates with Trusted
+Publishing (OIDC) — no registry token is stored anywhere:
+- **publish-python.yml**: tag-vs-pyproject guard → sync/lint/format/test → `uv build` → digest precheck → `pypa/gh-action-pypi-publish` → digest verify
+- **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `crates-io-auth-action` → `cargo publish` with SHA-256 precheck and verify
+- **publish-typescript.yml**: `npm ci` → build → test → tag-vs-package.json guard → `npm pack` → integrity precheck → `npm publish <tarball>` → integrity verify
+- **publish-motosan-ai-oauth.yml** / **publish-codex-oauth.yml** / **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish`
 
-All Rust workflows support `workflow_dispatch` for manual trigger.
+All workflows also support `workflow_dispatch`.
+
+Each registry must have a trusted publisher registered for this repository **and
+the specific workflow filename**, or publishing fails with an auth error.
 
 ### Pre-Push Validation (Local)
 
-```bash
-./scripts/pre-push-gate.sh
-# [1/4] Python unit tests
-# [2/4] Rust unit tests
-# [3/4] Python live tests (skipped if no ANTHROPIC_API_KEY)
-# [4/4] Rust live tests (skipped if no ANTHROPIC_API_KEY)
+`scripts/pre-push-gate.sh` (installed by `scripts/setup-hooks.sh`) is
+path-scoped: it reads the pushed range and runs only what that range touches.
+
 ```
+[metadata]   scripts/check-versions.py            — always
+[python]     unit tests                           — sdks/python/**, pyproject.toml, uv.lock
+[rust]       unit tests (--all-features)          — sdks/rust/**, workspace Cargo.toml
+[typescript] build + tests                        — sdks/typescript/**
+```
+
+Provider credentials are stripped from the environment for those runs, so the
+env-gated live tests inside the suites cannot fire. Live tests are opt-in
+(`RUN_LIVE=1 git push`) and never run in CI.
 
 ### Emergency Manual Publish
 
-```bash
-# Python
-cd sdks/python && uv build --out-dir dist && uv publish dist/*
-
-# Rust
-cd sdks/rust && cargo publish
-
-# TypeScript
-cd sdks/typescript && npm ci && npm run build && npm publish --access public
-```
+Prefer re-running the failed publish workflow: its steps are gated on digests,
+so a re-run either finds its own artifact already published and succeeds, or
+uploads what is missing. Publishing from a laptop requires temporarily minting a
+registry token (Trusted Publishing leaves no ambient credential) and skips every
+guard — version checks, gates, and the digest verification that proves the
+registry serves what was built.
