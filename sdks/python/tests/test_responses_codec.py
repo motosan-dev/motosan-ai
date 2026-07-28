@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from motosan_ai.providers.responses import (
     build_model_request_body,
     decode_function_call_output_payload,
@@ -15,6 +17,8 @@ from motosan_ai.providers.responses import (
     encode_tools,
     encode_user_content,
     model_chat_response_from_output,
+    ModelStreamState,
+    parse_model_sse_event,
     stop_reason_from_status,
     tool_output_to_dict,
 )
@@ -32,6 +36,14 @@ from motosan_ai.types import (
     ModelContextMessage,
     ModelContextToolCall,
     ModelContextToolOutput,
+    ModelStreamDone,
+    ModelStreamFreeformInput,
+    ModelStreamFunctionArguments,
+    ModelStreamText,
+    ModelStreamThinkingDelta,
+    ModelStreamThinkingDone,
+    ModelStreamToolCallDone,
+    ModelStreamUsage,
     ModelToolCallFreeform,
     ModelToolCallFunction,
     ModelToolOutputCustom,
@@ -587,3 +599,201 @@ def test_build_body_shallow_merges_provider_options_last():
     assert body["reasoning_effort"] == "high"
     assert body["extra"] is True
     assert body["model"] == "gpt-5.5-codex"
+
+
+def _frames(state, *payloads):
+    out = []
+    for payload in payloads:
+        out.extend(parse_model_sse_event(json.dumps(payload), state))
+    return out
+
+
+def test_parse_text_and_thinking_frames():
+    state = ModelStreamState()
+    deltas = _frames(
+        state,
+        {"type": "response.output_text.delta", "delta": "Hi "},
+        {"type": "response.output_text.delta", "delta": ""},
+        {"type": "response.output_text.delta", "delta": "there"},
+        {"type": "response.reasoning_text.delta", "delta": "think "},
+        {"type": "response.reasoning_summary_text.delta", "delta": "hard"},
+        {"type": "response.reasoning_text.done", "text": "think hard"},
+        {"type": "response.reasoning_summary_text.done", "delta": "fallback key"},
+    )
+    assert deltas == [
+        ModelStreamText(delta="Hi "),
+        ModelStreamText(delta="there"),
+        ModelStreamThinkingDelta(delta="think "),
+        ModelStreamThinkingDelta(delta="hard"),
+        ModelStreamThinkingDone(thinking="think hard"),
+        ModelStreamThinkingDone(thinking="fallback key"),
+    ]
+    # An explicitly empty thinking block still produces a delta; the collector
+    # is what turns it into "no thinking".
+    assert parse_model_sse_event(
+        json.dumps({"type": "response.reasoning_text.done", "text": ""}), ModelStreamState()
+    ) == [ModelStreamThinkingDone(thinking="")]
+
+
+def test_parse_freeform_input_deltas_and_authoritative_done():
+    state = ModelStreamState()
+    deltas = _frames(
+        state,
+        {
+            "type": "response.custom_tool_call_input.delta",
+            "call_id": "call_js",
+            "delta": "console.",
+        },
+        {
+            "type": "response.custom_tool_call_input.delta",
+            "call_id": "call_js",
+            "delta": "log(1);\n",
+        },
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "custom_tool_call",
+                "call_id": "call_js",
+                "name": "exec",
+                "input": "console.log(1);\n",
+            },
+        },
+    )
+    assert deltas == [
+        ModelStreamFreeformInput(call_id="call_js", delta="console."),
+        ModelStreamFreeformInput(call_id="call_js", delta="log(1);\n"),
+        ModelStreamToolCallDone(
+            call=ModelToolCallFreeform(id="call_js", name="exec", input="console.log(1);\n")
+        ),
+    ]
+    assert state.saw_tool_call is True
+
+
+def test_parse_resolves_call_id_through_the_item_map():
+    state = ModelStreamState()
+    _frames(
+        state,
+        {
+            "type": "response.output_item.added",
+            "item": {"type": "function_call", "id": "fc_1", "call_id": "call_fn", "name": "sum"},
+        },
+    )
+    assert state.item_to_call_id == {"fc_1": "call_fn"}
+    assert state.saw_tool_call is True
+
+    # 1. event call_id wins.
+    assert parse_model_sse_event(
+        json.dumps(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": "explicit",
+                "item_id": "fc_1",
+                "delta": "{",
+            }
+        ),
+        state,
+    ) == [ModelStreamFunctionArguments(call_id="explicit", delta="{")]
+    # 2. item_id resolves through the map.
+    assert parse_model_sse_event(
+        json.dumps(
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_1", "delta": '"a"'}
+        ),
+        state,
+    ) == [ModelStreamFunctionArguments(call_id="call_fn", delta='"a"')]
+    # 3. unknown item_id falls through as itself.
+    assert parse_model_sse_event(
+        json.dumps(
+            {"type": "response.function_call_arguments.delta", "item_id": "fc_9", "delta": "}"}
+        ),
+        state,
+    ) == [ModelStreamFunctionArguments(call_id="fc_9", delta="}")]
+    # 4. no id at all -> nothing.
+    assert (
+        parse_model_sse_event(
+            json.dumps({"type": "response.function_call_arguments.delta", "delta": "}"}), state
+        )
+        == []
+    )
+
+
+def test_parse_completed_emits_usage_then_exactly_one_done():
+    state = ModelStreamState()
+    deltas = parse_model_sse_event(
+        json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "usage": {"input_tokens": 2, "output_tokens": 3},
+                },
+            }
+        ),
+        state,
+    )
+    assert deltas == [
+        ModelStreamUsage(usage=Usage(input_tokens=2, output_tokens=3)),
+        ModelStreamDone(stop_reason=StopReason.end_turn),
+    ]
+    assert state.saw_terminal is True
+    assert sum(isinstance(d, ModelStreamDone) for d in deltas) == 1
+
+
+def test_parse_incomplete_is_a_terminal_mapping_to_max_tokens():
+    state = ModelStreamState()
+    deltas = parse_model_sse_event(
+        json.dumps(
+            {
+                "type": "response.incomplete",
+                "response": {
+                    "status": "incomplete",
+                    "usage": {"input_tokens": 6, "output_tokens": 7},
+                    "incomplete_details": {"reason": "max_output_tokens"},
+                },
+            }
+        ),
+        state,
+    )
+    assert deltas[-1] == ModelStreamDone(stop_reason=StopReason.max_tokens)
+    assert state.saw_terminal is True
+
+
+def test_parse_completed_after_tool_call_reports_tool_use_and_omits_zero_usage():
+    state = ModelStreamState()
+    state.saw_tool_call = True
+    deltas = parse_model_sse_event(
+        json.dumps({"type": "response.completed", "response": {"status": "completed"}}), state
+    )
+    assert deltas == [ModelStreamDone(stop_reason=StopReason.tool_use)]
+
+
+def test_parse_skips_noise_frames():
+    state = ModelStreamState()
+    assert parse_model_sse_event("", state) == []
+    assert parse_model_sse_event("   ", state) == []
+    assert parse_model_sse_event("[DONE]", state) == []
+    assert parse_model_sse_event("{not json", state) == []
+    assert parse_model_sse_event("[1, 2]", state) == []
+    assert parse_model_sse_event(json.dumps({"type": "response.created"}), state) == []
+    assert state.error is None
+    assert state.saw_terminal is False
+
+
+def test_parse_records_stream_errors_without_yielding_a_delta():
+    top_level = ModelStreamState()
+    assert parse_model_sse_event(json.dumps({"type": "error", "message": "boom"}), top_level) == []
+    assert top_level.error == "boom"
+
+    nested = ModelStreamState()
+    parse_model_sse_event(
+        json.dumps({"type": "response.failed", "response": {"error": {"message": "nested"}}}),
+        nested,
+    )
+    assert nested.error == "nested"
+
+    sibling = ModelStreamState()
+    parse_model_sse_event(json.dumps({"type": "error", "error": {"message": "sibling"}}), sibling)
+    assert sibling.error == "sibling"
+
+    bare = ModelStreamState()
+    parse_model_sse_event(json.dumps({"type": "error"}), bare)
+    assert bare.error == "responses stream error"

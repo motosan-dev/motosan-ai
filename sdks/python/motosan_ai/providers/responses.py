@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from motosan_ai.types import (
@@ -33,6 +34,15 @@ from motosan_ai.types import (
     ModelContextItem,
     ModelContextMessage,
     ModelContextToolCall,
+    ModelStreamDelta,
+    ModelStreamDone,
+    ModelStreamFreeformInput,
+    ModelStreamFunctionArguments,
+    ModelStreamText,
+    ModelStreamThinkingDelta,
+    ModelStreamThinkingDone,
+    ModelStreamToolCallDone,
+    ModelStreamUsage,
     ModelToolCall,
     ModelToolCallFreeform,
     ModelToolCallFunction,
@@ -502,3 +512,157 @@ def build_model_request_body(
         body.update(request.provider_options)
 
     return body
+
+
+@dataclass
+class ModelStreamState:
+    """Per-stream adapter state for ``parse_model_sse_event``.
+
+    ``item_to_call_id`` maps Responses output-item ids (``fc_*``) to public
+    call ids (``call_*``), because argument/input deltas arrive keyed by
+    ``item_id``. ``saw_terminal`` lets the transport tell truncation from
+    completion at EOF.
+    """
+
+    item_to_call_id: dict[str, str] = field(default_factory=dict)
+    saw_tool_call: bool = False
+    saw_terminal: bool = False
+    error: str | None = None
+
+
+def _remember_output_item(item: Any, state: ModelStreamState) -> None:
+    if not isinstance(item, dict):
+        return
+    if item.get("type") not in ("function_call", "custom_tool_call"):
+        return
+    call_id = item.get("call_id")
+    if not isinstance(call_id, str):
+        return
+    state.saw_tool_call = True
+    item_id = item.get("id")
+    if isinstance(item_id, str) and item_id:
+        state.item_to_call_id[item_id] = call_id
+
+
+def _call_id_from_event(chunk: dict[str, Any], state: ModelStreamState) -> str | None:
+    """Event ``call_id`` -> mapped ``item_id`` -> raw ``item_id``."""
+    call_id = chunk.get("call_id")
+    if isinstance(call_id, str):
+        return call_id
+    item_id = chunk.get("item_id")
+    if isinstance(item_id, str):
+        return state.item_to_call_id.get(item_id, item_id)
+    return None
+
+
+def _stream_error_message(chunk: dict[str, Any]) -> str:
+    message = chunk.get("message")
+    if isinstance(message, str) and message:
+        return message
+    response = chunk.get("response")
+    if isinstance(response, dict):
+        error = response.get("error")
+        if isinstance(error, dict) and isinstance(error.get("message"), str):
+            nested = error["message"]
+            if nested:
+                return str(nested)
+    error = chunk.get("error")
+    if isinstance(error, dict) and isinstance(error.get("message"), str):
+        sibling = error["message"]
+        if sibling:
+            return str(sibling)
+    return "responses stream error"
+
+
+def parse_model_sse_event(data: str, state: ModelStreamState) -> list[ModelStreamDelta]:
+    """Map one Responses SSE ``data`` payload to zero or more ModelStreamDeltas.
+
+    Pure apart from mutating ``state``. Port of Rust's
+    ``ResponsesModelStreamAdapter::handle_event``. A fatal ``error`` /
+    ``response.failed`` frame sets ``state.error`` and returns ``[]`` — the
+    transport raises StreamError after draining the pending deltas.
+    """
+    text = data.strip()
+    if not text or text == "[DONE]":
+        return []
+    try:
+        chunk = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(chunk, dict):
+        return []
+
+    event_type = chunk.get("type")
+    out: list[ModelStreamDelta] = []
+
+    if event_type == "response.output_text.delta":
+        delta = chunk.get("delta")
+        if isinstance(delta, str) and delta:
+            out.append(ModelStreamText(delta=delta))
+
+    elif event_type in (
+        "response.reasoning_text.delta",
+        "response.reasoning_summary_text.delta",
+    ):
+        delta = chunk.get("delta")
+        if isinstance(delta, str) and delta:
+            out.append(ModelStreamThinkingDelta(delta=delta))
+
+    elif event_type in (
+        "response.reasoning_text.done",
+        "response.reasoning_summary_text.done",
+    ):
+        thinking = chunk.get("text")
+        if not isinstance(thinking, str):
+            thinking = chunk.get("delta")
+        if isinstance(thinking, str):
+            out.append(ModelStreamThinkingDone(thinking=thinking))
+
+    elif event_type == "response.output_item.added":
+        _remember_output_item(chunk.get("item"), state)
+
+    elif event_type == "response.function_call_arguments.delta":
+        call_id = _call_id_from_event(chunk, state)
+        delta = chunk.get("delta")
+        if call_id is not None and isinstance(delta, str):
+            out.append(ModelStreamFunctionArguments(call_id=call_id, delta=delta))
+
+    elif event_type == "response.custom_tool_call_input.delta":
+        call_id = _call_id_from_event(chunk, state)
+        delta = chunk.get("delta")
+        if call_id is not None and isinstance(delta, str):
+            out.append(ModelStreamFreeformInput(call_id=call_id, delta=delta))
+
+    elif event_type == "response.output_item.done":
+        item = chunk.get("item")
+        _remember_output_item(item, state)
+        call = decode_tool_call(item)
+        if call is not None:
+            state.saw_tool_call = True
+            out.append(ModelStreamToolCallDone(call=call))
+
+    elif event_type in ("response.completed", "response.incomplete"):
+        response = chunk.get("response")
+        response = response if isinstance(response, dict) else {}
+        usage = decode_usage(response.get("usage"))
+        if (
+            usage.input_tokens != 0
+            or usage.output_tokens != 0
+            or usage.cache_creation_input_tokens is not None
+            or usage.cache_read_input_tokens is not None
+        ):
+            out.append(ModelStreamUsage(usage=usage))
+        status = response.get("status")
+        out.append(
+            ModelStreamDone(
+                stop_reason=stop_reason_from_status(
+                    status if isinstance(status, str) else None, state.saw_tool_call
+                )
+            )
+        )
+        state.saw_terminal = True
+
+    elif event_type in ("error", "response.failed"):
+        state.error = _stream_error_message(chunk)
+
+    return out
