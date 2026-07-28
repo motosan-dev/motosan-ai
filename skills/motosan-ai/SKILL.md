@@ -20,15 +20,15 @@ pip install "motosan-ai[gemini]"             # Gemini HTTP provider
 pip install "motosan-ai[anthropic,openai,gemini]"   # multiple providers
 ```
 
-```toml
-# Rust (Cargo.toml)
-motosan-ai = { version = "0.27.0", features = ["anthropic"] }
+```bash
+# Rust
+cargo add motosan-ai --features anthropic
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex
 # CLI backends (shell out to a local binary): claude-code | codex-cli | gemini-cli
 
 # Codex OAuth (standalone — get a token for chatgpt.com/backend-api)
-codex-oauth = "0.1"
+cargo add codex-oauth
 ```
 
 ```bash

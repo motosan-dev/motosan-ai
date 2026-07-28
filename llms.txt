@@ -21,10 +21,9 @@ pip install "motosan-ai[gemini]"
 pip install "motosan-ai[anthropic,openai,ollama,minimax,gemini]"
 ```
 
-```toml
-# Rust — pick features in Cargo.toml
-[dependencies]
-motosan-ai = { version = "0.27.0", features = ["anthropic"] }
+```bash
+# Rust — pick features when adding the dependency
+cargo add motosan-ai --features anthropic
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex
 # CLI backends (Rust features; Python has built-in ClaudeCodeClient/CodexCliClient/GeminiCliClient):
@@ -976,14 +975,14 @@ Python, Rust, and TypeScript SDKs are versioned and released **independently**.
 
 ### Tag Convention
 
-| SDK          | Tag format            | Example               |
-|--------------|-----------------------|-----------------------|
-| Python       | `python-vX.Y.Z`       | `python-v0.4.2`       |
-| Rust         | `rust-vX.Y.Z`         | `rust-v0.3.3`         |
-| TypeScript   | `ts-vX.Y.Z`           | `ts-v0.15.0`          |
-| motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | `motosan-ai-oauth-v0.2.0` |
-| codex-oauth  | `codex-oauth-vX.Y.Z`  | `codex-oauth-v0.1.0`  |
-| anthropic-oauth | `anthropic-oauth-vX.Y.Z` | `anthropic-oauth-v0.1.0` |
+| SDK              | Tag format                |
+|------------------|---------------------------|
+| Python           | `python-vX.Y.Z`           |
+| Rust             | `rust-vX.Y.Z`             |
+| TypeScript       | `ts-vX.Y.Z`               |
+| motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` |
+| codex-oauth      | `codex-oauth-vX.Y.Z`      |
+| anthropic-oauth  | `anthropic-oauth-vX.Y.Z`  |
 
 ### Release Steps (Python)
 
