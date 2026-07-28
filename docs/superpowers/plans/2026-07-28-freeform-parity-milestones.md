@@ -51,6 +51,19 @@ only when callers opt into `openai_responses_api`" is unimplementable outside Ru
 analogue to port. The marginal cost is small because the codec is shared — what is actually new is an
 endpoint, a boolean, and the non-streaming decode path.
 
+**How the flag is exposed differs per SDK, and Python has no builder to hang it on.** Rust's
+`ClientBuilder::openai_responses_api(bool)` has no Python analogue: Python constructs clients through
+`Client(provider=..., ...)` and classmethod shortcuts. Thread it explicitly through all three levels, or
+the flag ends up provider-only and unreachable from the facade:
+
+| | Provider level | Client level | Shortcut |
+|---|---|---|---|
+| Python | `OpenAIProvider(..., responses_api: bool = False, responses_url: str \| None = None)` plus `_responses_endpoint()` beside the existing `_endpoint()` | new keyword-only `openai_responses_api: bool = False` on `Client.__init__`, forwarded when it builds `OpenAIProvider` | new keyword-only argument on `Client.openai(...)` — today its signature is a fixed list (`api_key`, `model`, `max_retries`, `retry_policy`) and silently drops anything else |
+| TypeScript | `OpenAIProvider.withResponsesApi(boolean)`, beside the existing and **semantically different** `withResponsesFallback` | `ClientBuilder.openaiResponsesApi(boolean)` | — |
+
+TypeScript's two flags must stay distinguishable in docs and in the builder: `withResponsesFallback` is a
+404 recovery path, `withResponsesApi` is a native opt-in.
+
 *The cheaper alternative, if this milestone needs to shrink:* ship `chatgpt_codex` only, and amend the
 spec to say native OpenAI is Rust-only for now. That keeps the codec and every type identical; it only
 drops two provider methods and a builder flag per SDK. Decide **before** drafting the implementation
@@ -162,9 +175,19 @@ exists.
 ### D10 — Versions and spec relabel
 
 Python **0.20.0**, TypeScript **0.16.0** (additive minors). Rust needs no version change — it gains only
-a conformance test file. When both ports land, `specs/types.md` § Native Model API is relabelled from
-"(Rust, v0.26.0+)" to cover all three, and its Provider-support paragraph and the stream-termination
-table row widen accordingly.
+a conformance test file.
+
+**The spec changes in two steps, deliberately.** PR S widens the *normative contract* — every "MUST" in
+§ Native Model API becomes cross-SDK, and D3's omission and D4's Python error type are written down —
+because the implementations are written against it. But S must **not** claim the API ships in Python and
+TypeScript, which would make the spec lie for the duration of the milestone. So S replaces the
+"(Rust, v0.26.0+)" heading label with an explicit implementation-status line:
+
+> Implemented in Rust 0.26.0+. Python and TypeScript ports in progress — see #270.
+
+REL rewrites that line to the shipped versions and widens the Provider-support paragraph and the
+stream-termination table row. Anything that asserts *which SDKs ship it* belongs to REL; anything that
+asserts *what the API must do* belongs to S.
 
 ---
 
@@ -187,6 +210,13 @@ only a partial stand-in for the latter.
 **ChatGPT Codex's body overrides the caller.** It hard-sets `store=false`,
 `include=["reasoning.encrypted_content"]`, `parallel_tool_calls=true`, and **`tool_choice="auto"`
 regardless of what the caller passed**. Reproduce it or document the divergence deliberately.
+
+**Codex also normalizes reasoning effort, and this is easy to miss.** Effort resolves as per-request
+`provider_options["reasoning_effort"]` **first**, provider default second, omitted if neither. When one
+resolves, the body gets `reasoning = {"effort": <value>, "summary": "auto"}` — and any top-level
+`reasoning_effort` key is **removed**, because the `provider_options` shallow merge described just
+above will have injected the raw key onto the body. Pin both halves: that per-request effort beats the provider
+default, and that `reasoning_effort` never reaches the wire.
 
 **The existing SSE adapters are missing frames.** Neither Python's `_parse_sse_event` nor TypeScript's
 `streamImpl` handles `response.custom_tool_call_input.delta`, `custom_tool_call` output items,
@@ -223,8 +253,8 @@ and release PRs after.
 | PR | Scope | Depends on |
 |---|---|---|
 | **S** | Widen `specs/types.md` § Native Model API to all three SDKs; state D3's omission and D4's Python error type | — |
-| **P1** | Python types + `providers/responses.py` codec + `UnsupportedFeatureError`; no provider wiring | S |
-| **P2** | Python `chatgpt_codex` / `openai` native methods, capabilities, `Client` dispatch, `collect_model_stream` | P1 |
+| **P1** | Python types + `providers/responses.py` codec + `UnsupportedFeatureError`; no provider wiring. **Every new public symbol is added to `motosan_ai/__init__.py`'s explicit imports and `__all__`** | S |
+| **P2** | Python `chatgpt_codex` / `openai` native methods, capabilities, `Client` dispatch, `collect_model_stream` — again exported from the package root | P1 |
 | **T1** | TypeScript types + `serialize/responses.ts` codec | S |
 | **T2** | TypeScript provider native methods, capabilities, `Client` + `ClientBuilder`, `asDispatchProvider` shim, `collectModelStream` | T1 |
 | **C** | Freeform conformance suite ×3 SDKs | P2, T2 |
@@ -232,6 +262,14 @@ and release PRs after.
 
 Ship P1→P2 and T1→T2 as two parallel tracks. Each PR is diff-verified against the plan before merge, per
 house practice.
+
+**Python's package root is not automatic.** `motosan_ai/__init__.py` re-exports through explicit imports
+and a hand-maintained `__all__` (~54 entries today), so a type that is never listed is invisible to
+callers no matter how correct it is — unlike TypeScript, where `export * from './types.js'` picks new
+types up for free. P1 and P2 each carry that duty, and the milestone adds the export-surface test Python
+lacks: TypeScript pins its exports in `tests/index.test.ts`, Python pins nothing. A
+`tests/test_public_exports.py` that imports every native symbol from `motosan_ai` and asserts it is in
+`__all__` closes that gap and is the cheapest possible guard against a half-exported port.
 
 ---
 
