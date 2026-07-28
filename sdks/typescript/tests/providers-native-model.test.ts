@@ -12,6 +12,7 @@ import {
   type ProviderImpl,
 } from '../src/provider.js'
 import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
+import { DEFAULT_OPENAI_RESPONSES_URL, OpenAIProvider } from '../src/providers/openai.js'
 import { collectModelStream } from '../src/stream.js'
 import type { ModelChatRequest, ModelStreamDelta } from '../src/types.js'
 
@@ -31,6 +32,18 @@ function sseFetch(sse: string, onRequest?: (url: string, init?: RequestInit) => 
       }),
       { status: 200, headers: { 'content-type': 'text/event-stream' } },
     )
+  })
+  vi.stubGlobal('fetch', mockFetch)
+  return mockFetch
+}
+
+function jsonFetch(body: unknown, onRequest?: (url: string, init?: RequestInit) => void) {
+  const mockFetch = vi.fn(async (url: string, init?: RequestInit) => {
+    onRequest?.(url, init)
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
   })
   vi.stubGlobal('fetch', mockFetch)
   return mockFetch
@@ -477,5 +490,167 @@ describe('ChatGptCodexProvider native surface', () => {
     await expect(
       collectModelStream(new ChatGptCodexProvider('tok', 'acct').modelStream({ context: [] })),
     ).rejects.toBeInstanceOf(IncompleteStreamError)
+  })
+})
+
+describe('OpenAIProvider native surface', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keeps withResponsesApi and withResponsesFallback independent', () => {
+    const provider = new OpenAIProvider('k', 'gpt-5.5-codex')
+    expect(provider.capabilities().supportsFreeformTools).toBe(false)
+    provider.withResponsesFallback(true)
+    expect(provider.capabilities().supportsFreeformTools).toBe(false)
+    provider.withResponsesApi(true)
+    expect(provider.capabilities()).toEqual({
+      supportsImage: true,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+    provider.withResponsesApi(false)
+    expect(provider.capabilities().supportsFreeformTools).toBe(false)
+  })
+
+  it('POSTs the Responses endpoint and decodes a freeform call (non-streaming)', async () => {
+    const raw = 'const x = {a: 1};\nconsole.log(x.a);\n'
+    let sent: Record<string, any> = {}
+    const mockFetch = jsonFetch(
+      {
+        model: 'gpt-5.5-codex',
+        status: 'completed',
+        output: [{ type: 'custom_tool_call', call_id: 'call_js', name: 'exec', input: raw }],
+        usage: { input_tokens: 9, output_tokens: 7 },
+      },
+      (_url, init) => {
+        sent = JSON.parse(String(init?.body))
+      },
+    )
+
+    const response = await new OpenAIProvider('test-key', 'gpt-5.5-codex')
+      .withResponsesApi(true)
+      .modelChat({
+        context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+        toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+      })
+
+    expect(String(mockFetch.mock.calls[0][0])).toBe(DEFAULT_OPENAI_RESPONSES_URL)
+    expect(sent.stream).toBeUndefined()
+    expect(sent.tools[0]).toEqual({
+      type: 'custom',
+      name: 'exec',
+      description: 'Run JavaScript',
+      format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+    })
+    expect(response.toolCalls).toEqual([
+      { kind: 'freeform', id: 'call_js', name: 'exec', input: raw },
+    ])
+    expect(response.stopReason).toBe('tool_use')
+    expect(response.usage.inputTokens).toBe(9)
+  })
+
+  it('encodes image content blocks as input_image data URLs', async () => {
+    let sent: Record<string, any> = {}
+    jsonFetch(
+      {
+        model: 'gpt-5.5-codex',
+        status: 'completed',
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      (_url, init) => {
+        sent = JSON.parse(String(init?.body))
+      },
+    )
+
+    const response = await new OpenAIProvider('test-key', 'gpt-5.5-codex')
+      .withResponsesApi(true)
+      .modelChat({
+        context: [
+          {
+            kind: 'message',
+            message: {
+              role: 'user',
+              content: 'inspect',
+              contentBlocks: [
+                { type: 'text', text: 'inspect' },
+                {
+                  type: 'image',
+                  source: { type: 'base64', mediaType: 'image/png', data: 'abc123' },
+                },
+              ],
+            },
+          },
+        ],
+      })
+
+    expect(sent.input[0].content).toEqual([
+      { type: 'input_text', text: 'inspect' },
+      { type: 'input_image', image_url: 'data:image/png;base64,abc123' },
+    ])
+    expect(response.content).toBe('ok')
+  })
+
+  it('rejects native freeform BEFORE any HTTP call when the opt-in is off', async () => {
+    const mockFetch = jsonFetch({})
+    const provider = new OpenAIProvider('test-key', 'gpt-5.5-codex')
+    const request: ModelChatRequest = {
+      context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+      toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+    }
+
+    await expect(provider.modelChat(request)).rejects.toThrow(
+      'provider does not support native freeform tools',
+    )
+    expect(() => provider.modelStream(request)).toThrow(
+      'provider does not support native freeform tools',
+    )
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('reports the endpoint message for a non-freeform request with the opt-in off', async () => {
+    const mockFetch = jsonFetch({})
+    const provider = new OpenAIProvider('test-key', 'gpt-5.5-codex')
+    await expect(provider.modelChat({ context: [] })).rejects.toThrow(
+      'OpenAI Chat Completions does not support native model requests; enable OpenAI Responses API',
+    )
+    expect(() => provider.modelStream({ context: [] })).toThrow(
+      'OpenAI Chat Completions does not support native model streams; enable OpenAI Responses API',
+    )
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('streams native custom deltas and collects them', async () => {
+    const sse =
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"console."}\n\n' +
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"log(1);\\n"}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_js","name":"exec","input":"console.log(1);\\n"}}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3}}}\n\n'
+    sseFetch(sse)
+
+    const response = await collectModelStream(
+      new OpenAIProvider('test-key', 'gpt-5.5-codex').withResponsesApi(true).modelStream({
+        context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+        toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+      }),
+    )
+    expect(response.toolCalls).toEqual([
+      { kind: 'freeform', id: 'call_js', name: 'exec', input: 'console.log(1);\n' },
+    ])
+    expect(response.usage.outputTokens).toBe(3)
+  })
+
+  it('throws IncompleteStreamError with the openai payload on truncation', async () => {
+    sseFetch(
+      'data: {"type":"response.output_text.delta","delta":"hel"}\n\n' +
+        'data: {"type":"response.output_text.delta","delta":"lo"}\n\n',
+    )
+    await expect(
+      collectModelStream(
+        new OpenAIProvider('test-key', 'gpt-5.5-codex')
+          .withResponsesApi(true)
+          .modelStream({ context: [] }),
+      ),
+    ).rejects.toThrow('incomplete stream: openai ended without a terminal event')
   })
 })
