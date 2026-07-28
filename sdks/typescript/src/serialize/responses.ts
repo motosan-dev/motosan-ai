@@ -21,10 +21,12 @@ import type {
   FunctionCallOutputContentItem,
   FunctionCallOutputPayload,
   Message,
+  ModelChatRequest,
   ModelContextItem,
   ModelToolCall,
   ModelToolOutput,
   ModelToolSpec,
+  ToolChoice,
 } from '../types.js'
 
 /** Encode one tool definition into its Responses wire object. */
@@ -193,4 +195,92 @@ export function encodeContextItem(item: ModelContextItem): Record<string, unknow
 /** Encode the whole ordered context into the Responses `input` array. */
 export function encodeInput(context: ModelContextItem[]): Record<string, unknown>[] {
   return context.flatMap(encodeContextItem)
+}
+
+function encodeToolChoice(choice: ToolChoice): unknown {
+  switch (choice.type) {
+    case 'auto':
+      return 'auto'
+    case 'required':
+      return 'required'
+    case 'none':
+      return 'none'
+    case 'tool':
+      return { type: 'function', name: choice.name }
+  }
+}
+
+/**
+ * Build a Responses request body from a native model request.
+ *
+ * Two non-obvious rules, both load-bearing (Rust build_model_request_body,
+ * providers/responses.rs:59-140):
+ *
+ *   1. System text is HOISTED into `instructions` and REMOVED from `input`.
+ *      Precedence: systemBlocks (joined) > system > any Role::System message
+ *      inside `context`; hoisted context messages are appended after whichever
+ *      of the first two applied. `defaultInstructions` fills in only when
+ *      nothing at all was supplied.
+ *   2. `providerOptions` is shallow-merged into the body root LAST, so a
+ *      caller can override anything this function produced.
+ */
+export function buildModelRequestBody(
+  req: ModelChatRequest,
+  defaultModel: string,
+  stream: boolean,
+  defaultInstructions?: string,
+): Record<string, unknown> {
+  const model = req.model ?? defaultModel
+  const inputContext: ModelContextItem[] = []
+  const instructionsParts: string[] = []
+
+  if (req.systemBlocks !== undefined) {
+    for (const block of req.systemBlocks) {
+      const trimmed = block.text.trim()
+      if (trimmed) instructionsParts.push(trimmed)
+    }
+  } else if (req.system !== undefined) {
+    const trimmed = req.system.trim()
+    if (trimmed) instructionsParts.push(trimmed)
+  }
+
+  for (const item of req.context) {
+    if (item.kind === 'message' && item.message.role === 'system') {
+      const trimmed = item.message.content.trim()
+      if (trimmed) instructionsParts.push(trimmed)
+      continue
+    }
+    inputContext.push(item)
+  }
+
+  const body: Record<string, unknown> = {
+    model,
+    input: encodeInput(inputContext),
+  }
+
+  if (stream) body.stream = true
+
+  const toolSpecs = req.toolSpecs ?? []
+  if (toolSpecs.length > 0) body.tools = encodeTools(toolSpecs)
+
+  const instructions =
+    instructionsParts.length > 0 ? instructionsParts.join('\n\n') : defaultInstructions
+  if (instructions !== undefined) body.instructions = instructions
+
+  if (req.temperature !== undefined) body.temperature = req.temperature
+  // Wire key divergence: maxTokens -> max_output_tokens.
+  if (req.maxTokens !== undefined) body.max_output_tokens = req.maxTokens
+  if (req.toolChoice !== undefined) body.tool_choice = encodeToolChoice(req.toolChoice)
+  if (req.stopSequences !== undefined && req.stopSequences.length > 0) {
+    body.stop = req.stopSequences
+  }
+
+  // LAST — providerOptions wins over everything above.
+  if (req.providerOptions !== undefined) {
+    for (const [key, value] of Object.entries(req.providerOptions)) {
+      body[key] = value
+    }
+  }
+
+  return body
 }
