@@ -46,13 +46,23 @@ else.
 
 ### 4. Tag the merge commit
 
+Label the release PR `release:rust` / `release:python` / `release:ts` (or
+`release:<crate>`) before merging, and `release-tag.yml` tags the merge commit
+on its way out. It can also be started by hand:
+
 ```bash
-git tag -a rust-v0.28.0 -m "rust-v0.28.0 — summary of changes"
-git push origin rust-v0.28.0
+gh workflow run release-tag.yml -f packages="rust python"
 ```
 
-Create tags from a checkout of `origin/main` after the PR merges — not from a
-stale branch, whose pre-push hook may be an older version.
+It derives tag names from the manifests, re-runs `check-versions.py`, refuses a
+tag that already exists, and then starts each publish workflow — explicitly,
+because a tag pushed with `GITHUB_TOKEN` does not start one on its own.
+
+Give the `release` environment required reviewers in repo settings if releases
+should wait for an approval.
+
+Tagging by hand still works, but create the tags from a checkout of
+`origin/main` — a stale branch carries a stale pre-push hook.
 
 ## CI Publish Pipelines
 

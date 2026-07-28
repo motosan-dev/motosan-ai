@@ -1,0 +1,100 @@
+name: release-tag
+
+# Tags a release and starts the matching publish workflows, so nobody has to
+# create tags by hand from whatever checkout happens to be nearby — a stale
+# checkout carries a stale pre-push hook.
+#
+# Two ways in, both explicit: dispatch it manually, or merge a PR labelled
+# `release:<package>` (e.g. `release:rust`). Merging an unlabelled PR does
+# nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: "Space-separated: rust python ts motosan-ai-oauth codex-oauth anthropic-oauth"
+        required: true
+  pull_request:
+    types: [closed]
+
+jobs:
+  tag:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       contains(join(github.event.pull_request.labels.*.name, ','), 'release:'))
+    runs-on: ubuntu-latest
+    # Give this environment required reviewers in repo settings to gate
+    # releases on an approval; without them the job simply runs.
+    environment: release
+    permissions:
+      contents: write # push tags
+      actions: write # start the publish workflows
+    steps:
+      # Tag the merge commit the release actually landed as, not whatever main
+      # points at by the time this runs.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # Tags are derived from the manifests, so re-checking metadata here means
+      # a tag can never point at a tree whose versions disagree.
+      - name: Re-verify version metadata
+        run: python3 scripts/check-versions.py
+      - name: Resolve tags from the manifests
+        id: plan
+        env:
+          PACKAGES: ${{ github.event.inputs.packages }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            args=()
+            for package in $PACKAGES; do args+=(--package "$package"); done
+            python3 scripts/release-tags.py "${args[@]}"
+          else
+            python3 scripts/release-tags.py --from-labels "$LABELS"
+          fi
+      - name: Create and push tags
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          mapfile -t tags < <(printf '%s' "$PLAN" |
+            python3 -c "import json,sys; [print(item['tag']) for item in json.load(sys.stdin)]")
+
+          for tag in "${tags[@]}"; do
+            if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+              echo "::error::$tag already exists on origin — bump the version or delete the tag"
+              exit 1
+            fi
+            git tag -a "$tag" -m "$tag — tagged by release-tag.yml at $(git rev-parse HEAD)"
+          done
+
+          git push origin "${tags[@]}"
+          printf 'Pushed: %s\n' "${tags[*]}"
+      # A tag pushed with GITHUB_TOKEN does not start any workflow — GitHub
+      # suppresses those events. workflow_dispatch is one of the two documented
+      # exceptions, so the publish runs are started explicitly. Dispatching
+      # against the tag ref keeps `github.ref_type == 'tag'`, so each publish
+      # workflow's tag-vs-manifest guard still applies.
+      - name: Start the publish workflows
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mapfile -t entries < <(printf '%s' "$PLAN" |
+            python3 -c "import json,sys; [print(item['workflow'], item['tag']) for item in json.load(sys.stdin)]")
+
+          for entry in "${entries[@]}"; do
+            workflow="${entry% *}"
+            tag="${entry#* }"
+            echo "Dispatching $workflow against $tag"
+            gh workflow run "$workflow" --ref "$tag"
+          done

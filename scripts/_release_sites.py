@@ -32,6 +32,60 @@ CHANGELOGS = {
 UV_LOCK = "uv.lock"
 NPM_LOCK = "sdks/typescript/package-lock.json"
 
+# Every independently-tagged package, including the OAuth helper crates, which
+# the SDK-shaped tables above deliberately exclude (they carry no doc banners,
+# no lockfile entry, and are bumped by hand). `release-tags.py` derives tags
+# from these manifests so a tag can never disagree with what it points at.
+PACKAGES: dict[str, dict[str, str]] = {
+    "rust": {
+        "manifest": MANIFESTS["rust"],
+        "kind": "cargo",
+        "tag_prefix": "rust-v",
+        "workflow": "publish-rust.yml",
+    },
+    "python": {
+        "manifest": MANIFESTS["python"],
+        "kind": "pyproject",
+        "tag_prefix": "python-v",
+        "workflow": "publish-python.yml",
+    },
+    "ts": {
+        "manifest": MANIFESTS["ts"],
+        "kind": "npm",
+        "tag_prefix": "ts-v",
+        "workflow": "publish-typescript.yml",
+    },
+    "motosan-ai-oauth": {
+        "manifest": "sdks/rust/crates/motosan-ai-oauth/Cargo.toml",
+        "kind": "cargo",
+        "tag_prefix": "motosan-ai-oauth-v",
+        "workflow": "publish-motosan-ai-oauth.yml",
+    },
+    "codex-oauth": {
+        "manifest": "sdks/rust/crates/codex-oauth/Cargo.toml",
+        "kind": "cargo",
+        "tag_prefix": "codex-oauth-v",
+        "workflow": "publish-codex-oauth.yml",
+    },
+    "anthropic-oauth": {
+        "manifest": "sdks/rust/crates/anthropic-oauth/Cargo.toml",
+        "kind": "cargo",
+        "tag_prefix": "anthropic-oauth-v",
+        "workflow": "publish-anthropic-oauth.yml",
+    },
+}
+
+
+def package_version(package: str) -> str:
+    """Read a package's version straight from its own manifest."""
+    spec = PACKAGES[package]
+    if spec["kind"] == "cargo":
+        return load_toml(spec["manifest"])["package"]["version"]
+    if spec["kind"] == "pyproject":
+        return load_toml(spec["manifest"])["project"]["version"]
+    return load_json(spec["manifest"])["version"]
+
+
 # (path, template, anchor). The anchor locates the line even when its version
 # is stale, so it must contain no version and must match exactly one line —
 # `check_anchor_uniqueness` enforces that.
