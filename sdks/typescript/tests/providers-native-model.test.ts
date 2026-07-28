@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { StreamReadTimeoutError, UnsupportedFeatureError } from '../src/error.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { IncompleteStreamError, StreamReadTimeoutError, UnsupportedFeatureError } from '../src/error.js'
 import {
   dispatchModelChat,
   dispatchModelStream,
@@ -11,11 +11,29 @@ import {
   withImageAndFreeformTools,
   type ProviderImpl,
 } from '../src/provider.js'
+import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
 import { collectModelStream } from '../src/stream.js'
 import type { ModelChatRequest, ModelStreamDelta } from '../src/types.js'
 
 async function* deltas(items: ModelStreamDelta[]): AsyncGenerator<ModelStreamDelta> {
   for (const item of items) yield item
+}
+
+function sseFetch(sse: string, onRequest?: (url: string, init?: RequestInit) => void) {
+  const mockFetch = vi.fn(async (url: string, init?: RequestInit) => {
+    onRequest?.(url, init)
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(sse))
+          controller.close()
+        },
+      }),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    )
+  })
+  vi.stubGlobal('fetch', mockFetch)
+  return mockFetch
 }
 
 describe('collectModelStream', () => {
@@ -138,6 +156,12 @@ const FREEFORM_SPEC_REQUEST: ModelChatRequest = {
     },
   ],
 }
+
+const FREEFORM_TOOL = {
+  name: 'exec',
+  description: 'Run JavaScript',
+  format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+} as const
 
 describe('freeform capability factories (D5)', () => {
   it('withFreeformTools() is text-only plus freeform', () => {
@@ -303,5 +327,155 @@ describe('readTimeoutModelStream', () => {
     }
     expect(caught).toBeInstanceOf(StreamReadTimeoutError)
     expect(out).toEqual([{ type: 'text', delta: 'tick' }])
+  })
+})
+
+describe('ChatGptCodexProvider native surface', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('declares freeform yes / image no / document no', () => {
+    expect(new ChatGptCodexProvider('tok', 'acct').capabilities()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+  })
+
+  it('hard-sets the codex body fields, overriding the caller tool choice', () => {
+    const body = new ChatGptCodexProvider('tok', 'acct').buildModelResponsesBody({
+      context: [{ kind: 'message', message: { role: 'user', content: 'hi' } }],
+      toolChoice: { type: 'required' },
+    })
+    expect(body.store).toBe(false)
+    expect(body.stream).toBe(true)
+    expect(body.include).toEqual(['reasoning.encrypted_content'])
+    expect(body.parallel_tool_calls).toBe(true)
+    expect(body.tool_choice).toBe('auto')
+    expect(body.instructions).toBe('You are a helpful assistant.')
+    expect(body.model).toBe('gpt-5.5')
+  })
+
+  it('normalizes a per-request reasoning effort and deletes the raw key', () => {
+    const body = new ChatGptCodexProvider('tok', 'acct').buildModelResponsesBody({
+      context: [],
+      providerOptions: { reasoning_effort: 'high' },
+    })
+    expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+    expect(body.reasoning_effort).toBeUndefined()
+    expect('reasoning_effort' in body).toBe(false)
+  })
+
+  it('lets the per-request effort beat the provider default', () => {
+    const body = new ChatGptCodexProvider('tok', 'acct')
+      .reasoningEffort('low')
+      .buildModelResponsesBody({ context: [], providerOptions: { reasoning_effort: 'high' } })
+    expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
+  it('uses the provider default when the request supplies none', () => {
+    const body = new ChatGptCodexProvider('tok', 'acct')
+      .reasoningEffort('high')
+      .buildModelResponsesBody({ context: [] })
+    expect(body.reasoning).toEqual({ effort: 'high', summary: 'auto' })
+  })
+
+  it('omits reasoning entirely when neither is set', () => {
+    expect(
+      new ChatGptCodexProvider('tok', 'acct').buildModelResponsesBody({ context: [] }).reasoning,
+    ).toBeUndefined()
+  })
+
+  it('streams a freeform call and collects it', async () => {
+    const sse =
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"console."}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_js","name":"exec","input":"console.log(1);\\n"}}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3}}}\n\n'
+    sseFetch(sse)
+
+    const response = await collectModelStream(
+      new ChatGptCodexProvider('tok', 'acct').modelStream({
+        context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+        toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+      }),
+    )
+    expect(response.toolCalls).toEqual([
+      { kind: 'freeform', id: 'call_js', name: 'exec', input: 'console.log(1);\n' },
+    ])
+    expect(response.stopReason).toBe('tool_use')
+    expect(response.usage.outputTokens).toBe(3)
+  })
+
+  it('modelChat collects the native stream and backfills the model id', async () => {
+    const sse =
+      `data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_js","name":"exec","input":"text('captured');"}}\n\n` +
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":4,"output_tokens":5}}}\n\n'
+    sseFetch(sse)
+
+    const response = await new ChatGptCodexProvider('tok', 'acct').modelChat({
+      context: [{ kind: 'message', message: { role: 'user', content: 'run js' } }],
+      toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+    })
+    expect(response.toolCalls).toEqual([
+      { kind: 'freeform', id: 'call_js', name: 'exec', input: "text('captured');" },
+    ])
+    expect(response.model).toBe('gpt-5.5')
+  })
+
+  it('maps response.incomplete to max_tokens', async () => {
+    sseFetch(
+      'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' +
+        'data: {"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":6,"output_tokens":7}}}\n\n',
+    )
+    const response = await new ChatGptCodexProvider('tok', 'acct').modelChat({
+      context: [{ kind: 'message', message: { role: 'user', content: 'short' } }],
+    })
+    expect(response.content).toBe('partial')
+    expect(response.stopReason).toBe('max_tokens')
+    expect(response.usage.outputTokens).toBe(7)
+  })
+
+  it('sends the custom tool and the symmetric history byte-exact', async () => {
+    const raw = '{"this":"looks like json"}\nconsole.log(\'but is JS\');'
+    let sent: Record<string, any> = {}
+    sseFetch(
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":1,"output_tokens":1}}}\n\n',
+      (_url, init) => {
+        sent = JSON.parse(String(init?.body))
+      },
+    )
+
+    const response = await new ChatGptCodexProvider('tok', 'acct').modelChat({
+      context: [
+        { kind: 'message', message: { role: 'user', content: 'run js' } },
+        { kind: 'toolCall', call: { kind: 'freeform', id: 'call_js', name: 'exec', input: raw } },
+        {
+          kind: 'toolOutput',
+          output: { kind: 'custom', callId: 'call_js', name: 'exec', output: 'done' },
+        },
+      ],
+      toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+    })
+
+    expect(sent.tools[0].type).toBe('custom')
+    expect(sent.input.map((item: Record<string, unknown>) => item.type)).toEqual([
+      'message',
+      'custom_tool_call',
+      'custom_tool_call_output',
+    ])
+    expect(sent.input[1].input).toBe(raw)
+    expect(response.stopReason).toBe('end_turn')
+  })
+
+  it('throws IncompleteStreamError with the hyphenated provider token on truncation', async () => {
+    sseFetch(
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"console."}\n\n',
+    )
+    await expect(
+      collectModelStream(new ChatGptCodexProvider('tok', 'acct').modelStream({ context: [] })),
+    ).rejects.toThrow('incomplete stream: chatgpt-codex ended without a terminal event')
+    await expect(
+      collectModelStream(new ChatGptCodexProvider('tok', 'acct').modelStream({ context: [] })),
+    ).rejects.toBeInstanceOf(IncompleteStreamError)
   })
 })

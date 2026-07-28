@@ -12,9 +12,16 @@ import { IncompleteStreamError, StreamError } from '../error.js'
 import { postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_CHATGPT_CODEX_MODEL } from '../models.js'
-import { textOnly, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
-import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import {
+  validateModelRequest,
+  withFreeformTools,
+  type ProviderCapabilities,
+  type ProviderRequestOptions,
+} from '../provider.js'
+import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
+import { buildModelRequestBody, modelStreamAdapter } from '../serialize/responses.js'
+import {
+  collectModelStream,
   collectStream,
   doneWithStopReason,
   textEvent,
@@ -23,9 +30,19 @@ import {
   toolCallEndWithId,
   toolCallStart,
   usageEvent,
+  type BoxModelStream,
   type BoxStream,
 } from '../stream.js'
-import type { ChatRequest, ChatResponse, StopReason, StreamEvent, Usage } from '../types.js'
+import type {
+  ChatRequest,
+  ChatResponse,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelStreamDelta,
+  StopReason,
+  StreamEvent,
+  Usage,
+} from '../types.js'
 
 export const DEFAULT_CHATGPT_CODEX_URL = 'https://chatgpt.com/backend-api/codex/responses'
 const CHATGPT_CODEX_ORIGINATOR = 'codex_cli_rs'
@@ -103,7 +120,7 @@ export class ChatGptCodexProvider {
   }
 
   capabilities(): ProviderCapabilities {
-    return textOnly()
+    return withFreeformTools()
   }
 
   /** Resolve the bearer token for one attempt: static string, or one TokenSource call. */
@@ -214,6 +231,26 @@ export class ChatGptCodexProvider {
     if (effort !== undefined) body.reasoning = { effort, summary: 'auto' }
 
     if (request.temperature !== undefined) body.temperature = request.temperature
+
+    return body
+  }
+
+  /** Build the native Responses request body. Public for unit tests. */
+  buildModelResponsesBody(request: ModelChatRequest): Record<string, unknown> {
+    const body = buildModelRequestBody(request, this.model, true, 'You are a helpful assistant.')
+    body.store = false
+    body.include = ['reasoning.encrypted_content']
+    body.tool_choice = 'auto'
+    body.parallel_tool_calls = true
+
+    let effort: string | undefined
+    const candidate = request.providerOptions?.reasoning_effort
+    if (typeof candidate === 'string') effort = candidate
+    if (effort === undefined) effort = this._reasoningEffort
+    if (effort !== undefined) {
+      body.reasoning = { effort, summary: 'auto' }
+      delete body.reasoning_effort
+    }
 
     return body
   }
@@ -342,5 +379,39 @@ export class ChatGptCodexProvider {
     throw new IncompleteStreamError(
       'incomplete stream: chatgpt_codex ended without a terminal event',
     )
+  }
+
+  async modelChat(
+    request: ModelChatRequest,
+    opts?: ProviderRequestOptions,
+  ): Promise<ModelChatResponse> {
+    const model = request.model ?? this.model
+    const response = await collectModelStream(this.modelStream(request, opts))
+    if (!response.model) response.model = model
+    return response
+  }
+
+  modelStream(request: ModelChatRequest, opts?: ProviderRequestOptions): BoxModelStream {
+    validateModelRequest(request, this.capabilities())
+    return this.modelStreamImpl(request, opts)
+  }
+
+  private async *modelStreamImpl(
+    request: ModelChatRequest,
+    opts?: ProviderRequestOptions,
+  ): AsyncGenerator<ModelStreamDelta> {
+    const body = this.buildModelResponsesBody(request)
+    const responseBody = await withRetry(
+      this.retryPolicy,
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, async () =>
+          postStream(this.baseUrl, this.headers(await this.resolveToken()), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
+      classifyForRetry,
+    )
+    yield* modelStreamAdapter(responseBody, 'chatgpt-codex')
   }
 }

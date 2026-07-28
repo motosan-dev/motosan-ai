@@ -424,12 +424,12 @@ describe('ChatGptCodexProvider HTTP', () => {
     expect(body.input[0].content[0].type).toBe('input_text')
   })
 
-  it('has text-only capabilities', () => {
+  it('has text-only native-freeform capabilities', () => {
     expect(new ChatGptCodexProvider('t', 'a').capabilities()).toEqual({
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: false,
-      supportsFreeformTools: false,
+      supportsFreeformTools: true,
     })
   })
 
