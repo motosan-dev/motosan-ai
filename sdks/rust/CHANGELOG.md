@@ -4,6 +4,15 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Native model streams (`model_stream_with`) now report EOF-truncation as
+  `incomplete stream: <provider> ended without a terminal event`
+  (`openai` / `chatgpt-codex`), matching the spec's message convention. The
+  previous payload was `responses stream ended without a terminal event`.
+  Match on the `IncompleteStream` variant, not the message text.
+  `providers::responses::model_stream_adapter` accordingly gained a
+  `provider: &'static str` parameter.
+
 ### Fixed
 - `ThinkStripper` no longer panics on multi-byte UTF-8 content inside an
   unterminated `<think>` block (the buffered-tail cut in the in-think branch

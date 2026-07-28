@@ -400,7 +400,7 @@ fn encode_user_content(message: &Message) -> Vec<Value> {
 }
 
 #[cfg(feature = "_http")]
-pub fn model_stream_adapter<S>(sse: S) -> crate::stream::BoxModelStream
+pub fn model_stream_adapter<S>(sse: S, provider: &'static str) -> crate::stream::BoxModelStream
 where
     S: futures_core::Stream<
             Item = Result<
@@ -417,6 +417,7 @@ where
         saw_tool_call: false,
         error: None,
         saw_terminal: false,
+        provider,
     })
 }
 
@@ -437,6 +438,7 @@ struct ResponsesModelStreamAdapter {
     saw_tool_call: bool,
     error: Option<String>,
     saw_terminal: bool,
+    provider: &'static str,
 }
 
 #[cfg(feature = "_http")]
@@ -633,9 +635,10 @@ impl futures_core::Stream for ResponsesModelStreamAdapter {
                     if !self.saw_terminal {
                         self.saw_terminal = true;
                         return Poll::Ready(Some(Err(
-                            crate::error::MotosanError::IncompleteStream(
-                                "responses stream ended without a terminal event".to_string(),
-                            ),
+                            crate::error::MotosanError::IncompleteStream(format!(
+                                "{} ended without a terminal event",
+                                self.provider
+                            )),
                         )));
                     }
                     return Poll::Ready(None);

@@ -274,6 +274,42 @@ async fn native_custom_openai_stream_decodes_custom_delta_and_done() {
 }
 
 #[tokio::test]
+async fn native_openai_stream_eof_without_terminal_is_incomplete() {
+    let mut server = mockito::Server::new_async().await;
+    // Text deltas but NO response.completed / response.incomplete → truncated.
+    let sse = concat!(
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n",
+        "data: {\"type\":\"response.output_text.delta\",\"delta\":\"lo\"}\n\n"
+    );
+    let mock = server
+        .mock("POST", "/v1/responses")
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider = OpenAIProvider::new("test-key", None)
+        .with_responses_api(true)
+        .with_responses_url(format!("{}/v1/responses", server.url()));
+
+    let stream = provider
+        .model_stream(native_custom_request())
+        .await
+        .expect("native stream");
+    let err = collect_model_stream(stream)
+        .await
+        .expect_err("EOF without terminal must yield IncompleteStream");
+    match err {
+        MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "openai ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn openai_chat_maps_response() {
     let mut server = mockito::Server::new_async().await;
     let mock = server

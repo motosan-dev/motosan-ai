@@ -208,6 +208,18 @@ Freeform transport through its Responses endpoint by default. Unsupported
 providers reject native Freeform specs or history with
 `MotosanError::UnsupportedFeature` before network I/O.
 
+### Stream termination (native)
+
+`ModelStreamDelta` streams follow the [Stream termination
+contract](#stream-termination-contract): exactly one `Done { stop_reason }`
+delta per successfully completed stream, emitted when the wire delivers a
+`response.completed` or `response.incomplete` terminal event. When the byte
+stream ends (EOF) without either terminal, the adapter yields
+`MotosanError::IncompleteStream` with the standard payload
+`<provider> ended without a terminal event` (provider names: `openai`,
+`chatgpt-codex`). `collect_model_stream` propagates that error; its
+`stop_reason` heuristic applies only to streams that did deliver a terminal.
+
 ## Usage
 
 | Field | Type |
@@ -286,11 +298,12 @@ end of a stream:
 
 | Provider family | Terminal event |
 |-----------------|----------------|
-| OpenAI | `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices; `finish_reason` is the semantic terminal, `[DONE]` the transport epilogue) |
+| OpenAI (legacy `stream()` adapter) | `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices; `finish_reason` is the semantic terminal, `[DONE]` the transport epilogue) |
 | MiniMax | Python: `data: [DONE]` SSE sentinel, or a `finish_reason`-bearing chunk (either suffices, as for OpenAI — own OpenAI-compatible-wire adapter). Rust / TypeScript: `message_stop` — both delegate to the Anthropic adapter (Rust `build_minimax_provider` constructs an `AnthropicProvider`; TS `MinimaxProvider` wraps one), so the Anthropic rule applies |
 | Anthropic | `message_stop` SSE event (the Python adapter additionally treats a stray `data: [DONE]` as terminal) |
 | Gemini, GeminiCodeAssist | final SSE chunk carrying `finishReason` (a trailing `[DONE]` is tolerated but not required) |
-| ChatGPT Codex | `response.completed` SSE event |
+| ChatGPT Codex (legacy `stream()` adapter) | `response.completed` SSE event |
+| OpenAI Responses mode / ChatGPT Codex — native model API (`model_stream`) | `response.completed` or `response.incomplete` SSE event (either is a received terminal) |
 | Ollama | final NDJSON object with `"done": true` |
 
 **Terminal-event rule.** Enforcement lives in the **stream adapters**,

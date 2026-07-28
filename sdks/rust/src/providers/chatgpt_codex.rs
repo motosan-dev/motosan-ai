@@ -421,6 +421,7 @@ impl ProviderImpl for ChatGptCodexProvider {
 
         Ok(crate::providers::responses::model_stream_adapter(
             response.bytes_stream().eventsource(),
+            "chatgpt-codex",
         ))
     }
 }
