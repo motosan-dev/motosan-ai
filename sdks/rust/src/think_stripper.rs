@@ -33,13 +33,16 @@ impl ThinkStripper {
                 match self.buf.find("</think>") {
                     None => {
                         let keep = "</think>".len() - 1;
-                        if self.buf.len() > keep {
-                            self.buf = self.buf[self.buf.len() - keep..].to_string();
+                        let mut cut = self.buf.len().saturating_sub(keep);
+                        // Ensure we split on a char boundary (important for multi-byte UTF-8)
+                        while cut > 0 && !self.buf.is_char_boundary(cut) {
+                            cut -= 1;
                         }
+                        self.buf.drain(..cut);
                         break;
                     }
                     Some(end) => {
-                        self.buf = self.buf[end + "</think>".len()..].to_string();
+                        self.buf.drain(..end + "</think>".len());
                         self.in_think = false;
                     }
                 }
@@ -52,13 +55,21 @@ impl ThinkStripper {
                         while safe > 0 && !self.buf.is_char_boundary(safe) {
                             safe -= 1;
                         }
+                        if output.is_empty() {
+                            // Fast path: hand the buffer's allocation to the caller;
+                            // self.buf becomes the freshly-split tiny tail. This removes
+                            // the second full-size copy AND the full-size tail realloc
+                            // (the tail alloc is ≤ a few bytes).
+                            let tail = self.buf.split_off(safe);
+                            return std::mem::replace(&mut self.buf, tail);
+                        }
                         output.push_str(&self.buf[..safe]);
-                        self.buf = self.buf[safe..].to_string();
+                        self.buf.drain(..safe);
                         break;
                     }
                     Some(start) => {
                         output.push_str(&self.buf[..start]);
-                        self.buf = self.buf[start + "<think>".len()..].to_string();
+                        self.buf.drain(..start + "<think>".len());
                         self.in_think = true;
                     }
                 }
@@ -138,5 +149,25 @@ mod tests {
         let mut s = ThinkStripper::new();
         s.feed("<think>still thinking");
         assert_eq!(s.flush(), "");
+    }
+
+    #[test]
+    fn multibyte_thinking_content_does_not_panic() {
+        let mut s = ThinkStripper::new();
+        // 8 three-byte chars = 24 bytes; len - 7 = 17 is NOT a char boundary.
+        assert_eq!(s.feed("<think>中文思考中文思考"), "");
+        let mut out = s.feed("</think>答案");
+        out.push_str(&s.flush());
+        assert_eq!(out, "答案");
+    }
+
+    #[test]
+    fn multibyte_passthrough_across_chunks() {
+        let mut s = ThinkStripper::new();
+        let mut out = String::new();
+        out.push_str(&s.feed("回答是："));
+        out.push_str(&s.feed("四十二。"));
+        out.push_str(&s.flush());
+        assert_eq!(out, "回答是：四十二。");
     }
 }
