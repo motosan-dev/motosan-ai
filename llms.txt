@@ -1127,12 +1127,12 @@ git push origin main anthropic-oauth-v0.1.1
 ### CI Pipeline
 
 Tag push triggers GitHub Actions:
-- **publish-python.yml**: `uv build` → `pypa/gh-action-pypi-publish` (secret: `PYPI_API_TOKEN`)
-- **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
-- **publish-typescript.yml**: `npm ci` → `npm run build` → `npm run test` → version-matches-tag guard → `npm publish --provenance --access public` (secret: `NPM_TOKEN`)
-- **publish-motosan-ai-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
-- **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
-- **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `cargo publish` (secret: `CARGO_REGISTRY_TOKEN`)
+- **publish-python.yml**: tag-vs-pyproject guard → sync/lint/format/test → `uv build` → `pypa/gh-action-pypi-publish` (Trusted Publishing, no token)
+- **publish-rust.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test --all-features` → `crates-io-auth-action` → `cargo publish` + checksum verify (Trusted Publishing, no token)
+- **publish-typescript.yml**: `npm ci` → `npm run build` → `npm run test` → version-matches-tag guard → `npm publish --access public` (Trusted Publishing, no token; needs npm >= 11.5.1, provenance is automatic)
+- **publish-motosan-ai-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
+- **publish-codex-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
+- **publish-anthropic-oauth.yml**: `cargo fmt --check` → `cargo clippy` → `cargo test` → `crates-io-auth-action` → `cargo publish` (Trusted Publishing, no token)
 
 All Rust workflows support `workflow_dispatch` for manual trigger.
 
