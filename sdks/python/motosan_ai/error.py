@@ -59,3 +59,19 @@ class StreamReadTimeoutError(MotosanError):
     mid-stream, a retry would replay already-yielded deltas. Mirrors Rust
     ``StreamReadTimeout`` / TS ``StreamReadTimeoutError``.
     """
+
+
+class UnsupportedFeatureError(InvalidRequestError):
+    """The provider cannot serve a feature the request asked for.
+
+    Raised before any network I/O: native Freeform tool specs or history on a
+    provider that does not support them, image/document content on a provider
+    that does not accept it, or a native model request on a provider with no
+    native path.
+
+    Deliberately subclasses InvalidRequestError as a migration softener:
+    existing ``except InvalidRequestError`` handlers keep working, while
+    callers that must distinguish match this subclass. Non-retryable by
+    inheritance. Mirrors Rust ``MotosanError::UnsupportedFeature`` and
+    TypeScript ``UnsupportedFeatureError``.
+    """
