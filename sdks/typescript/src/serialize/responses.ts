@@ -17,6 +17,8 @@
  * the SSE adapter too, because the Responses codec is symmetric and shared.
  */
 
+import { IncompleteStreamError, StreamError } from '../error.js'
+import { parseSse } from '../http/sse.js'
 import type {
   FunctionCallOutputContentItem,
   FunctionCallOutputPayload,
@@ -24,6 +26,7 @@ import type {
   ModelChatRequest,
   ModelChatResponse,
   ModelContextItem,
+  ModelStreamDelta,
   ModelToolCall,
   ModelToolOutput,
   ModelToolSpec,
@@ -483,4 +486,147 @@ export function modelChatResponseFromOutput(
   }
   if (thinking !== undefined) response.thinking = thinking
   return response
+}
+
+/**
+ * First non-empty wins: top-level `message` -> `response.error.message` ->
+ * `error.message` -> fallback. Mirrors Rust's error arm in
+ * ResponsesModelStreamAdapter::handle_event.
+ */
+function responsesStreamErrorMessage(data: Record<string, any>): string {
+  if (typeof data.message === 'string' && data.message) return data.message
+  const nested = asRecord(asRecord(data.response)?.error)?.message
+  if (typeof nested === 'string' && nested) return nested
+  const top = asRecord(data.error)?.message
+  if (typeof top === 'string' && top) return top
+  return 'responses stream error'
+}
+
+/**
+ * Adapt a Responses SSE byte stream into ModelStreamDelta values.
+ *
+ * Contract (specs/types.md § Stream termination (native), milestone D8):
+ *   - Exactly ONE terminal `done` per successfully completed stream, emitted
+ *     on `response.completed` or `response.incomplete`. Frames after the
+ *     terminal are consumed but produce no second done.
+ *   - EOF without either terminal throws IncompleteStreamError carrying
+ *     `<provider> ended without a terminal event`. Callers pass `openai` or
+ *     `chatgpt-codex` (HYPHEN — the legacy chat adapter's `chatgpt_codex`
+ *     token is a different, unchanged string).
+ *   - Pending deltas from a frame are yielded before an error frame throws.
+ *   - `tool_call_done` is authoritative; the accumulated input/argument
+ *     deltas are display bookkeeping only.
+ */
+export async function* modelStreamAdapter(
+  body: ReadableStream<Uint8Array>,
+  provider: string,
+): AsyncGenerator<ModelStreamDelta> {
+  const itemToCallId = new Map<string, string>()
+  let sawToolCall = false
+  let sawTerminal = false
+
+  const rememberOutputItem = (item: Record<string, any>): void => {
+    if (item.type !== 'function_call' && item.type !== 'custom_tool_call') return
+    if (typeof item.call_id !== 'string') return
+    sawToolCall = true
+    if (typeof item.id === 'string' && item.id !== '') itemToCallId.set(item.id, item.call_id)
+  }
+
+  const callIdFromEvent = (data: Record<string, any>): string | undefined => {
+    if (typeof data.call_id === 'string') return data.call_id
+    if (typeof data.item_id === 'string') return itemToCallId.get(data.item_id) ?? data.item_id
+    return undefined
+  }
+
+  for await (const evt of parseSse(body)) {
+    const data = evt.data
+    if (!data || data === '[DONE]' || typeof data !== 'object') continue
+    if (sawTerminal) continue
+
+    switch (data.type) {
+      case 'response.output_text.delta': {
+        if (typeof data.delta === 'string' && data.delta !== '') {
+          yield { type: 'text', delta: data.delta }
+        }
+        break
+      }
+      case 'response.reasoning_text.delta':
+      case 'response.reasoning_summary_text.delta': {
+        if (typeof data.delta === 'string' && data.delta !== '') {
+          yield { type: 'thinking_delta', delta: data.delta }
+        }
+        break
+      }
+      case 'response.reasoning_text.done':
+      case 'response.reasoning_summary_text.done': {
+        const thinking =
+          typeof data.text === 'string'
+            ? data.text
+            : typeof data.delta === 'string'
+              ? data.delta
+              : undefined
+        if (thinking !== undefined) yield { type: 'thinking_done', thinking }
+        break
+      }
+      case 'response.output_item.added': {
+        const item = asRecord(data.item)
+        if (item !== undefined) rememberOutputItem(item)
+        break
+      }
+      case 'response.function_call_arguments.delta': {
+        const callId = callIdFromEvent(data)
+        if (callId !== undefined && typeof data.delta === 'string') {
+          yield { type: 'function_arguments', callId, delta: data.delta }
+        }
+        break
+      }
+      case 'response.custom_tool_call_input.delta': {
+        const callId = callIdFromEvent(data)
+        if (callId !== undefined && typeof data.delta === 'string') {
+          yield { type: 'freeform_input', callId, delta: data.delta }
+        }
+        break
+      }
+      case 'response.output_item.done': {
+        const item = asRecord(data.item)
+        if (item !== undefined) {
+          rememberOutputItem(item)
+          const call = decodeToolCall(item)
+          if (call !== undefined) {
+            sawToolCall = true
+            yield { type: 'tool_call_done', call }
+          }
+        }
+        break
+      }
+      case 'response.completed':
+      case 'response.incomplete': {
+        const response = asRecord(data.response)
+        const usage = decodeUsage(response?.usage)
+        if (
+          usage.inputTokens !== 0 ||
+          usage.outputTokens !== 0 ||
+          usage.cacheCreationInputTokens !== undefined ||
+          usage.cacheReadInputTokens !== undefined
+        ) {
+          yield { type: 'usage', usage }
+        }
+        const status = typeof response?.status === 'string' ? response.status : undefined
+        yield { type: 'done', stopReason: stopReasonFromStatus(status, sawToolCall) }
+        sawTerminal = true
+        break
+      }
+      case 'error':
+      case 'response.failed': {
+        sawTerminal = true
+        throw new StreamError(responsesStreamErrorMessage(data))
+      }
+      default:
+        break
+    }
+  }
+
+  if (!sawTerminal) {
+    throw new IncompleteStreamError(`incomplete stream: ${provider} ended without a terminal event`)
+  }
 }

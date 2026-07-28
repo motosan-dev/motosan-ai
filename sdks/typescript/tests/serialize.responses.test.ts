@@ -12,14 +12,36 @@ import {
   encodeTools,
   encodeToolSpec,
   modelChatResponseFromOutput,
+  modelStreamAdapter,
   stopReasonFromStatus,
 } from '../src/serialize/responses.js'
-import type { FreeformTool, ModelChatRequest, ModelToolSpec } from '../src/types.js'
+import { IncompleteStreamError, StreamError } from '../src/error.js'
+import type {
+  FreeformTool,
+  ModelChatRequest,
+  ModelStreamDelta,
+  ModelToolSpec,
+} from '../src/types.js'
 
 const GRAMMAR_TOOL: FreeformTool = {
   name: 'exec',
   description: 'Run JavaScript',
   format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+}
+
+function sseBody(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text))
+      controller.close()
+    },
+  })
+}
+
+async function drainDeltas(sse: string, provider = 'openai'): Promise<ModelStreamDelta[]> {
+  const deltas: ModelStreamDelta[] = []
+  for await (const delta of modelStreamAdapter(sseBody(sse), provider)) deltas.push(delta)
+  return deltas
 }
 
 describe('encodeToolSpec', () => {
@@ -599,5 +621,170 @@ describe('modelChatResponseFromOutput', () => {
   it('omits thinking entirely when there is no reasoning summary', () => {
     const response = modelChatResponseFromOutput({ status: 'completed' }, 'm')
     expect('thinking' in response).toBe(false)
+  })
+})
+
+describe('modelStreamAdapter', () => {
+  it('decodes custom tool input deltas plus an authoritative tool_call_done', async () => {
+    const sse =
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"console."}\n\n' +
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"log(1);\\n"}\n\n' +
+      'data: {"type":"response.output_item.done","item":{"type":"custom_tool_call","call_id":"call_js","name":"exec","input":"console.log(1);\\n"}}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3}}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'freeform_input', callId: 'call_js', delta: 'console.' },
+      { type: 'freeform_input', callId: 'call_js', delta: 'log(1);\n' },
+      {
+        type: 'tool_call_done',
+        call: { kind: 'freeform', id: 'call_js', name: 'exec', input: 'console.log(1);\n' },
+      },
+      { type: 'usage', usage: { inputTokens: 2, outputTokens: 3 } },
+      { type: 'done', stopReason: 'tool_use' },
+    ])
+  })
+
+  it('emits text deltas and skips empty ones', async () => {
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"hel"}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":""}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":"lo"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'text', delta: 'hel' },
+      { type: 'text', delta: 'lo' },
+      { type: 'done', stopReason: 'end_turn' },
+    ])
+  })
+
+  it('emits thinking deltas and a thinking_done from both reasoning families', async () => {
+    const sse =
+      'data: {"type":"response.reasoning_text.delta","delta":"think "}\n\n' +
+      'data: {"type":"response.reasoning_summary_text.delta","delta":"hard"}\n\n' +
+      'data: {"type":"response.reasoning_summary_text.done","text":"think hard"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'thinking_delta', delta: 'think ' },
+      { type: 'thinking_delta', delta: 'hard' },
+      { type: 'thinking_done', thinking: 'think hard' },
+      { type: 'done', stopReason: 'end_turn' },
+    ])
+  })
+
+  it('resolves call_id through the item map when frames are keyed by item_id', async () => {
+    const sse =
+      'data: {"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f"}}\n\n' +
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\\"a\\":1}"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'function_arguments', callId: 'call_1', delta: '{"a":1}' },
+      { type: 'done', stopReason: 'tool_use' },
+    ])
+  })
+
+  it('falls back to the raw item_id when the map has no entry', async () => {
+    const sse =
+      'data: {"type":"response.function_call_arguments.delta","item_id":"fc_orphan","delta":"x"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'function_arguments', callId: 'fc_orphan', delta: 'x' },
+      { type: 'done', stopReason: 'end_turn' },
+    ])
+  })
+
+  it('maps response.incomplete to a max_tokens done', async () => {
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"partial"}\n\n' +
+      'data: {"type":"response.incomplete","response":{"status":"incomplete","usage":{"input_tokens":6,"output_tokens":7}}}\n\n'
+
+    expect(await drainDeltas(sse)).toEqual([
+      { type: 'text', delta: 'partial' },
+      { type: 'usage', usage: { inputTokens: 6, outputTokens: 7 } },
+      { type: 'done', stopReason: 'max_tokens' },
+    ])
+  })
+
+  it('omits the usage delta when the terminal frame carries no usage', async () => {
+    const sse = 'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    expect(await drainDeltas(sse)).toEqual([{ type: 'done', stopReason: 'end_turn' }])
+  })
+
+  it('ignores empty, [DONE], malformed and unknown frames', async () => {
+    const sse =
+      'data: \n\n' +
+      'data: [DONE]\n\n' +
+      'data: {not json}\n\n' +
+      'data: {"type":"response.unknown"}\n\n' +
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n'
+    expect(await drainDeltas(sse)).toEqual([{ type: 'done', stopReason: 'end_turn' }])
+  })
+
+  it('drains pending deltas before surfacing a stream error frame', async () => {
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"before"}\n\n' +
+      'data: {"type":"error","message":"upstream exploded"}\n\n'
+
+    const deltas: ModelStreamDelta[] = []
+    let caught: unknown
+    try {
+      for await (const delta of modelStreamAdapter(sseBody(sse), 'openai')) deltas.push(delta)
+    } catch (error) {
+      caught = error
+    }
+    expect(deltas).toEqual([{ type: 'text', delta: 'before' }])
+    expect(caught).toBeInstanceOf(StreamError)
+    expect((caught as Error).message).toBe('upstream exploded')
+  })
+
+  it('uses the nested response.error.message, then error.message, then a fallback', async () => {
+    const nested =
+      'data: {"type":"response.failed","response":{"error":{"message":"nested boom"}}}\n\n'
+    await expect(drainDeltas(nested)).rejects.toThrow('nested boom')
+
+    const top = 'data: {"type":"error","error":{"message":"top boom"}}\n\n'
+    await expect(drainDeltas(top)).rejects.toThrow('top boom')
+
+    const bare = 'data: {"type":"error"}\n\n'
+    await expect(drainDeltas(bare)).rejects.toThrow('responses stream error')
+  })
+
+  it('throws IncompleteStreamError with the openai payload on EOF without a terminal', async () => {
+    const sse =
+      'data: {"type":"response.output_text.delta","delta":"hel"}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":"lo"}\n\n'
+
+    const deltas: ModelStreamDelta[] = []
+    let caught: unknown
+    try {
+      for await (const delta of modelStreamAdapter(sseBody(sse), 'openai')) deltas.push(delta)
+    } catch (error) {
+      caught = error
+    }
+    expect(deltas.some((d) => d.type === 'done')).toBe(false)
+    expect(caught).toBeInstanceOf(IncompleteStreamError)
+    expect(caught).toBeInstanceOf(StreamError)
+    expect((caught as Error).message).toBe(
+      'incomplete stream: openai ended without a terminal event',
+    )
+  })
+
+  it('uses the hyphenated chatgpt-codex provider token on the native path', async () => {
+    const sse =
+      'data: {"type":"response.custom_tool_call_input.delta","call_id":"call_js","delta":"console."}\n\n'
+    await expect(drainDeltas(sse, 'chatgpt-codex')).rejects.toThrow(
+      'incomplete stream: chatgpt-codex ended without a terminal event',
+    )
+  })
+
+  it('emits exactly one done even when frames follow the terminal', async () => {
+    const sse =
+      'data: {"type":"response.completed","response":{"status":"completed"}}\n\n' +
+      'data: {"type":"response.output_text.delta","delta":"trailing"}\n\n'
+    const deltas = await drainDeltas(sse)
+    expect(deltas.filter((d) => d.type === 'done')).toHaveLength(1)
   })
 })
