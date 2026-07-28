@@ -9,6 +9,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Trusted Publishing: crates.io mints a short-lived token from this
+    # workflow's OIDC identity, so no long-lived registry secret exists.
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: sdks/rust/crates/anthropic-oauth
@@ -23,7 +28,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
       - name: Publish to crates.io
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish

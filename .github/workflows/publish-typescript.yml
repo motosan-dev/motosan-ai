@@ -11,17 +11,28 @@ jobs:
     defaults:
       run:
         working-directory: sdks/typescript
+    # Trusted Publishing: npm authenticates this workflow's OIDC identity, so
+    # no NPM_TOKEN is stored or passed, and provenance is attached by default.
     permissions:
       contents: read
-      id-token: write # required for npm provenance
+      id-token: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Trusted publishing needs Node >= 22.14 AND npm >= 11.5.1. Node 24
+          # satisfies the former; its bundled npm does not always satisfy the
+          # latter, so npm is upgraded and asserted explicitly below.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
           cache: "npm"
           cache-dependency-path: sdks/typescript/package-lock.json
+      - name: Ensure npm supports trusted publishing
+        run: |
+          npm install -g npm@11
+          npm --version | awk -F. '{ if ($1 < 11 || ($1 == 11 && ($2 < 5 || ($2 == 5 && $3 < 1)))) {
+            print "::error::npm " $0 " is older than the 11.5.1 required for trusted publishing"; exit 1 } }'
+          echo "node $(node --version) / npm $(npm --version)"
       - run: npm ci
       - run: npm run build
       - run: npm run test
@@ -34,6 +45,4 @@ jobs:
           TAG="${GITHUB_REF_NAME#ts-v}"
           PKG=$(node -p "require('./package.json').version")
           test "$TAG" = "$PKG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
-      - run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - run: npm publish --access public

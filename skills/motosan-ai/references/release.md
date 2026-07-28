@@ -73,7 +73,7 @@ Steps:
 1. Checkout
 2. Setup uv
 3. uv build --out-dir dist
-4. pypa/gh-action-pypi-publish (secret: PYPI_API_TOKEN)
+4. pypa/gh-action-pypi-publish (Trusted Publishing via OIDC — no token)
 ```
 
 ### publish-rust.yml
@@ -87,22 +87,25 @@ Steps:
 3. cargo fmt --all -- --check
 4. cargo clippy --all-features --all-targets -- -D warnings
 5. cargo test --all-features
-6. cargo publish (secret: CARGO_REGISTRY_TOKEN)
+6. rust-lang/crates-io-auth-action → cargo publish (Trusted Publishing via OIDC — no token)
 ```
 
 Key: Rust workflow runs full validation (fmt + clippy + test) before publish.
 
 ## Pre-Push Local Validation
 
-```bash
-./scripts/pre-push-gate.sh
-```
+The hook is installed by `./scripts/setup-hooks.sh` and runs
+`scripts/pre-push-gate.sh`, which is **path-scoped**: it reads the pushed range
+and runs only the suites whose SDK was touched, so a docs-only push skips them.
 
-Runs 4 steps:
-1. Python unit tests (`uv run pytest`)
-2. Rust unit tests (`cargo test --all-features`)
-3. Python live integration tests (requires `ANTHROPIC_API_KEY`, skipped if unavailable)
-4. Rust live integration tests (requires `ANTHROPIC_API_KEY`, skipped if unavailable)
+1. Version metadata (`scripts/check-versions.py`) — always
+2. Python unit tests — when `sdks/python/**`, `pyproject.toml`, or `uv.lock` changed
+3. Rust unit tests — when `sdks/rust/**` or the workspace `Cargo.toml` changed
+4. TypeScript build + tests — when `sdks/typescript/**` changed
+
+Live provider tests never run in CI and are opt-in locally: `RUN_LIVE=1 git push`.
+Unit runs have provider credentials stripped from the environment, so the
+env-gated live tests inside those suites cannot fire.
 
 ## Emergency Manual Publish
 
@@ -114,12 +117,20 @@ cd sdks/python && uv build --out-dir dist && uv publish dist/*
 cd sdks/rust && cargo publish
 ```
 
-## GitHub Secrets
+## Registry Authentication
 
-| Secret                | Used by              | Purpose                |
-|-----------------------|----------------------|------------------------|
-| `PYPI_API_TOKEN`      | publish-python.yml   | Authenticate to PyPI   |
-| `CARGO_REGISTRY_TOKEN`| publish-rust.yml     | Authenticate to crates.io |
+All six publish workflows use **Trusted Publishing (OIDC)** — no registry
+secrets are stored. Each job declares `permissions: id-token: write` and the
+registry verifies the workflow's GitHub identity:
+
+| Registry  | Mechanism                                                      |
+|-----------|----------------------------------------------------------------|
+| crates.io | `rust-lang/crates-io-auth-action@v1` mints a short-lived token  |
+| PyPI      | `pypa/gh-action-pypi-publish` with no `password:`               |
+| npm       | `npm publish` with npm >= 11.5.1 (provenance attached by default) |
+
+Each registry must have a trusted publisher registered for the specific
+repository *and* workflow file, otherwise publishing fails with an auth error.
 
 ## CI Workflows (non-release)
 

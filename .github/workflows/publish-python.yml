@@ -8,6 +8,11 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    # Trusted Publishing: PyPI authenticates this workflow's OIDC identity,
+    # so no API token is stored or passed.
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: sdks/python
@@ -37,4 +42,3 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: sdks/python/dist/
-          password: ${{ secrets.PYPI_API_TOKEN }}
