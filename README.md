@@ -32,10 +32,9 @@ response = await client.chat([Message.user("Hello")])
 
 ## Install
 
-```toml
-# Rust (Cargo.toml)
-[dependencies]
-motosan-ai = { version = "0.27.0", features = ["anthropic"] }
+```bash
+# Rust
+cargo add motosan-ai --features anthropic
 # features: anthropic | openai | minimax | ollama | ollama_native (alias: ollama-native) | full
 #           gemini | gemini-code-assist | chatgpt-codex | claude-code | codex-cli | gemini-cli
 ```

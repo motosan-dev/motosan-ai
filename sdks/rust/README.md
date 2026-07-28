@@ -393,8 +393,8 @@ Error handling policy reference: `docs/error-handling-policy.md`.
 
 The `claude-code` feature enables `ClaudeCodeProvider`, which shells out to the `claude` CLI binary. The provider exposes a builder covering every SDK-relevant flag that the `claude --print` mode accepts.
 
-```toml
-motosan-ai = { version = "0.27.0", features = ["claude-code"] }
+```bash
+cargo add motosan-ai --features claude-code
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0, unified with HTTP providers). Build the provider with all the claude-specific flags, then hand it to the `Client` setter:
@@ -503,8 +503,8 @@ Notes:
 
 The `codex-cli` feature enables `CodexCliProvider`, which shells out to OpenAI's `codex exec --json` and parses the JSONL event stream.
 
-```toml
-motosan-ai = { version = "0.27.0", features = ["codex-cli"] }
+```bash
+cargo add motosan-ai --features codex-cli
 ```
 
 **Option A — via `Client::builder()`** (since v0.11.0). Build the provider with all the codex-specific flags, then hand it to the `Client` setter:
@@ -566,8 +566,8 @@ Notes:
 
 The `gemini-cli` feature enables `GeminiCliProvider`, which shells out to Google's `gemini -p "" -o stream-json` and parses the NDJSON event stream. Auth is handled by the `gemini` CLI itself (`gemini auth` once; personal Google account or API key) — motosan-ai does not pass any credentials through.
 
-```toml
-motosan-ai = { version = "0.27.0", features = ["gemini-cli"] }
+```bash
+cargo add motosan-ai --features gemini-cli
 ```
 
 **Option A — via `Client::builder()`**:

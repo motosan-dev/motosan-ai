@@ -483,8 +483,8 @@ Automated via `publish-typescript.yml` on a `ts-v*` tag push → npm.
 
 ```bash
 # Bump sdks/typescript/package.json version + CHANGELOG, then:
-git tag ts-v0.15.0
-git push origin ts-v0.15.0
+git tag ts-vX.Y.Z
+git push origin ts-vX.Y.Z
 ```
 
 The Rust, Python, and TypeScript SDKs are versioned and released independently.
