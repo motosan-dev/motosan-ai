@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IncompleteStreamError, StreamReadTimeoutError, UnsupportedFeatureError } from '../src/error.js'
+import { Client, ClientBuilder, type ProviderLike } from '../src/client.js'
 import {
   dispatchModelChat,
   dispatchModelStream,
@@ -14,7 +15,7 @@ import {
 import { ChatGptCodexProvider } from '../src/providers/chatgpt_codex.js'
 import { DEFAULT_OPENAI_RESPONSES_URL, OpenAIProvider } from '../src/providers/openai.js'
 import { collectModelStream } from '../src/stream.js'
-import type { ModelChatRequest, ModelStreamDelta } from '../src/types.js'
+import type { ModelChatRequest, ModelChatResponse, ModelStreamDelta } from '../src/types.js'
 
 async function* deltas(items: ModelStreamDelta[]): AsyncGenerator<ModelStreamDelta> {
   for (const item of items) yield item
@@ -652,5 +653,183 @@ describe('OpenAIProvider native surface', () => {
           .modelStream({ context: [] }),
       ),
     ).rejects.toThrow('incomplete stream: openai ended without a terminal event')
+  })
+})
+
+describe('Client native surface', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('modelChat dispatches through the built provider', async () => {
+    jsonFetch({
+      model: 'gpt-5.5-codex',
+      status: 'completed',
+      output: [{ type: 'message', content: [{ type: 'output_text', text: 'ok' }] }],
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+
+    const client = Client.builder()
+      .provider('openai')
+      .apiKey('test-key')
+      .model('gpt-5.5-codex')
+      .openaiResponsesApi(true)
+      .build()
+
+    const response = await client.modelChat({
+      context: [{ kind: 'message', message: { role: 'user', content: 'hi' } }],
+    })
+    expect(response.content).toBe('ok')
+  })
+
+  it('openaiResponsesApi(true) flips the built provider capabilities', () => {
+    const provider = new ClientBuilder()
+      .provider('openai')
+      .apiKey('k')
+      .openaiResponsesApi(true)
+      .buildProviderForTest()
+    expect(provider.capabilities().supportsFreeformTools).toBe(true)
+  })
+
+  it('defaults the responses opt-in to off, independent of the fallback flag', () => {
+    const plain = new ClientBuilder().provider('openai').apiKey('k').buildProviderForTest()
+    expect(plain.capabilities().supportsFreeformTools).toBe(false)
+
+    const fallbackOnly = new ClientBuilder()
+      .provider('openai')
+      .apiKey('k')
+      .openaiResponsesFallback(true)
+      .buildProviderForTest()
+    expect(fallbackOnly.capabilities().supportsFreeformTools).toBe(false)
+  })
+
+  it('modelStream rejects synchronously before any HTTP when unsupported', () => {
+    const mockFetch = jsonFetch({})
+    const client = Client.builder().provider('openai').apiKey('test-key').build()
+    expect(() =>
+      client.modelStream({
+        context: [],
+        toolSpecs: [{ kind: 'freeform', tool: FREEFORM_TOOL }],
+      }),
+    ).toThrow('provider does not support native freeform tools')
+    expect(mockFetch).not.toHaveBeenCalled()
+  })
+
+  it('modelStreamCollect backfills the model from the request', async () => {
+    sseFetch(
+      'data: {"type":"response.output_text.delta","delta":"hi"}\n\n' +
+        'data: {"type":"response.completed","response":{"status":"completed"}}\n\n',
+    )
+    const client = Client.builder()
+      .provider('openai')
+      .apiKey('test-key')
+      .openaiResponsesApi(true)
+      .build()
+
+    const response = await client.modelStreamCollect({
+      context: [{ kind: 'message', message: { role: 'user', content: 'hi' } }],
+      model: 'gpt-5.5-codex',
+    })
+    expect(response.content).toBe('hi')
+    expect(response.model).toBe('gpt-5.5-codex')
+  })
+
+  it('applies the read-idle timeout to native streams', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(
+                  new TextEncoder().encode(
+                    'data: {"type":"response.output_text.delta","delta":"tick"}\n\n',
+                  ),
+                )
+              },
+            }),
+            { status: 200, headers: { 'content-type': 'text/event-stream' } },
+          ),
+      ),
+    )
+
+    const client = Client.builder()
+      .provider('openai')
+      .apiKey('test-key')
+      .openaiResponsesApi(true)
+      .timeouts({ readIdleMs: 50 })
+      .build()
+
+    const seen: ModelStreamDelta[] = []
+    let caught: unknown
+    try {
+      for await (const delta of client.modelStream({ context: [] })) seen.push(delta)
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(StreamReadTimeoutError)
+    expect(seen).toEqual([{ type: 'text', delta: 'tick' }])
+  })
+})
+
+describe('asDispatchProvider forwards the native surface', () => {
+  const nativeResponse: ModelChatResponse = {
+    content: 'shimmed',
+    toolCalls: [],
+    model: 'm',
+    usage: { inputTokens: 0, outputTokens: 0 },
+    stopReason: 'end_turn',
+  }
+
+  it('keeps modelChat/modelStream when the provider has no capabilities()', async () => {
+    const bare: ProviderLike = {
+      chat: async () => {
+        throw new Error('unused')
+      },
+      stream: () => {
+        throw new Error('unused')
+      },
+      modelChat: async () => nativeResponse,
+      modelStream: () => deltas([{ type: 'done', stopReason: 'end_turn' }]),
+    }
+
+    const client = new Client(bare)
+    expect((await client.modelChat({ context: [] })).content).toBe('shimmed')
+
+    const seen: ModelStreamDelta[] = []
+    for await (const delta of client.modelStream({ context: [] })) seen.push(delta)
+    expect(seen).toEqual([{ type: 'done', stopReason: 'end_turn' }])
+  })
+
+  it('still rejects when a shimmed provider omits the native surface', async () => {
+    const bare: ProviderLike = {
+      chat: async () => {
+        throw new Error('unused')
+      },
+      stream: () => {
+        throw new Error('unused')
+      },
+    }
+    const client = new Client(bare)
+    await expect(client.modelChat({ context: [] })).rejects.toThrow(
+      'provider does not support native model requests',
+    )
+    expect(() => client.modelStream({ context: [] })).toThrow(
+      'provider does not support native model streams',
+    )
+  })
+
+  it('keeps the native surface on a provider that DOES expose capabilities()', async () => {
+    const full: ProviderLike = {
+      capabilities: () => withFreeformTools(),
+      chat: async () => {
+        throw new Error('unused')
+      },
+      stream: () => {
+        throw new Error('unused')
+      },
+      modelChat: async () => nativeResponse,
+    }
+    const client = new Client(full)
+    expect((await client.modelChat({ context: [] })).content).toBe('shimmed')
   })
 })

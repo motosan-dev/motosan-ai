@@ -1,7 +1,10 @@
 import { CancelledError, ConfigError } from './error.js'
 import {
   dispatchChat,
+  dispatchModelChat,
+  dispatchModelStream,
   dispatchStream,
+  readTimeoutModelStream,
   readTimeoutStream,
   textOnly,
   type Provider,
@@ -10,7 +13,7 @@ import {
   type RequestOptions,
 } from './provider.js'
 import { RetryPolicy } from './retry.js'
-import { collectStream, type BoxStream } from './stream.js'
+import { collectModelStream, collectStream, type BoxModelStream, type BoxStream } from './stream.js'
 import { stripThink } from './think_stripper.js'
 import { AnthropicProvider } from './providers/anthropic.js'
 import { MinimaxProvider } from './providers/minimax.js'
@@ -19,7 +22,14 @@ import { OpenAIProvider, type OpenAIAuthStyle } from './providers/openai.js'
 import { GeminiProvider } from './providers/gemini.js'
 import { ChatGptCodexProvider, type TokenSource } from './providers/chatgpt_codex.js'
 import { DEFAULT_OLLAMA_MODEL } from './models.js'
-import type { ChatRequest, ChatResponse, StreamEvent } from './types.js'
+import type {
+  ChatRequest,
+  ChatResponse,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelStreamDelta,
+  StreamEvent,
+} from './types.js'
 
 export type ProviderName = Provider
 
@@ -40,6 +50,12 @@ export interface ProviderLike {
   capabilities?(): ReturnType<DispatchProvider['capabilities']>
   chat(request: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse>
   stream(request: ChatRequest, opts?: ProviderRequestOptions): AsyncIterable<StreamEvent>
+  /** Optional native surface. Forwarded by asDispatchProvider. */
+  modelChat?(request: ModelChatRequest, opts?: ProviderRequestOptions): Promise<ModelChatResponse>
+  modelStream?(
+    request: ModelChatRequest,
+    opts?: ProviderRequestOptions,
+  ): AsyncIterable<ModelStreamDelta>
 }
 
 /**
@@ -67,16 +83,34 @@ const ENV_KEY_BY_PROVIDER: Record<ProviderName, string> = {
   chatgpt_codex: '',
 }
 
+/**
+ * Adapt a caller-supplied ProviderLike to the dispatch contract.
+ *
+ * The rebuild branch names every forwarded property, so new optional provider
+ * methods must be listed here or they will be dropped for providers without
+ * capabilities().
+ */
 function asDispatchProvider(provider: ProviderLike): DispatchProvider {
   if (provider.capabilities) {
     return provider as DispatchProvider
   }
 
-  return {
+  const shim: DispatchProvider = {
     capabilities: textOnly,
     chat: (request: ChatRequest, opts?: ProviderRequestOptions) => provider.chat(request, opts),
     stream: (request: ChatRequest, opts?: ProviderRequestOptions) => provider.stream(request, opts),
   }
+
+  const { modelChat, modelStream } = provider
+  if (modelChat) {
+    shim.modelChat = (request: ModelChatRequest, opts?: ProviderRequestOptions) =>
+      modelChat.call(provider, request, opts)
+  }
+  if (modelStream) {
+    shim.modelStream = (request: ModelChatRequest, opts?: ProviderRequestOptions) =>
+      modelStream.call(provider, request, opts)
+  }
+  return shim
 }
 
 /**
@@ -95,6 +129,7 @@ export class ClientBuilder {
   protected _openaiAuthStyle: OpenAIAuthStyle = { kind: 'bearer' }
   protected _openaiChatUrl?: string
   protected _openaiResponsesFallback = false
+  protected _openaiResponsesApi = false
   protected _openaiResponsesUrl?: string
   protected _ollamaBaseUrl?: string
   protected _ollamaNative?: boolean
@@ -178,6 +213,15 @@ export class ClientBuilder {
     return this
   }
 
+  /**
+   * Opt into the OpenAI Responses API for the native model surface.
+   * Independent of openaiResponsesFallback, which is legacy chat 404 recovery.
+   */
+  openaiResponsesApi(enabled: boolean): this {
+    this._openaiResponsesApi = enabled
+    return this
+  }
+
   openaiResponsesUrl(u: string): this {
     this._openaiResponsesUrl = u
     return this
@@ -246,6 +290,7 @@ export class ClientBuilder {
       let openai = new OpenAIProvider(apiKey, this._model)
         .withRetryPolicy(this._retryPolicy)
         .withAuthStyle(this._openaiAuthStyle)
+        .withResponsesApi(this._openaiResponsesApi)
       if (this._openaiChatUrl) {
         openai = openai.withChatUrl(this._openaiChatUrl)
       }
@@ -487,6 +532,70 @@ export class Client {
     if (request.model) {
       response.model = request.model
     }
+    return response
+  }
+
+  /**
+   * Send a native model request; validates capabilities before any HTTP call.
+   * Signal composition matches chat().
+   */
+  async modelChat(request: ModelChatRequest, opts?: RequestOptions): Promise<ModelChatResponse> {
+    let signal = opts?.signal
+    if (this.totalMs !== undefined) {
+      const total = AbortSignal.timeout(this.totalMs)
+      signal = signal ? AbortSignal.any([signal, total]) : total
+    }
+    try {
+      return await dispatchModelChat(this.provider, request, {
+        signal,
+        callerSignal: opts?.signal,
+        preHeadersTimeoutMs: this.connectMs + this.readIdleMs,
+      })
+    } catch (error) {
+      if (opts?.signal?.aborted && !(error instanceof CancelledError)) {
+        throw new CancelledError()
+      }
+      throw error
+    }
+  }
+
+  /**
+   * Stream a native model request. Native thinking arrives as typed deltas, so
+   * this path applies the read-idle timeout but not stripThink.
+   */
+  modelStream(request: ModelChatRequest, opts?: RequestOptions): BoxModelStream {
+    let stream: BoxModelStream = dispatchModelStream(this.provider, request, {
+      signal: opts?.signal,
+      callerSignal: opts?.signal,
+      preHeadersTimeoutMs: this.connectMs + this.readIdleMs,
+    })
+    stream = readTimeoutModelStream(stream, this.readIdleMs / 1000)
+    return this.translateModelCallerAbort(stream, opts?.signal)
+  }
+
+  /** Mid-stream caller abort surfaces as CancelledError on the native path too. */
+  private async *translateModelCallerAbort(
+    inner: BoxModelStream,
+    callerSignal: AbortSignal | undefined,
+  ): BoxModelStream {
+    try {
+      for await (const delta of inner) yield delta
+    } catch (error) {
+      if (callerSignal?.aborted && !(error instanceof CancelledError)) {
+        throw new CancelledError()
+      }
+      throw error
+    }
+  }
+
+  /** Stream and collect a native response, preferring the request's model override. */
+  async modelStreamCollect(
+    request: ModelChatRequest,
+    opts?: RequestOptions,
+  ): Promise<ModelChatResponse> {
+    const modelHint = request.model ?? ''
+    const response = await collectModelStream(this.modelStream(request, opts))
+    if (!response.model) response.model = modelHint
     return response
   }
 }
