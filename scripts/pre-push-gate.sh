@@ -3,7 +3,9 @@ set -euo pipefail
 
 # Pre-push gate: path-scoped unit tests for the SDKs touched by the pushed range.
 # Live tests are OPT-IN: RUN_LIVE=1 git push
-# (scheduled live coverage: ci-python-nightly.yml + ci-rust-nightly.yml).
+# By project decision live provider tests never run in CI, so this — together
+# with the `test-live` dev-shell script and the #[ignore]d live suites — is the
+# only way they run at all.
 #
 # git invokes pre-push with one line per ref on stdin:
 #   <local_ref> <local_sha> <remote_ref> <remote_sha>
