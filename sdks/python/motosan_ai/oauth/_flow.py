@@ -183,7 +183,12 @@ async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = No
     callback_task = asyncio.create_task(wait_for_callback(server))
     browser_task: asyncio.Task[None] | None = None
     if _open_browser is not None:
-        browser_task = asyncio.create_task(_open_browser(auth_url, redirect_uri))
+        browser_awaitable = _open_browser(auth_url, redirect_uri)
+
+        async def _await_browser() -> None:
+            await browser_awaitable
+
+        browser_task = asyncio.create_task(_await_browser())
     else:
         print(f"Open this URL to log in:\n\n  {auth_url}\n")
         webbrowser.open(auth_url)
@@ -202,12 +207,14 @@ async def login(config: OAuthConfig, *, _open_browser: OpenBrowserFn | None = No
             if not done:
                 raise TimeoutError
             if browser_task in done:
-                exc = browser_task.exception()
-                if exc is not None:
+                browser_exc = browser_task.exception()
+                if browser_exc is not None:
                     callback_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await callback_task
-                    raise AuthError(f"OAuth browser callback helper failed: {exc}") from exc
+                    raise AuthError(
+                        f"OAuth browser callback helper failed: {browser_exc}"
+                    ) from browser_exc
             code, returned_state = await asyncio.wait_for(
                 callback_task, timeout=_LOGIN_TIMEOUT_SECS
             )

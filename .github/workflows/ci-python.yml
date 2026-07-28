@@ -27,5 +27,7 @@ jobs:
         run: uv sync --extra full --extra dev
       - name: Lint
         run: uv run ruff check motosan_ai/
+      - name: Type check
+        run: uv run mypy motosan_ai/
       - name: Test
         run: uv run pytest -q

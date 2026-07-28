@@ -166,7 +166,9 @@ class AnthropicProvider(BaseProvider):
 
             if message.role == Role.user:
                 if message.content_blocks:
-                    blocks = [content_block_to_dict(block) for block in message.content_blocks]
+                    blocks: list[dict[str, Any]] = [
+                        content_block_to_dict(block) for block in message.content_blocks
+                    ]
                     if message.cache and blocks:
                         blocks[-1] = _with_cache_control(blocks[-1])
                     outgoing.append({"role": "user", "content": blocks})
@@ -189,7 +191,7 @@ class AnthropicProvider(BaseProvider):
 
             if message.role == Role.assistant:
                 if message.tool_calls:
-                    blocks: list[dict[str, Any]] = []
+                    blocks = []
                     if message.content:
                         blocks.append({"type": "text", "text": message.content})
                     for tc in message.tool_calls:
@@ -404,7 +406,7 @@ class AnthropicProvider(BaseProvider):
             tool_calls=tool_calls,
             model=payload.get("model", self.model),
             usage=_usage_from_dict(payload.get("usage", {})),
-            stop_reason=_STOP_REASON_MAP.get(payload.get("stop_reason"), StopReason.other),
+            stop_reason=_STOP_REASON_MAP.get(payload.get("stop_reason") or "", StopReason.other),
             thinking=thinking,
         )
 
