@@ -22,11 +22,14 @@ import type {
   FunctionCallOutputPayload,
   Message,
   ModelChatRequest,
+  ModelChatResponse,
   ModelContextItem,
   ModelToolCall,
   ModelToolOutput,
   ModelToolSpec,
+  StopReason,
   ToolChoice,
+  Usage,
 } from '../types.js'
 
 /** Encode one tool definition into its Responses wire object. */
@@ -283,4 +286,201 @@ export function buildModelRequestBody(
   }
 
   return body
+}
+
+function asRecord(value: unknown): Record<string, any> | undefined {
+  return value !== null && typeof value === 'object' ? (value as Record<string, any>) : undefined
+}
+
+function numberOrZero(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+/**
+ * Decode a Responses output item into a model tool call.
+ *
+ * Accepts `call_id` OR `id` for the identity, mirroring Rust's
+ * `ModelToolCall` Deserialize. Returns undefined for anything that is not a
+ * `function_call` / `custom_tool_call`, which is how the output-item loops use
+ * it as a filter.
+ */
+export function decodeToolCall(item: unknown): ModelToolCall | undefined {
+  const obj = asRecord(item)
+  if (obj === undefined) return undefined
+
+  const id =
+    typeof obj.call_id === 'string' ? obj.call_id : typeof obj.id === 'string' ? obj.id : undefined
+  const name = typeof obj.name === 'string' ? obj.name : undefined
+  if (id === undefined || name === undefined) return undefined
+
+  if (obj.type === 'function_call') {
+    return {
+      kind: 'function',
+      id,
+      name,
+      arguments: typeof obj.arguments === 'string' ? obj.arguments : '',
+    }
+  }
+  if (obj.type === 'custom_tool_call') {
+    // Raw model text. Never JSON.parse it, never move it into `arguments`.
+    return { kind: 'freeform', id, name, input: typeof obj.input === 'string' ? obj.input : '' }
+  }
+  return undefined
+}
+
+function decodeOutputContentItem(value: unknown): FunctionCallOutputContentItem | undefined {
+  const obj = asRecord(value)
+  if (obj === undefined) return undefined
+  if (obj.type === 'input_text' && typeof obj.text === 'string') {
+    return { type: 'input_text', text: obj.text }
+  }
+  if (obj.type === 'input_image' && typeof obj.image_url === 'string') {
+    const item: FunctionCallOutputContentItem = { type: 'input_image', imageUrl: obj.image_url }
+    if (
+      obj.detail === 'auto' ||
+      obj.detail === 'low' ||
+      obj.detail === 'high' ||
+      obj.detail === 'original'
+    ) {
+      item.detail = obj.detail
+    }
+    return item
+  }
+  if (obj.type === 'encrypted_content' && typeof obj.encrypted_content === 'string') {
+    return { type: 'encrypted_content', encryptedContent: obj.encrypted_content }
+  }
+  return undefined
+}
+
+function decodeOutputPayload(value: unknown): FunctionCallOutputPayload | undefined {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return undefined
+  const items: FunctionCallOutputContentItem[] = []
+  for (const entry of value) {
+    const item = decodeOutputContentItem(entry)
+    if (item === undefined) return undefined
+    items.push(item)
+  }
+  return items
+}
+
+/** Decode a Responses output item into a caller tool output. */
+export function decodeToolOutput(item: unknown): ModelToolOutput | undefined {
+  const obj = asRecord(item)
+  if (obj === undefined) return undefined
+
+  const payload = decodeOutputPayload(obj.output)
+  if (payload === undefined) return undefined
+  const callId = typeof obj.call_id === 'string' ? obj.call_id : undefined
+  if (callId === undefined) return undefined
+
+  if (obj.type === 'function_call_output') {
+    return { kind: 'function', callId, output: payload }
+  }
+  if (obj.type === 'custom_tool_call_output') {
+    const output: ModelToolOutput = { kind: 'custom', callId, output: payload }
+    if (typeof obj.name === 'string') output.name = obj.name
+    return output
+  }
+  return undefined
+}
+
+/** Concatenate the `output_text` parts of a Responses `message` output item. */
+export function decodeOutputText(item: unknown): string | undefined {
+  const obj = asRecord(item)
+  if (obj === undefined || obj.type !== 'message') return undefined
+  if (!Array.isArray(obj.content)) return undefined
+
+  let text = ''
+  for (const part of obj.content) {
+    const partObj = asRecord(part)
+    if (partObj !== undefined && partObj.type === 'output_text' && typeof partObj.text === 'string') {
+      text += partObj.text
+    }
+  }
+  return text === '' ? undefined : text
+}
+
+/**
+ * Decode a Responses usage object. Accepts the Responses key names and the
+ * chat-completions ones; `cacheReadInputTokens` is emitted only when
+ * `input_tokens_details.cached_tokens` is greater than zero.
+ */
+export function decodeUsage(value: unknown): Usage {
+  const usage = asRecord(value)
+  const inputTokens = numberOrZero(usage?.input_tokens ?? usage?.prompt_tokens)
+  const outputTokens = numberOrZero(usage?.output_tokens ?? usage?.completion_tokens)
+  const cached = numberOrZero(asRecord(usage?.input_tokens_details)?.cached_tokens)
+
+  const result: Usage = { inputTokens, outputTokens }
+  if (cached > 0) result.cacheReadInputTokens = cached
+  return result
+}
+
+/** Map a Responses `status` to a StopReason. Tool calls always win. */
+export function stopReasonFromStatus(
+  status: string | undefined,
+  hasToolCalls: boolean,
+): StopReason {
+  if (hasToolCalls) return 'tool_use'
+  if (status === 'incomplete') return 'max_tokens'
+  if (status === undefined || status === 'completed') return 'end_turn'
+  return 'other'
+}
+
+/**
+ * Decode a NON-STREAMING Responses payload into a ModelChatResponse. This is
+ * the genuine blocking decode path (OpenAI); ChatGPT Codex has no
+ * non-streaming endpoint and reaches the same shape via collectModelStream.
+ */
+export function modelChatResponseFromOutput(
+  payload: unknown,
+  defaultModel: string,
+): ModelChatResponse {
+  const obj = asRecord(payload) ?? {}
+  let content = ''
+  let thinking: string | undefined
+  const toolCalls: ModelToolCall[] = []
+
+  if (typeof obj.output_text === 'string') content += obj.output_text
+
+  if (Array.isArray(obj.output)) {
+    for (const item of obj.output) {
+      const text = decodeOutputText(item)
+      if (text !== undefined) content += text
+
+      const itemObj = asRecord(item)
+      if (itemObj !== undefined && itemObj.type === 'reasoning' && Array.isArray(itemObj.summary)) {
+        let summary = ''
+        for (const part of itemObj.summary) {
+          const partObj = asRecord(part)
+          if (partObj === undefined) continue
+          const value =
+            typeof partObj.text === 'string'
+              ? partObj.text
+              : typeof partObj.content === 'string'
+                ? partObj.content
+                : undefined
+          if (value !== undefined) summary += value
+        }
+        if (summary !== '') thinking = summary
+      }
+
+      const call = decodeToolCall(item)
+      if (call !== undefined) toolCalls.push(call)
+    }
+  }
+
+  const response: ModelChatResponse = {
+    content,
+    toolCalls,
+    model: typeof obj.model === 'string' ? obj.model : defaultModel,
+    usage: decodeUsage(obj.usage),
+    stopReason: stopReasonFromStatus(
+      typeof obj.status === 'string' ? obj.status : undefined,
+      toolCalls.length > 0,
+    ),
+  }
+  if (thinking !== undefined) response.thinking = thinking
+  return response
 }
