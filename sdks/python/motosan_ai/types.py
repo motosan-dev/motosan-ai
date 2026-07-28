@@ -673,6 +673,10 @@ class ModelChatRequest:
     provider_options: dict[str, Any] | None = None
     stop_sequences: list[str] | None = None
 
+    @classmethod
+    def builder(cls) -> ModelChatRequestBuilder:
+        return ModelChatRequestBuilder()
+
 
 @dataclass
 class ModelChatResponse:
@@ -739,3 +743,117 @@ ModelStreamDelta = (
     | ModelStreamUsage
     | ModelStreamDone
 )
+
+
+class ModelChatRequestBuilder:
+    """Fluent builder for ModelChatRequest.
+
+    Mirrors ChatRequestBuilder. No ``thinking`` / ``mcp_*`` methods: the
+    native request carries no such fields (milestone D3). Whitespace is NOT
+    trimmed here — the codec trims when it assembles ``instructions``.
+    """
+
+    def __init__(self) -> None:
+        self._context: list[ModelContextItem] = []
+        self._tool_specs: list[ModelToolSpec] = []
+        self._model: str | None = None
+        self._system: str | None = None
+        self._system_blocks: list[SystemBlock] | None = None
+        self._system_cache: bool = False
+        self._temperature: float | None = None
+        self._max_tokens: int | None = None
+        self._tool_choice: ToolChoice | None = None
+        self._provider_options: dict[str, Any] | None = None
+        self._stop_sequences: list[str] | None = None
+
+    def context(self, context: list[ModelContextItem]) -> ModelChatRequestBuilder:
+        self._context = list(context)
+        return self
+
+    def context_item(self, item: ModelContextItem) -> ModelChatRequestBuilder:
+        self._context.append(item)
+        return self
+
+    def message(self, message: Message) -> ModelChatRequestBuilder:
+        self._context.append(ModelContextMessage(message=message))
+        return self
+
+    def tool_call(self, call: ModelToolCall) -> ModelChatRequestBuilder:
+        self._context.append(ModelContextToolCall(call=call))
+        return self
+
+    def tool_output(self, output: ModelToolOutput) -> ModelChatRequestBuilder:
+        self._context.append(ModelContextToolOutput(output=output))
+        return self
+
+    def tool_specs(self, tool_specs: list[ModelToolSpec]) -> ModelChatRequestBuilder:
+        self._tool_specs = list(tool_specs)
+        return self
+
+    def tool_spec(self, tool_spec: ModelToolSpec) -> ModelChatRequestBuilder:
+        self._tool_specs.append(tool_spec)
+        return self
+
+    def model(self, model: str) -> ModelChatRequestBuilder:
+        self._model = model
+        return self
+
+    def system(self, system: str) -> ModelChatRequestBuilder:
+        self._system = system
+        return self
+
+    def system_cached(self, system: str) -> ModelChatRequestBuilder:
+        self._system = system
+        self._system_cache = True
+        return self
+
+    def system_block(self, block: SystemBlock) -> ModelChatRequestBuilder:
+        if self._system_blocks is None:
+            self._system_blocks = []
+        self._system_blocks.append(block)
+        return self
+
+    def system_blocks(self, blocks: list[SystemBlock]) -> ModelChatRequestBuilder:
+        self._system_blocks = list(blocks)
+        return self
+
+    def temperature(self, temperature: float) -> ModelChatRequestBuilder:
+        self._temperature = temperature
+        return self
+
+    def max_tokens(self, max_tokens: int) -> ModelChatRequestBuilder:
+        self._max_tokens = max_tokens
+        return self
+
+    def tool_choice(self, choice: ToolChoice) -> ModelChatRequestBuilder:
+        self._tool_choice = choice
+        return self
+
+    def provider_options(self, options: dict[str, Any]) -> ModelChatRequestBuilder:
+        self._provider_options = dict(options)
+        return self
+
+    def stop(self, sequence: str) -> ModelChatRequestBuilder:
+        if self._stop_sequences is None:
+            self._stop_sequences = []
+        self._stop_sequences.append(sequence)
+        return self
+
+    def stop_sequences(self, sequences: list[str]) -> ModelChatRequestBuilder:
+        self._stop_sequences = list(sequences)
+        return self
+
+    def build(self) -> ModelChatRequest:
+        return ModelChatRequest(
+            context=self._context,
+            tool_specs=self._tool_specs,
+            model=self._model,
+            system=self._system,
+            system_blocks=self._system_blocks,
+            system_cache=self._system_cache,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+            tool_choice=self._tool_choice,
+            provider_options=self._provider_options,
+            stop_sequences=self._stop_sequences,
+        )

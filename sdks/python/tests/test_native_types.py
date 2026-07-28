@@ -33,7 +33,9 @@ from motosan_ai.types import (
     ModelToolSpecFunction,
     Role,
     StopReason,
+    SystemBlock,
     Tool,
+    ToolChoice,
     Usage,
 )
 
@@ -223,3 +225,99 @@ def test_model_stream_delta_variants():
     assert deltas[6].usage.output_tokens == 3
     assert deltas[7].stop_reason == StopReason.tool_use
     assert len({type(d) for d in deltas}) == 8
+
+
+def test_builder_populates_every_field():
+    request = (
+        ModelChatRequest.builder()
+        .model("gpt-5.5-codex")
+        .system("  be terse  ")
+        .temperature(0.25)
+        .max_tokens(512)
+        .tool_choice(ToolChoice.required())
+        .provider_options({"reasoning_effort": "high"})
+        .stop("END")
+        .stop("STOP")
+        .tool_spec(ModelToolSpecFreeform(tool=grammar_fixture()))
+        .message(Message.user("run js"))
+        .tool_call(ModelToolCallFreeform(id="call_js", name="exec", input="console.log(1);"))
+        .tool_output(
+            ModelToolOutputCustom(
+                call_id="call_js", output=FunctionCallOutputText(text="1\n"), name="exec"
+            )
+        )
+        .build()
+    )
+
+    assert isinstance(request, ModelChatRequest)
+    assert request.model == "gpt-5.5-codex"
+    assert request.system == "  be terse  "  # trimming happens in the codec, not here
+    assert request.temperature == 0.25
+    assert request.max_tokens == 512
+    assert request.tool_choice == ToolChoice.required()
+    assert request.provider_options == {"reasoning_effort": "high"}
+    assert request.stop_sequences == ["END", "STOP"]
+    assert len(request.tool_specs) == 1
+    assert isinstance(request.tool_specs[0], ModelToolSpecFreeform)
+    assert [type(item) for item in request.context] == [
+        ModelContextMessage,
+        ModelContextToolCall,
+        ModelContextToolOutput,
+    ]
+
+
+def test_builder_bulk_setters_replace_and_copy():
+    items = [ModelContextMessage(message=Message.user("a"))]
+    specs = [ModelToolSpecFunction(tool=Tool(name="sum"))]
+    seqs = ["X"]
+    blocks = [SystemBlock.new("sys")]
+
+    request = (
+        ModelChatRequest.builder()
+        .context(items)
+        .tool_specs(specs)
+        .stop_sequences(seqs)
+        .system_blocks(blocks)
+        .build()
+    )
+
+    items.append(ModelContextMessage(message=Message.user("b")))
+    specs.append(ModelToolSpecFunction(tool=Tool(name="other")))
+    seqs.append("Y")
+    blocks.append(SystemBlock.new("more"))
+
+    assert len(request.context) == 1
+    assert len(request.tool_specs) == 1
+    assert request.stop_sequences == ["X"]
+    assert request.system_blocks is not None
+    assert len(request.system_blocks) == 1
+
+
+def test_builder_context_item_and_system_cached_and_system_block():
+    request = (
+        ModelChatRequest.builder()
+        .context_item(ModelContextMessage(message=Message.system("sys msg")))
+        .system_cached("cached system")
+        .system_block(SystemBlock.cached("block one"))
+        .build()
+    )
+    assert len(request.context) == 1
+    assert request.system == "cached system"
+    assert request.system_cache is True
+    assert request.system_blocks is not None
+    assert request.system_blocks[0].cache_control is True
+
+
+def test_builder_defaults_are_empty():
+    request = ModelChatRequest.builder().build()
+    assert request.context == []
+    assert request.tool_specs == []
+    assert request.model is None
+    assert request.system is None
+    assert request.system_blocks is None
+    assert request.system_cache is False
+    assert request.temperature is None
+    assert request.max_tokens is None
+    assert request.tool_choice is None
+    assert request.provider_options is None
+    assert request.stop_sequences is None
