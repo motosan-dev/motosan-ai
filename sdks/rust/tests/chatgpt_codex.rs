@@ -97,6 +97,36 @@ async fn custom_tool_stream_decodes_custom_delta_and_done() {
 }
 
 #[tokio::test]
+async fn native_codex_stream_eof_without_terminal_is_incomplete() {
+    let mut server = mockito::Server::new_async().await;
+    let sse = "data: {\"type\":\"response.custom_tool_call_input.delta\",\"call_id\":\"call_js\",\"delta\":\"console.\"}\n\n";
+    let mock = server
+        .mock("POST", Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/event-stream")
+        .with_body(sse)
+        .create_async()
+        .await;
+
+    let provider =
+        ChatGptCodexProvider::new("oauth-token", "acct-123", "gpt-5.5", Some(server.url()));
+    let stream = provider
+        .model_stream(native_custom_request())
+        .await
+        .expect("native stream");
+    let err = collect_model_stream(stream)
+        .await
+        .expect_err("EOF without terminal must yield IncompleteStream");
+    match err {
+        MotosanError::IncompleteStream(msg) => {
+            assert_eq!(msg, "chatgpt-codex ended without a terminal event")
+        }
+        other => panic!("expected IncompleteStream, got {other:?}"),
+    }
+    mock.assert_async().await;
+}
+
+#[tokio::test]
 async fn custom_tool_chat_collects_native_stream() {
     let mut server = mockito::Server::new_async().await;
     let sse = concat!(
