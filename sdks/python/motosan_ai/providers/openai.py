@@ -14,8 +14,16 @@ from motosan_ai.error import (
     RateLimitError,
     StreamError,
     StreamReadTimeoutError,
+    UnsupportedFeatureError,
 )
 from motosan_ai.provider_base import ProviderCapabilities
+from motosan_ai.provider_base import validate_model_request as _validate_model_request
+from motosan_ai.providers.responses import (
+    ModelStreamState,
+    build_model_request_body,
+    model_chat_response_from_output,
+    parse_model_sse_event,
+)
 from motosan_ai.retry import parse_retry_after_header
 from motosan_ai.types import (
     ChatRequest,
@@ -24,6 +32,10 @@ from motosan_ai.types import (
     ImageSourceBase64,
     ImageSourceUrl,
     Message,
+    ModelChatRequest,
+    ModelChatResponse,
+    ModelStreamDelta,
+    ModelStreamDone,
     Role,
     StopReason,
     StreamEvent,
@@ -51,6 +63,8 @@ def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, 
 
 
 class OpenAIProvider:
+    # Class-level default; __init__ replaces it per instance because the
+    # native capability depends on the Responses opt-in.
     capabilities: ProviderCapabilities = ProviderCapabilities.with_image()
 
     def __init__(
@@ -59,12 +73,21 @@ class OpenAIProvider:
         model: str | None = None,
         base_url: str | None = None,
         *,
+        responses_api: bool = False,
+        responses_url: str | None = None,
         connect_timeout: float = 10.0,
         read_idle_timeout: float = 120.0,
     ) -> None:
         self.api_key = api_key
         self.model = model or "gpt-4o"
         self.base_url = (base_url or _DEFAULT_BASE_URL).rstrip("/")
+        self.responses_api = responses_api
+        self.responses_url = responses_url.rstrip("/") if responses_url else None
+        self.capabilities = (
+            ProviderCapabilities.with_image_and_freeform_tools()
+            if responses_api
+            else ProviderCapabilities.with_image()
+        )
         self._read_idle_timeout = read_idle_timeout
         self._http = httpx.AsyncClient(
             timeout=httpx.Timeout(
@@ -81,6 +104,9 @@ class OpenAIProvider:
 
     def _endpoint(self) -> str:
         return f"{self.base_url}/v1/chat/completions"
+
+    def _responses_endpoint(self) -> str:
+        return self.responses_url or f"{self.base_url}/v1/responses"
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -361,6 +387,87 @@ class OpenAIProvider:
                 # even if the [DONE] transport epilogue never arrived.
                 yield StreamEvent(content="", done=True, stop_reason=current_stop_reason)
                 return
+
+            raise IncompleteStreamError("incomplete stream: openai ended without a terminal event")
+        except StreamError:
+            raise
+        except (AuthError, RateLimitError, ProviderError, NetworkError):
+            raise
+        except httpx.ReadTimeout as exc:
+            raise StreamReadTimeoutError(
+                f"stream read timed out after {self._read_idle_timeout}s"
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise StreamError(f"stream transport error: {exc}") from exc
+        finally:
+            await resp.aclose()
+
+    def validate_model_request(self, request: ModelChatRequest) -> None:
+        # OpenAIProvider does not subclass BaseProvider, so it carries its own
+        # method delegating to the shared validator.
+        _validate_model_request(request, self.capabilities)
+
+    async def model_chat(self, request: ModelChatRequest) -> ModelChatResponse:
+        # Order matters: validation first, so a freeform request without the
+        # opt-in reports "native freeform tools", not the opt-in message.
+        self.validate_model_request(request)
+        if not self.responses_api:
+            raise UnsupportedFeatureError(
+                "OpenAI Chat Completions does not support native model requests; "
+                "enable OpenAI Responses API"
+            )
+
+        body = build_model_request_body(request, self.model, stream=False)
+        try:
+            resp = await self._http.post(
+                self._responses_endpoint(), headers=self._headers(), json=body
+            )
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
+
+        if not resp.is_success:
+            message = self._response_error_message(resp.status_code, resp.headers, resp.text)
+            raise self._map_http_error(resp.status_code, message, resp.headers)
+
+        return model_chat_response_from_output(resp.json(), self.model)
+
+    async def model_stream(self, request: ModelChatRequest) -> AsyncIterator[ModelStreamDelta]:
+        self.validate_model_request(request)
+        if not self.responses_api:
+            raise UnsupportedFeatureError(
+                "OpenAI Chat Completions does not support native model streams; "
+                "enable OpenAI Responses API"
+            )
+
+        body = build_model_request_body(request, self.model, stream=True)
+        try:
+            resp = await self._http.send(
+                self._http.build_request(
+                    "POST", self._responses_endpoint(), headers=self._headers(), json=body
+                ),
+                stream=True,
+            )
+        except httpx.HTTPError as exc:
+            raise NetworkError(str(exc)) from exc
+
+        try:
+            if not resp.is_success:
+                error_body = await resp.aread()
+                message = self._response_error_message(
+                    resp.status_code, resp.headers, error_body.decode()
+                )
+                raise self._map_http_error(resp.status_code, message, resp.headers)
+
+            state = ModelStreamState()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                for delta in parse_model_sse_event(line[len("data: ") :], state):
+                    yield delta
+                    if isinstance(delta, ModelStreamDone):
+                        return
+                if state.error is not None:
+                    raise StreamError(state.error)
 
             raise IncompleteStreamError("incomplete stream: openai ended without a terminal event")
         except StreamError:
