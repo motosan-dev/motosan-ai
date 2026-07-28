@@ -4,6 +4,36 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-07-28
+
+### Added
+- Native model API for ordered Function and Freeform/custom tools, mirroring
+  Rust 0.26.0 and specified by `specs/types.md` § Native Model API. The legacy
+  `ChatRequest` / `Tool` / `ToolCall` / `ChatResponse` / `StreamEvent` surface
+  is untouched and stays function-tool-only — this is a parallel API, not a
+  widening of the existing one.
+- New types: `FreeformTool`, `FreeformToolFormat`, `ModelToolSpec`, `ModelToolCall`,
+  `ModelToolOutput`, `FunctionCallOutputPayload`, `ModelContextItem`,
+  `ModelChatRequest` (+ `ModelChatRequestBuilder`), `ModelChatResponse`, and the
+  eight `ModelStreamDelta` variants — all exported from the package root.
+- `Client.model_chat_with()`, `Client.model_stream_with()`, and
+  `Client.model_stream_collect_with()`, plus `collect_model_stream()`. Dispatch is
+  duck-typed, so providers outside `BaseProvider` participate.
+- `motosan_ai.providers.responses`: the shared OpenAI Responses codec used by
+  both native providers. Freeform `input` is transported as raw text — never
+  parsed as JSON, never lowered into function-call `arguments`.
+- `ProviderCapabilities` gains `supports_freeform_tools`. ChatGPT Codex declares freeform support;
+  OpenAI declares it only when the caller opts into the Responses API. `ProviderCapabilities.full()`
+  deliberately leaves freeform off, so a provider cannot claim support it lacks.
+- Providers without a native path reject freeform specs or history with `UnsupportedFeatureError` before any network I/O.
+- `UnsupportedFeatureError`, a subclass of `InvalidRequestError` so existing
+  `except InvalidRequestError` handlers keep working while callers that need to
+  distinguish can match the subclass.
+- `OpenAIProvider(responses_api=True)`, `Client(openai_responses_api=True)`, and
+  `Client.openai(openai_responses_api=True)` opt into the OpenAI Responses API.
+- A spec-anchored conformance suite (`tests/test_freeform_conformance.py`), one of
+  three that now gate this contract across the SDKs.
+
 ## [0.19.0] - 2026-07-28
 
 ### Breaking

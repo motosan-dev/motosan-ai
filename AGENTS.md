@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.27.1 · Python v0.19.0 (PyPI) · TypeScript v0.15.0 (npm)
+Rust v0.27.1 · Python v0.20.0 (PyPI) · TypeScript v0.16.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
@@ -19,6 +19,8 @@ Rust 0.25.0 / Python 0.18.0 / TypeScript 0.15.0 are the M4 spec-and-parity relea
 Rust 0.26.0 is the AI0 native Freeform/custom tool transport release. It preserves the legacy function-only `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and `StreamEvent` APIs, and adds a parallel ordered native model API (`ModelChatRequest`, `ModelContextItem`, `ModelToolSpec`, `FreeformTool`, `ModelToolCall`, `ModelToolOutput`, `ModelChatResponse`, `ModelStreamDelta`, `BoxModelStream`) for Function and Freeform tool definitions/calls/outputs, blocking responses, streaming deltas, and subsequent-request history. OpenAI Responses and ChatGPT Codex share one Responses codec. Raw Freeform input (for example JavaScript) must remain byte-for-byte intact and must never be lowered into JSON function arguments. Providers without native Freeform support must reject before network I/O with `MotosanError::UnsupportedFeature`.
 
 Rust 0.27.0 / Python 0.19.0 are the correctness quick-wins releases (TypeScript unchanged at 0.15.0). Rust: `ThinkStripper` no longer panics on multi-byte UTF-8 inside an unterminated `<think>` block, and native model streams report EOF truncation with the conventional `incomplete stream: <provider> ended without a terminal event` payload — `providers::responses::model_stream_adapter` now takes a provider name, and `specs/types.md` pins the native termination contract while labelling the legacy `stream()` rows in its terminal-event table. Python: provider capabilities are enforced centrally before any network or CLI dispatch, so unsupported content blocks raise `InvalidRequestError` instead of being silently dropped (**breaking**), `MinimaxProvider` is corrected to `text_only()` because its wire format never carried images (**breaking**), and the package ships a PEP 561 `py.typed` marker with `mypy motosan_ai/` clean and gated in CI.
+
+Python 0.20.0 / TypeScript 0.16.0 are the Freeform tool parity releases: both SDKs gain the native model API Rust shipped in 0.26.0 — ordered Function and Freeform/custom tool transport (`ModelChatRequest`, `ModelToolSpec`, `FreeformTool`, `ModelToolCall`, `ModelToolOutput`, `ModelStreamDelta`), a shared OpenAI Responses codec, the native client trio and stream collector, `supports_freeform_tools` capabilities, and an OpenAI Responses opt-in (ChatGPT Codex is native by default). The legacy `ChatRequest` / `Tool` / `ToolCall` / `ChatResponse` / `StreamEvent` APIs stay function-tool-only — the native API is parallel, not a widening. Raw Freeform input must remain byte-for-byte intact and must never be lowered into JSON function arguments. Python adds `UnsupportedFeatureError(InvalidRequestError)`. All three SDKs now carry a spec-anchored Freeform conformance suite.
 
 ## Current Rust Tool Schema Note
 

@@ -2,6 +2,40 @@
 
 All notable changes to this project will be documented in this file.
 
+## [python-0.20.0 / ts-0.16.0] — 2026-07-28
+
+Freeform tool parity. Python and TypeScript gain the native model API that Rust
+shipped in 0.26.0, so `specs/types.md` § Native Model API is now implemented by
+all three SDKs rather than one. No Rust package version changed.
+
+### Added
+
+- **Native model API** in both SDKs: ordered Function and Freeform/custom tool
+  transport — `ModelChatRequest`, `ModelContextItem`, `ModelToolSpec`,
+  `FreeformTool`, `ModelToolCall`, `ModelToolOutput`, `ModelChatResponse`,
+  `ModelStreamDelta` — plus the client trio (`model_chat_with` /
+  `model_stream_with` / `model_stream_collect_with` in Python, `modelChat` /
+  `modelStream` / `modelStreamCollect` in TypeScript) and a stream collector.
+  The legacy `ChatRequest` / `Tool` / `ToolCall` / `ChatResponse` / `StreamEvent`
+  surface is untouched and stays function-tool-only: this is a parallel API.
+- **Shared OpenAI Responses codec** per SDK (`motosan_ai/providers/responses.py`,
+  `src/serialize/responses.ts`). Freeform `input` is raw model text and survives
+  byte-for-byte — never parsed as JSON, never lowered into function-call
+  `arguments`.
+- **OpenAI Responses opt-in.** ChatGPT Codex is natively capable by default;
+  OpenAI only when the caller asks — Python `Client(openai_responses_api=True)`,
+  TypeScript `ClientBuilder.openaiResponsesApi(true)`. TypeScript's existing
+  `withResponsesFallback` is unrelated 404 recovery and remains distinct.
+- **`supports_freeform_tools` / `supportsFreeformTools`** on provider
+  capabilities. `full()` / `fullCaps()` deliberately leave it off, so a provider
+  cannot advertise support it does not have.
+- **`UnsupportedFeatureError` in Python**, a subclass of `InvalidRequestError`:
+  existing `except InvalidRequestError` handlers keep working, while callers that
+  must distinguish can match the subclass.
+- **A spec-anchored conformance suite in all three SDKs**, including Rust, which
+  already implemented the behaviour — a cross-SDK gate that skips an SDK is not a
+  gate. Each suite documents the source mutations that prove it is not vacuous.
+
 ## [rust-0.27.1] — 2026-07-28
 
 Documentation-only patch for the Rust crate. No Python or TypeScript package

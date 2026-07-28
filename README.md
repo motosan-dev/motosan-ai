@@ -27,8 +27,8 @@ response = await client.chat([Message.user("Hello")])
 | Language | Package | Version |
 |----------|---------|---------|
 | Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v0.27.1 |
-| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.19.0 |
-| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.15.0 |
+| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v0.20.0 |
+| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v0.16.0 |
 
 ## Install
 
