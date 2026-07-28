@@ -7,6 +7,32 @@ Anchored to specs/types.md § Native Model API. Cross-SDK mirrors:
 Expected values come from the Rust tests that already pin this behaviour
 (tests/core_types.rs, tests/openai_provider.rs, tests/chatgpt_codex.rs,
 tests/native_collect_stream.rs). Do not invent new fixtures here.
+
+Proving this suite still bites
+------------------------------
+A conformance suite passes by construction the day it is written, so passing
+says nothing. Re-prove it after any refactor of the native surface by making
+each mutation below in turn, running this file, and confirming the named test
+fails — then reverting. Every one was verified against the suite as merged.
+
+1. ``providers/responses.py`` — in ``encode_tool_call``, replace
+   ``"input": call.input`` with a JSON round-trip such as
+   ``json.dumps(json.loads(call.input))``.
+   Fails: ``test_freeform_input_is_never_parsed_as_json_or_lowered_into_arguments``
+   (and ``test_ordered_mixed_history_replays_in_order``).
+2. ``_stream_collect.py`` — in ``collect_model_stream``, delete
+   ``tool_calls.append(delta.call)`` from the ToolCallDone arm so the
+   accumulated deltas would win instead.
+   Fails: ``test_tool_call_done_is_authoritative``.
+3. ``providers/chatgpt_codex.py`` — change the incomplete-stream payload from
+   ``chatgpt-codex`` to ``chatgpt_codex`` (the legacy adapter's spelling).
+   Fails: ``test_codex_eof_without_terminal_raises_incomplete_stream``.
+4. ``provider_base.py`` — make ``ProviderCapabilities.full()`` return
+   ``supports_freeform_tools=True``.
+   Fails: ``test_capability_matrix_matches_the_spec``.
+
+Deleting a whole module and watching the import fail is NOT such a check: an
+empty file with zero assertions produces the identical collection error.
 """
 
 from __future__ import annotations
