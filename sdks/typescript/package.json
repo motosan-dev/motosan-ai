@@ -1,6 +1,6 @@
 {
   "name": "@motosan-ai/sdk",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "description": "Multi-provider TypeScript/ESM SDK for Anthropic, OpenAI, MiniMax, Ollama, Gemini, and ChatGPT Codex. Self-implemented wire protocol via native fetch — zero official-provider-SDK dependencies.",
   "type": "module",
   "main": "dist/index.js",

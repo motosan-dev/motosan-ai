@@ -6,6 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-07-28
+
+### Added
+- Native model API for ordered Function and Freeform/custom tools, mirroring
+  Rust 0.26.0 and specified by `specs/types.md` § Native Model API. The legacy
+  `ChatRequest` / `Tool` / `ToolCall` / `ChatResponse` / `StreamEvent` surface
+  is untouched and stays function-tool-only — this is a parallel API, not a
+  widening of the existing one.
+- New types: `FreeformTool`, `FreeformToolFormat`, `ModelToolSpec`, `ModelToolCall`,
+  `ModelToolOutput`, `FunctionCallOutputPayload`, `ModelContextItem`,
+  `ModelChatRequest`, `ModelChatResponse`, `ModelStreamDelta`, and `BoxModelStream`.
+  Unions whose model shape and wire shape disagree are tagged on `kind`; unions
+  whose tag values are the wire values are tagged on `type`.
+- `Client.modelChat()`, `Client.modelStream()`, and `Client.modelStreamCollect()`,
+  plus `collectModelStream()`. `ProviderImpl.modelChat` / `modelStream` are optional,
+  so external providers implementing the structural contract are unaffected.
+- `serialize/responses.ts`: the shared OpenAI Responses codec used by both native
+  providers. Freeform `input` is transported as raw text — never parsed as JSON,
+  never lowered into function-call `arguments`.
+- `ProviderCapabilities` gains `supportsFreeformTools`. ChatGPT Codex declares freeform support;
+  OpenAI declares it only when the caller opts into the Responses API. `fullCaps()`
+  deliberately leaves freeform off, so a provider cannot claim support it lacks.
+- Providers without a native path reject freeform specs or history with `UnsupportedFeatureError` before any network I/O.
+- `OpenAIProvider.withResponsesApi(true)` and `ClientBuilder.openaiResponsesApi(true)`
+  opt into the OpenAI Responses API. These are distinct from the pre-existing
+  `withResponsesFallback`, which is only 404 recovery on the legacy chat path.
+- A spec-anchored conformance suite (`tests/freeform-conformance.test.ts`), one of
+  three that now gate this contract across the SDKs.
+
 ## [0.15.0] - 2026-07-17
 
 ### Added

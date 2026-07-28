@@ -55,7 +55,7 @@ DocumentSource::Url    { url: string }
 |-------|------|-------|
 | `supports_image` | `bool` | Provider accepts `ContentBlock::Image` |
 | `supports_document` | `bool` | Provider accepts `ContentBlock::Document` |
-| `supports_freeform_tools` | `bool` | Provider accepts native `ModelToolSpec::Freeform` / `ModelToolCall::Freeform` transport (Rust 0.26.0+; Python and TypeScript ports in progress — see #270) |
+| `supports_freeform_tools` | `bool` | Provider accepts native `ModelToolSpec::Freeform` / `ModelToolCall::Freeform` transport (Rust 0.26.0+, Python 0.20.0+, TypeScript 0.16.0+) |
 
 Named constructors: `text_only()` / `with_image()` / `with_freeform_tools()` /
 `with_image_and_freeform_tools()` / `full()`.
@@ -106,7 +106,7 @@ network call.
 
 ## Native Model API
 
-> Implemented in Rust 0.26.0+. Python and TypeScript ports in progress — see #270.
+> Implemented in Rust 0.26.0+, Python 0.20.0+, and TypeScript 0.16.0+.
 
 The legacy cross-SDK `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and
 `StreamEvent` APIs remain function-tool-only. Every SDK MUST expose a parallel
