@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from motosan_ai.providers.responses import (
+    decode_function_call_output_payload,
+    decode_output_text,
+    decode_tool_call,
+    decode_tool_output,
+    decode_usage,
     encode_function_call_output_payload,
     encode_input,
     encode_message,
     encode_tool_call,
     encode_tool_choice,
-    encode_tool_output,
     encode_tools,
     encode_user_content,
+    model_chat_response_from_output,
+    stop_reason_from_status,
     tool_output_to_dict,
 )
 from motosan_ai.types import (
@@ -30,9 +36,11 @@ from motosan_ai.types import (
     ModelToolOutputFunction,
     ModelToolSpecFreeform,
     ModelToolSpecFunction,
+    StopReason,
     Tool,
     ToolCall,
     ToolChoice,
+    Usage,
 )
 
 
@@ -253,3 +261,188 @@ def test_encode_tool_choice():
         "type": "function",
         "name": "run_js",
     }
+
+
+def test_decodes_function_and_custom_calls():
+    assert decode_tool_call(
+        {
+            "type": "function_call",
+            "call_id": "call_fn",
+            "name": "sum",
+            "arguments": '{"a":1}',
+        }
+    ) == ModelToolCallFunction(id="call_fn", name="sum", arguments='{"a":1}')
+
+    assert decode_tool_call(
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_js",
+            "name": "exec",
+            "input": "const a = {raw: true};\n",
+        }
+    ) == ModelToolCallFreeform(id="call_js", name="exec", input="const a = {raw: true};\n")
+
+
+def test_decode_tool_call_accepts_id_when_call_id_is_absent():
+    assert decode_tool_call(
+        {"type": "function_call", "id": "fc_1", "name": "sum", "arguments": "{}"}
+    ) == ModelToolCallFunction(id="fc_1", name="sum", arguments="{}")
+    # call_id wins when both are present.
+    assert decode_tool_call(
+        {
+            "type": "custom_tool_call",
+            "id": "fc_1",
+            "call_id": "call_js",
+            "name": "exec",
+            "input": "x",
+        }
+    ) == ModelToolCallFreeform(id="call_js", name="exec", input="x")
+
+
+def test_decode_tool_call_returns_none_for_non_calls():
+    assert decode_tool_call({"type": "message", "role": "assistant"}) is None
+    assert decode_tool_call({"type": "reasoning", "summary": []}) is None
+    assert decode_tool_call("not a dict") is None
+    assert decode_tool_call({"type": "function_call", "name": "sum"}) is None
+    assert decode_tool_call({"type": "function_call", "call_id": "c"}) is None
+
+
+def test_decode_preserves_raw_custom_input_without_json_parsing():
+    raw = '{"this":"looks like json"}\nconsole.log(\'but is JavaScript\');'
+    decoded = decode_tool_call(
+        {"type": "custom_tool_call", "call_id": "call_js", "name": "exec", "input": raw}
+    )
+    assert isinstance(decoded, ModelToolCallFreeform)
+    assert decoded.input == raw
+    assert decoded.input.encode() == raw.encode()
+
+
+def test_tool_output_round_trips_with_call_identity():
+    output = ModelToolOutputCustom(
+        call_id="call_js", output=FunctionCallOutputText(text="stdout: 42"), name="exec"
+    )
+    assert decode_tool_output(tool_output_to_dict(output)) == output
+
+    fn_output = ModelToolOutputFunction(
+        call_id="call_fn", output=FunctionCallOutputText(text='{"ok":true}')
+    )
+    assert decode_tool_output(tool_output_to_dict(fn_output)) == fn_output
+    assert decode_tool_output({"type": "message"}) is None
+    assert decode_tool_output({"type": "function_call_output", "call_id": "c"}) is None
+
+
+def test_decode_function_call_output_payload_content_items():
+    decoded = decode_function_call_output_payload(
+        [
+            {"type": "input_text", "text": "hi"},
+            {"type": "input_image", "image_url": "u", "detail": "high"},
+            {"type": "encrypted_content", "encrypted_content": "enc"},
+        ]
+    )
+    assert decoded == FunctionCallOutputContent(
+        items=[
+            FunctionCallOutputInputText(text="hi"),
+            FunctionCallOutputInputImage(image_url="u", detail=ImageDetail.high),
+            FunctionCallOutputEncryptedContent(encrypted_content="enc"),
+        ]
+    )
+    assert decode_function_call_output_payload("plain") == FunctionCallOutputText(text="plain")
+
+
+def test_stop_reason_from_status():
+    assert stop_reason_from_status("completed", True) == StopReason.tool_use
+    assert stop_reason_from_status("incomplete", True) == StopReason.tool_use
+    assert stop_reason_from_status("completed", False) == StopReason.end_turn
+    assert stop_reason_from_status(None, False) == StopReason.end_turn
+    assert stop_reason_from_status("incomplete", False) == StopReason.max_tokens
+    assert stop_reason_from_status("failed", False) == StopReason.other
+    assert stop_reason_from_status("weird", False) == StopReason.other
+
+
+def test_decode_usage_accepts_both_spellings():
+    assert decode_usage({"input_tokens": 9, "output_tokens": 7}) == Usage(
+        input_tokens=9, output_tokens=7
+    )
+    assert decode_usage({"prompt_tokens": 4, "completion_tokens": 5}) == Usage(
+        input_tokens=4, output_tokens=5
+    )
+    assert decode_usage(None) == Usage(0, 0)
+    assert decode_usage({}) == Usage(0, 0)
+
+    cached = decode_usage(
+        {"input_tokens": 9, "output_tokens": 7, "input_tokens_details": {"cached_tokens": 3}}
+    )
+    assert cached.cache_read_input_tokens == 3
+    assert cached.cache_creation_input_tokens is None
+    zero = decode_usage(
+        {"input_tokens": 9, "output_tokens": 7, "input_tokens_details": {"cached_tokens": 0}}
+    )
+    assert zero.cache_read_input_tokens is None
+
+
+def test_decode_output_text():
+    assert (
+        decode_output_text(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": "Hi "},
+                    {"type": "refusal", "text": "ignored"},
+                    {"type": "output_text", "text": "there"},
+                ],
+            }
+        )
+        == "Hi there"
+    )
+    assert decode_output_text({"type": "function_call"}) is None
+    assert decode_output_text({"type": "message", "content": []}) is None
+
+
+def test_model_chat_response_from_output_assembles_calls_thinking_and_usage():
+    raw = "const x = {a: 1};\nconsole.log(x.a);\n"
+    response = model_chat_response_from_output(
+        {
+            "model": "gpt-5.5-codex",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"text": "thought "}, {"content": "harder"}],
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ok"}],
+                },
+                {
+                    "type": "custom_tool_call",
+                    "call_id": "call_js",
+                    "name": "exec",
+                    "input": raw,
+                },
+            ],
+            "usage": {"input_tokens": 9, "output_tokens": 7},
+        },
+        "fallback-model",
+    )
+
+    assert response.content == "ok"
+    assert response.thinking == "thought harder"
+    assert response.tool_calls == [ModelToolCallFreeform(id="call_js", name="exec", input=raw)]
+    assert response.model == "gpt-5.5-codex"
+    assert response.usage == Usage(input_tokens=9, output_tokens=7)
+    assert response.stop_reason == StopReason.tool_use
+    assert response.session_id is None
+
+
+def test_model_chat_response_from_output_defaults_and_output_text_field():
+    response = model_chat_response_from_output(
+        {"output_text": "flat text", "status": "incomplete"}, "fallback-model"
+    )
+    assert response.content == "flat text"
+    assert response.model == "fallback-model"
+    assert response.thinking is None
+    assert response.tool_calls == []
+    assert response.stop_reason == StopReason.max_tokens
+    assert model_chat_response_from_output({}, "fallback-model").stop_reason == StopReason.end_turn

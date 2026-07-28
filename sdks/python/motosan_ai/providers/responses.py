@@ -16,15 +16,19 @@ from typing import Any
 
 from motosan_ai.types import (
     FreeformTool,
+    FunctionCallOutputContent,
     FunctionCallOutputContentItem,
+    FunctionCallOutputEncryptedContent,
     FunctionCallOutputInputImage,
     FunctionCallOutputInputText,
     FunctionCallOutputPayload,
     FunctionCallOutputText,
     ImageBlock,
+    ImageDetail,
     ImageSourceBase64,
     ImageSourceUrl,
     Message,
+    ModelChatResponse,
     ModelContextItem,
     ModelContextMessage,
     ModelContextToolCall,
@@ -37,8 +41,10 @@ from motosan_ai.types import (
     ModelToolSpec,
     ModelToolSpecFreeform,
     Role,
+    StopReason,
     TextBlock,
     ToolChoice,
+    Usage,
 )
 
 
@@ -238,3 +244,192 @@ def encode_tool_choice(choice: ToolChoice) -> Any:
     if choice.type == "tool":
         return {"type": "function", "name": choice.name}
     return choice.type
+
+
+def decode_function_call_output_payload(value: Any) -> FunctionCallOutputPayload:
+    if isinstance(value, list):
+        items: list[FunctionCallOutputContentItem] = []
+        for raw in value:
+            if not isinstance(raw, dict):
+                continue
+            kind = raw.get("type")
+            if kind == "input_text":
+                items.append(FunctionCallOutputInputText(text=str(raw.get("text", ""))))
+            elif kind == "input_image":
+                detail = raw.get("detail")
+                items.append(
+                    FunctionCallOutputInputImage(
+                        image_url=str(raw.get("image_url", "")),
+                        detail=ImageDetail(detail) if isinstance(detail, str) else None,
+                    )
+                )
+            elif kind == "encrypted_content":
+                items.append(
+                    FunctionCallOutputEncryptedContent(
+                        encrypted_content=str(raw.get("encrypted_content", ""))
+                    )
+                )
+        return FunctionCallOutputContent(items=items)
+    if isinstance(value, str):
+        return FunctionCallOutputText(text=value)
+    return FunctionCallOutputText(text=json.dumps(value))
+
+
+def decode_tool_call(item: Any) -> ModelToolCall | None:
+    """Decode one Responses output item into a native tool call.
+
+    Accepts ``call_id`` OR ``id`` as the call identity, in that order.
+    Returns None for items that are not tool calls.
+    """
+    if not isinstance(item, dict):
+        return None
+    kind = item.get("type")
+    if kind not in ("function_call", "custom_tool_call"):
+        return None
+    call_id = item.get("call_id")
+    if not isinstance(call_id, str):
+        call_id = item.get("id")
+    if not isinstance(call_id, str):
+        return None
+    name = item.get("name")
+    if not isinstance(name, str):
+        return None
+    if kind == "custom_tool_call":
+        raw_input = item.get("input")
+        return ModelToolCallFreeform(
+            id=call_id,
+            name=name,
+            # Verbatim: never json.loads'd, however JSON-shaped it looks.
+            input=raw_input if isinstance(raw_input, str) else "",
+        )
+    arguments = item.get("arguments")
+    return ModelToolCallFunction(
+        id=call_id,
+        name=name,
+        arguments=arguments if isinstance(arguments, str) else "",
+    )
+
+
+def decode_tool_output(item: Any) -> ModelToolOutput | None:
+    if not isinstance(item, dict):
+        return None
+    kind = item.get("type")
+    if kind not in ("function_call_output", "custom_tool_call_output"):
+        return None
+    call_id = item.get("call_id")
+    if not isinstance(call_id, str) or "output" not in item:
+        return None
+    payload = decode_function_call_output_payload(item["output"])
+    if kind == "custom_tool_call_output":
+        name = item.get("name")
+        return ModelToolOutputCustom(
+            call_id=call_id,
+            output=payload,
+            name=name if isinstance(name, str) else None,
+        )
+    return ModelToolOutputFunction(call_id=call_id, output=payload)
+
+
+def decode_usage(value: Any) -> Usage:
+    """Accepts both the Responses and the Chat Completions token spellings."""
+    if not isinstance(value, dict):
+        return Usage(input_tokens=0, output_tokens=0)
+
+    raw_input = value.get("input_tokens")
+    if raw_input is None:
+        raw_input = value.get("prompt_tokens")
+    raw_output = value.get("output_tokens")
+    if raw_output is None:
+        raw_output = value.get("completion_tokens")
+
+    cached: int | None = None
+    details = value.get("input_tokens_details")
+    if isinstance(details, dict):
+        raw_cached = details.get("cached_tokens")
+        if isinstance(raw_cached, int) and raw_cached > 0:
+            cached = raw_cached
+
+    return Usage(
+        input_tokens=int(raw_input or 0),
+        output_tokens=int(raw_output or 0),
+        cache_creation_input_tokens=None,
+        cache_read_input_tokens=cached,
+    )
+
+
+def stop_reason_from_status(status: str | None, has_tool_calls: bool) -> StopReason:
+    if has_tool_calls:
+        return StopReason.tool_use
+    if status == "incomplete":
+        return StopReason.max_tokens
+    if status is None or status == "completed":
+        return StopReason.end_turn
+    return StopReason.other
+
+
+def decode_output_text(item: Any) -> str | None:
+    """Concatenate the ``output_text`` parts of a ``message`` output item."""
+    if not isinstance(item, dict) or item.get("type") != "message":
+        return None
+    content = item.get("content")
+    if not isinstance(content, list):
+        return None
+    parts: list[str] = []
+    for part in content:
+        if not isinstance(part, dict) or part.get("type") != "output_text":
+            continue
+        text = part.get("text")
+        if isinstance(text, str):
+            parts.append(text)
+    return "".join(parts) or None
+
+
+def model_chat_response_from_output(payload: Any, default_model: str) -> ModelChatResponse:
+    """Decode a non-streaming Responses payload into a ModelChatResponse."""
+    payload = payload if isinstance(payload, dict) else {}
+    content = ""
+    thinking: str | None = None
+    tool_calls: list[ModelToolCall] = []
+
+    output_text = payload.get("output_text")
+    if isinstance(output_text, str):
+        content += output_text
+
+    output_items = payload.get("output")
+    if isinstance(output_items, list):
+        for item in output_items:
+            text = decode_output_text(item)
+            if text is not None:
+                content += text
+            if isinstance(item, dict) and item.get("type") == "reasoning":
+                summary = item.get("summary")
+                if isinstance(summary, list):
+                    summary_parts: list[str] = []
+                    for part in summary:
+                        if not isinstance(part, dict):
+                            continue
+                        value = part.get("text")
+                        if not isinstance(value, str):
+                            value = part.get("content")
+                        if isinstance(value, str):
+                            summary_parts.append(value)
+                    joined = "".join(summary_parts)
+                    if joined:
+                        thinking = joined
+            call = decode_tool_call(item)
+            if call is not None:
+                tool_calls.append(call)
+
+    status = payload.get("status")
+    model = payload.get("model")
+    return ModelChatResponse(
+        content=content,
+        thinking=thinking,
+        tool_calls=tool_calls,
+        model=model if isinstance(model, str) else default_model,
+        usage=decode_usage(payload.get("usage")),
+        stop_reason=stop_reason_from_status(
+            status if isinstance(status, str) else None, bool(tool_calls)
+        ),
+        session_id=None,
+    )
