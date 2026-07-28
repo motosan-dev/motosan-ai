@@ -4,6 +4,8 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-07-28
+
 ### Breaking
 - Capability enforcement is now central (mirrors Rust/TS): `Client.chat*` /
   `Client.stream*` raise `InvalidRequestError` before any network or CLI I/O

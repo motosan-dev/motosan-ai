@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.27.0 / python-0.19.0] — 2026-07-28
+
+Correctness quick-wins batch. No TypeScript package version changed.
+
+### Breaking
+
+- **Python capability enforcement is central** — `Client.chat*` / `Client.stream*`
+  raise `InvalidRequestError` before any network or CLI I/O when a message carries
+  content blocks the provider does not support. `openai` (documents), `minimax`
+  (images), native `ollama` (images), and the CLI backends previously dropped such
+  blocks silently. Rust and TypeScript already validated centrally; Python was the
+  outlier.
+- **Python `MinimaxProvider.capabilities` corrected** `with_image()` →
+  `text_only()`. Its wire serializer never transmitted images, so requests that
+  appeared to succeed with the image silently discarded now raise.
+
+### Added
+
+- **PEP 561 `py.typed` marker** (Python) — downstream type checkers now see the
+  package's annotations, which were previously invisible. `mypy motosan_ai/` is
+  clean and enforced in CI.
+
+### Changed
+
+- **Native model-stream termination is pinned** (Rust) — EOF without a terminal
+  event now reports `incomplete stream: <provider> ended without a terminal event`
+  (`openai` / `chatgpt-codex`), matching the convention every legacy adapter
+  follows; the previous payload was `responses stream ended without a terminal
+  event`. `providers::responses::model_stream_adapter` gained a
+  `provider: &'static str` parameter, and `specs/types.md` documents the native
+  termination contract and labels the legacy `stream()` rows in its terminal-event
+  table. Match on the `IncompleteStream` variant, not the message text.
+
+### Fixed
+
+- **`ThinkStripper` UTF-8 panic** (Rust) — multi-byte content inside an
+  unterminated `<think>` block no longer panics on a non-char-boundary slice (the
+  in-think branch lacked the guard its sibling had). The no-tag path also stops
+  copying every text delta a second time.
+- **Internal type errors** (Python) — 20 `mypy` errors across `client.py`,
+  `openai.py`, `minimax.py`, `anthropic.py`, and `oauth/_flow.py`; renames,
+  annotations, and equivalent control flow only, no behavior change.
+
 ## [rust-0.26.0 / python-0.18.0 / ts-0.15.0] — 2026-07-21
 
 AI0 native Freeform/custom tool transport release for the Rust SDK. No Python
