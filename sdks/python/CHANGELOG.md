@@ -4,6 +4,17 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+- Capability enforcement is now central (mirrors Rust/TS): `Client.chat*` /
+  `Client.stream*` raise `InvalidRequestError` before any network or CLI I/O
+  when a message carries content blocks the provider does not support.
+  Previously `openai` (documents), `minimax` (images), native `ollama`
+  (images) and the CLI backends (images/documents) silently dropped them.
+- `MinimaxProvider.capabilities` corrected `with_image()` → `text_only()`:
+  its wire serializer never transmitted images, so requests that previously
+  "succeeded" with the image silently discarded now raise. (Matches the
+  TypeScript SDK's declared Minimax capabilities.)
+
 ## [0.18.0] - 2026-07-17
 
 ### Breaking
