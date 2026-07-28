@@ -4,6 +4,14 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- `ThinkStripper` no longer panics on multi-byte UTF-8 content inside an
+  unterminated `<think>` block (the buffered-tail cut in the in-think branch
+  lacked the char-boundary guard the other branch had). The no-tag fast path
+  also stops copying every text delta a second time (the buffer's allocation
+  is handed to the caller; only the tiny partial-tag tail is newly allocated),
+  and the tag-found branches now trim in place instead of reallocating.
+
 ## [0.26.0] - 2026-07-21
 
 ### Added
