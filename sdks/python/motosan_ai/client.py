@@ -9,7 +9,15 @@ from enum import StrEnum
 from types import TracebackType
 from typing import Any
 
-from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.error import (
+    ConfigError,
+    MotosanError,
+    NetworkError,
+    ProviderError,
+    RateLimitError,
+    UnsupportedFeatureError,
+)
+from motosan_ai.provider_base import validate_model_request as _validate_model_request
 from motosan_ai.provider_base import validate_request as _validate_request
 from motosan_ai.providers import (
     AnthropicProvider,
@@ -25,7 +33,16 @@ from motosan_ai.providers import (
 )
 from motosan_ai.retry import RetryPolicy
 from motosan_ai.think_stripper import ThinkStripper
-from motosan_ai.types import ChatRequest, ChatResponse, Message, StreamEvent, Tool
+from motosan_ai.types import (
+    ChatRequest,
+    ChatResponse,
+    Message,
+    ModelChatRequest,
+    ModelChatResponse,
+    ModelStreamDelta,
+    StreamEvent,
+    Tool,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +99,7 @@ class Client:
         ollama_think: bool = False,
         ollama_keep_alive: str | None = None,
         ollama_num_ctx: int | None = None,
+        openai_responses_api: bool = False,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
         connect_timeout: float = 10.0,
@@ -192,6 +210,10 @@ class Client:
                     api_key=self.api_key,
                     model=model,
                     base_url=base_url,
+                    # Native opt-in. Deliberately not threaded into the
+                    # Provider.ollama branch above: Ollama's OpenAI-compatible
+                    # endpoint has no Responses API.
+                    responses_api=openai_responses_api,
                     connect_timeout=connect_timeout,
                     read_idle_timeout=read_idle_timeout,
                 )
@@ -235,6 +257,8 @@ class Client:
         model: str | None = None,
         max_retries: int = 3,
         retry_policy: RetryPolicy | None = None,
+        *,
+        openai_responses_api: bool = False,
     ) -> Client:
         return cls(
             provider=Provider.openai,
@@ -242,6 +266,7 @@ class Client:
             model=model,
             max_retries=max_retries,
             retry_policy=retry_policy,
+            openai_responses_api=openai_responses_api,
         )
 
     @classmethod
@@ -637,4 +662,105 @@ class Client:
         response = await collect_stream(self.stream_with(request))
         if not response.model:
             response = replace(response, model=model_hint)
+        return response
+
+    def _prepare_model_request(self, request: ModelChatRequest) -> ModelChatRequest:
+        """Backfill the model and run capability enforcement before dispatch."""
+        if request.model is None and self.model is not None:
+            request = replace(request, model=self.model)
+
+        caps = getattr(self._provider, "capabilities", None)
+        if caps is not None:
+            _validate_model_request(request, caps)
+        return request
+
+    async def model_chat_with(self, request: ModelChatRequest) -> ModelChatResponse:
+        """Send a fully-built native ModelChatRequest.
+
+        The native counterpart of ``chat_with``. ``total_timeout`` bounds this
+        call (retries included), never stream consumption.
+        """
+        request = self._prepare_model_request(request)
+        if self._total_timeout is None:
+            return await self._dispatch_model_chat(request)
+        try:
+            async with asyncio.timeout(self._total_timeout):
+                return await self._dispatch_model_chat(request)
+        except TimeoutError as exc:
+            raise NetworkError(f"total timeout of {self._total_timeout}s exceeded") from exc
+
+    async def _dispatch_model_chat(self, request: ModelChatRequest) -> ModelChatResponse:
+        # Duck-typed on purpose: BaseProvider is subclassed by only 4 of the 11
+        # providers, so a default on the ABC would never reach OpenAIProvider
+        # or the CLI clients. Mirrors the 0.19.0 capability enforcement.
+        model_chat = getattr(self._provider, "model_chat", None)
+        if model_chat is None:
+            raise UnsupportedFeatureError("provider does not support native model requests")
+
+        if self._retry_policy.max_retries > 0:
+            from motosan_ai.retry import with_retry
+
+            return await with_retry(lambda: model_chat(request), policy=self._retry_policy)
+        return await model_chat(request)
+
+    async def model_stream_with(self, request: ModelChatRequest) -> AsyncIterator[ModelStreamDelta]:
+        """Stream a fully-built native ModelChatRequest.
+
+        No ThinkStripper here: native streams carry thinking as explicit
+        ModelStreamThinkingDelta / ModelStreamThinkingDone deltas, and the
+        read-idle timeout already lives in the provider's httpx client.
+        """
+        request = self._prepare_model_request(request)
+        model_stream = getattr(self._provider, "model_stream", None)
+        if model_stream is None:
+            raise UnsupportedFeatureError("provider does not support native model streams")
+
+        policy = self._retry_policy
+        last_error: MotosanError | None = None
+        max_attempts = policy.max_retries + 1 if policy.max_retries > 0 else 1
+        for attempt in range(max_attempts):
+            yielded = False
+            try:
+                async for delta in model_stream(request):
+                    yielded = True
+                    yield delta
+                return
+            except (RateLimitError, NetworkError, ProviderError) as e:
+                from motosan_ai.retry import (
+                    RetryEvent,
+                    _is_retryable,
+                    compute_delay,
+                    retry_cause,
+                )
+
+                # Once any delta has been emitted a mid-stream error must
+                # propagate verbatim; retrying would replay delivered deltas.
+                if yielded or not _is_retryable(e):
+                    raise
+                last_error = e
+                if attempt >= policy.max_retries:
+                    break
+                wait = compute_delay(policy, attempt + 1, e.retry_after)
+                if policy.on_retry is not None:
+                    policy.on_retry(
+                        RetryEvent(attempt=attempt + 1, delay=wait, cause=retry_cause(e))
+                    )
+                logger.warning(
+                    "Retryable native stream error (attempt %d/%d), retrying in %.1fs: %s",
+                    attempt + 1,
+                    policy.max_retries,
+                    wait,
+                    type(e).__name__,
+                )
+                await asyncio.sleep(wait)
+        raise last_error  # type: ignore[misc]
+
+    async def model_stream_collect_with(self, request: ModelChatRequest) -> ModelChatResponse:
+        """Stream a native request and assemble the full ModelChatResponse."""
+        from motosan_ai._stream_collect import collect_model_stream
+
+        model_hint = request.model or self.model or ""
+        response = await collect_model_stream(self.model_stream_with(request))
+        if not response.model:
+            response.model = model_hint
         return response
