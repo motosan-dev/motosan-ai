@@ -504,3 +504,238 @@ class ChatRequestBuilder:
             thinking=self._thinking,
             stop_sequences=self._stop_sequences,
         )
+
+
+# ---------------------------------------------------------------------------
+# Native model API — specs/types.md § Native Model API.
+#
+# Value types only. Every wire key ("type", "call_id", "parameters",
+# "max_output_tokens", ...) lives in motosan_ai/providers/responses.py, never
+# here. Variants are plain dataclasses behind a union alias and are
+# discriminated with isinstance, following the McpToolConfig precedent above.
+# ---------------------------------------------------------------------------
+
+
+class ImageDetail(StrEnum):
+    auto = "auto"
+    low = "low"
+    high = "high"
+    original = "original"
+
+
+@dataclass(frozen=True)
+class FreeformToolFormat:
+    type: str
+    syntax: str
+    definition: str
+
+
+@dataclass(frozen=True)
+class FreeformTool:
+    """A Freeform ("custom") tool. ``format`` is mandatory.
+
+    The wire tag ``"custom"`` is injected by the codec — it is never stored.
+    """
+
+    name: str
+    description: str
+    format: FreeformToolFormat
+
+
+@dataclass(frozen=True)
+class ModelToolSpecFunction:
+    tool: Tool
+
+
+@dataclass(frozen=True)
+class ModelToolSpecFreeform:
+    tool: FreeformTool
+
+
+ModelToolSpec = ModelToolSpecFunction | ModelToolSpecFreeform
+
+
+@dataclass(frozen=True)
+class ModelToolCallFunction:
+    """A function tool call. ``arguments`` is a JSON string."""
+
+    id: str
+    name: str
+    arguments: str
+
+
+@dataclass(frozen=True)
+class ModelToolCallFreeform:
+    """A Freeform tool call.
+
+    ``input`` is raw model text (JavaScript, a DSL, ...). It MUST be preserved
+    byte-for-byte: never parsed as JSON, never lowered into ``arguments``.
+    """
+
+    id: str
+    name: str
+    input: str
+
+
+ModelToolCall = ModelToolCallFunction | ModelToolCallFreeform
+
+
+@dataclass(frozen=True)
+class FunctionCallOutputInputText:
+    text: str
+
+
+@dataclass(frozen=True)
+class FunctionCallOutputInputImage:
+    image_url: str
+    detail: ImageDetail | None = None
+
+
+@dataclass(frozen=True)
+class FunctionCallOutputEncryptedContent:
+    encrypted_content: str
+
+
+FunctionCallOutputContentItem = (
+    FunctionCallOutputInputText | FunctionCallOutputInputImage | FunctionCallOutputEncryptedContent
+)
+
+
+@dataclass(frozen=True)
+class FunctionCallOutputText:
+    text: str
+
+
+@dataclass(frozen=True)
+class FunctionCallOutputContent:
+    items: list[FunctionCallOutputContentItem]
+
+
+FunctionCallOutputPayload = FunctionCallOutputText | FunctionCallOutputContent
+
+
+@dataclass(frozen=True)
+class ModelToolOutputFunction:
+    call_id: str
+    output: FunctionCallOutputPayload
+
+
+@dataclass(frozen=True)
+class ModelToolOutputCustom:
+    call_id: str
+    output: FunctionCallOutputPayload
+    name: str | None = None
+
+
+ModelToolOutput = ModelToolOutputFunction | ModelToolOutputCustom
+
+
+@dataclass(frozen=True)
+class ModelContextMessage:
+    message: Message
+
+
+@dataclass(frozen=True)
+class ModelContextToolCall:
+    call: ModelToolCall
+
+
+@dataclass(frozen=True)
+class ModelContextToolOutput:
+    output: ModelToolOutput
+
+
+ModelContextItem = ModelContextMessage | ModelContextToolCall | ModelContextToolOutput
+
+
+@dataclass
+class ModelChatRequest:
+    """A native model request.
+
+    ``context`` preserves mixed message / tool-call / tool-output order, which
+    is what makes byte-exact replay of Freeform inputs possible in multi-turn
+    histories.
+
+    Deliberately carries no ``thinking`` / ``mcp_servers`` / ``mcp_tool_configs``
+    (milestone D3): native requests support neither extended thinking nor MCP.
+    Provider-specific reasoning controls go through ``provider_options``.
+    """
+
+    context: list[ModelContextItem] = field(default_factory=list)
+    tool_specs: list[ModelToolSpec] = field(default_factory=list)
+    model: str | None = None
+    system: str | None = None
+    system_blocks: list[SystemBlock] | None = None
+    system_cache: bool = False
+    temperature: float | None = None
+    max_tokens: int | None = None
+    tool_choice: ToolChoice | None = None
+    provider_options: dict[str, Any] | None = None
+    stop_sequences: list[str] | None = None
+
+
+@dataclass
+class ModelChatResponse:
+    content: str = ""
+    thinking: str | None = None
+    tool_calls: list[ModelToolCall] = field(default_factory=list)
+    model: str = ""
+    usage: Usage = field(default_factory=lambda: Usage(0, 0))
+    stop_reason: StopReason = StopReason.end_turn
+    session_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelStreamText:
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelStreamThinkingDelta:
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelStreamThinkingDone:
+    thinking: str
+
+
+@dataclass(frozen=True)
+class ModelStreamFunctionArguments:
+    call_id: str
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelStreamFreeformInput:
+    call_id: str
+    delta: str
+
+
+@dataclass(frozen=True)
+class ModelStreamToolCallDone:
+    """Authoritative completed call. Collectors discard accumulated deltas."""
+
+    call: ModelToolCall
+
+
+@dataclass(frozen=True)
+class ModelStreamUsage:
+    usage: Usage
+
+
+@dataclass(frozen=True)
+class ModelStreamDone:
+    stop_reason: StopReason
+
+
+ModelStreamDelta = (
+    ModelStreamText
+    | ModelStreamThinkingDelta
+    | ModelStreamThinkingDone
+    | ModelStreamFunctionArguments
+    | ModelStreamFreeformInput
+    | ModelStreamToolCallDone
+    | ModelStreamUsage
+    | ModelStreamDone
+)
