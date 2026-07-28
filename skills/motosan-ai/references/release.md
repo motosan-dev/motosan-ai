@@ -1,66 +1,58 @@
 # Release Process
 
-Python and Rust SDKs are versioned and released **independently**.
+The Rust, Python, and TypeScript SDKs are versioned and released
+**independently**, as are the three OAuth helper crates.
 
 ## Tag Convention
 
-| SDK    | Tag format       | Registry   | Workflow              |
-|--------|------------------|------------|-----------------------|
-| Python | `python-vX.Y.Z`  | PyPI       | `publish-python.yml`  |
-| Rust   | `rust-vX.Y.Z`    | crates.io  | `publish-rust.yml`    |
+| Package          | Tag format                | Registry  | Workflow                        |
+|------------------|---------------------------|-----------|---------------------------------|
+| Python           | `python-vX.Y.Z`           | PyPI      | `publish-python.yml`            |
+| Rust             | `rust-vX.Y.Z`             | crates.io | `publish-rust.yml`              |
+| TypeScript       | `ts-vX.Y.Z`               | npm       | `publish-typescript.yml`        |
+| motosan-ai-oauth | `motosan-ai-oauth-vX.Y.Z` | crates.io | `publish-motosan-ai-oauth.yml`  |
+| codex-oauth      | `codex-oauth-vX.Y.Z`      | crates.io | `publish-codex-oauth.yml`       |
+| anthropic-oauth  | `anthropic-oauth-vX.Y.Z`  | crates.io | `publish-anthropic-oauth.yml`   |
 
 ## Release Checklist
 
-### 1. Version Bump
-
-| SDK    | File                          | Field              |
-|--------|-------------------------------|--------------------|
-| Python | `sdks/python/pyproject.toml`  | `version = "X.Y.Z"` |
-| Rust   | `sdks/rust/Cargo.toml`        | `version = "X.Y.Z"` |
-
-### 2. Update CHANGELOG
-
-Both use Keep a Changelog format:
-
-```markdown
-## [X.Y.Z] - YYYY-MM-DD
-
-### Added
-- ...
-
-### Changed
-- ...
-
-### Fixed
-- ...
-```
-
-- Python: `sdks/python/CHANGELOG.md`
-- Rust: `sdks/rust/CHANGELOG.md`
-
-### 3. Commit
+### 1. Bump (scripted)
 
 ```bash
-# Python
-git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md
-git commit -m "chore: release python-vX.Y.Z"
-
-# Rust
-git add sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md
-git commit -m "chore: release rust-vX.Y.Z"
+python3 scripts/bump-version.py --rust 0.28.0 --python 0.20.0   # --dry-run previews
 ```
 
-### 4. Tag + Push
+Writes the manifests, both lockfiles, the CHANGELOG headings (renaming whatever
+sits under `[Unreleased]`), and the doc version banners, then runs
+`scripts/check-versions.py`. Several SDKs can go in one run; re-running is a
+no-op. Do not hand-edit those locations — `ci-metadata` and the pre-push hook
+verify them. The OAuth helper crates are not covered; bump those by hand.
+
+### 2. Write the prose
+
+- root `CHANGELOG.md` — a combined entry naming only the SDKs that moved
+- `AGENTS.md` — a release paragraph
+
+### 3. Commit and open a PR
 
 ```bash
-# Python → triggers publish-python.yml → PyPI
-git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary of changes"
-git push origin main python-vX.Y.Z
-
-# Rust → triggers publish-rust.yml → crates.io
-git tag -a rust-vX.Y.Z -m "rust-vX.Y.Z — summary of changes"
-git push origin main rust-vX.Y.Z
+git commit -m "chore(release): rust-v0.28.0 and python-v0.20.0 (#<issue>)"
 ```
+
+`chore(release):` is the one exception to the `fix:` / `feat:` / `refactor:`
+commit-type rule: a release ships no change of its own, so labelling it a
+feature or a fix would be inaccurate. Releases go through review like anything
+else.
+
+### 4. Tag the merge commit
+
+```bash
+git tag -a rust-v0.28.0 -m "rust-v0.28.0 — summary of changes"
+git push origin rust-v0.28.0
+```
+
+Create tags from a checkout of `origin/main` after the PR merges — not from a
+stale branch, whose pre-push hook may be an older version.
 
 ## CI Publish Pipelines
 
@@ -109,13 +101,14 @@ env-gated live tests inside those suites cannot fire.
 
 ## Emergency Manual Publish
 
-```bash
-# Python
-cd sdks/python && uv build --out-dir dist && uv publish dist/*
+Re-run the failed publish workflow first. Its steps are gated on digests, so a
+re-run either finds its own artifact already published and succeeds, or uploads
+what is missing.
 
-# Rust
-cd sdks/rust && cargo publish
-```
+Publishing from a laptop is a last resort: Trusted Publishing leaves no ambient
+credential, so it requires temporarily minting a registry token, and it skips
+every guard — the tag-vs-manifest check, the SDK gates, and the digest
+verification that proves the registry serves what was built.
 
 ## Registry Authentication
 
@@ -151,19 +144,23 @@ repository *and* workflow file, otherwise publishing fails with an auth error.
 
 | Workflow         | Trigger                     | Steps                              |
 |------------------|-----------------------------|------------------------------------|
-| `ci-python.yml`  | Push/PR to `sdks/python/**` | `uv sync` → `ruff check` → `pytest` |
-| `ci-rust.yml`    | Push/PR to `sdks/rust/**`   | `fmt` → `clippy` → `test` (stable + MSRV 1.82) |
+| `ci-metadata.yml`   | Every push/PR (no path filter) | `scripts/check-versions.py` |
+| `ci-python.yml`     | Push/PR to `sdks/python/**` | `uv sync` → `ruff check` → `mypy` → `pytest` |
+| `ci-rust.yml`       | Push/PR to `sdks/rust/**`   | `fmt` → `clippy` → `test` → `cargo hack --each-feature` (stable + MSRV 1.82) |
+| `ci-typescript.yml` | Push/PR to `sdks/typescript/**` | `npm ci` → build → typecheck → test → pack smoke |
 
-## Dual Release (both SDKs)
+## Releasing Several SDKs Together
 
-When releasing both at once, use separate tags:
+This is the normal case, not a special one: `bump-version.py` takes every SDK in
+a single run because they share the doc banners, the root `CHANGELOG.md` entry
+names only the SDKs that moved, and one PR carries all of it. After it merges,
+push one tag per SDK:
 
 ```bash
-git add sdks/python/pyproject.toml sdks/python/CHANGELOG.md sdks/rust/Cargo.toml sdks/rust/CHANGELOG.md
-git commit -m "chore: release python-vX.Y.Z + rust-vA.B.C"
 git tag -a python-vX.Y.Z -m "python-vX.Y.Z — summary"
 git tag -a rust-vA.B.C -m "rust-vA.B.C — summary"
-git push origin main python-vX.Y.Z rust-vA.B.C
+git push origin python-vX.Y.Z rust-vA.B.C
 ```
 
-Both publish workflows will run in parallel.
+The publish workflows run in parallel, each verifying its own tag against its
+own manifest.

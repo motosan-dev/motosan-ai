@@ -108,8 +108,22 @@ These rules exist because motosan-chat and other downstream consumers depend on 
 
 **CLI provider capabilities (Rust 0.20+)** — `ClaudeCodeProvider` / `CodexCliProvider` / `GeminiCliProvider` share, beyond their per-CLI flags: `.cwd(dir)` (`Command::current_dir`; Codex uses `.cd()` → `--cd`); `.env(k,v)` / `.envs(iter)` per-run env injection (redacted from `Debug` via `RedactedEnvs` — never log env values); `.timeout(dur)` / `.no_timeout()`; `.resume(id)` session continuity (Codex `exec resume`, Gemini/Claude `--resume`) with the minted id surfaced on `StreamEvent::session_id` / `ChatResponse::session_id`. `stream()` surfaces CLI tool use as `ToolCallStart → ToolCallArgs → ToolCallEnd`; blocking `chat().tool_calls` stays empty.
 
+## Commits
+
+Subjects use a bare conventional type — `fix:`, `feat:`, or `refactor:`, with no scope parentheses — and end with the issue reference the work is bound to:
+
+```
+fix: ThinkStripper UTF-8 boundary panic and zero-copy fast path (#242)
+```
+
+Breaking changes carry a `BREAKING CHANGE:` body paragraph rather than a `!` marker. The single exception to the type list is `chore(release):`, used for release commits: a release ships no change of its own, so labelling it a feature or a fix would be inaccurate.
+
+Every change lands through a PR — only docs, specs, and planning notes may go directly to `main`.
+
 ## Releasing
 
-Tag `rust-vX.Y.Z` triggers `publish-rust.yml` → crates.io. Tag `python-vX.Y.Z` triggers `publish-python.yml` → PyPI. Tag `ts-vX.Y.Z` triggers `publish-typescript.yml` → npm. OAuth helper crates use per-crate tags (`motosan-ai-oauth-vX.Y.Z`, `codex-oauth-vX.Y.Z`, `anthropic-oauth-vX.Y.Z`). Publish `motosan-ai-oauth` before wrapper crates that depend on its new version.
+Bump with `python3 scripts/bump-version.py --rust X.Y.Z --python A.B.C` (see `llms.txt` § Release). It writes the manifests, both lockfiles, the CHANGELOG headings, and the doc version banners; `ci-metadata` and the pre-push hook reject a tree where any of them disagree, so do not hand-edit them. What stays manual: the root `CHANGELOG.md` entry, the release paragraph in this file, and the OAuth helper crates.
 
-Update before tagging: CHANGELOGs, version in `Cargo.toml`/`pyproject.toml`, `AGENTS.md`, `llms.txt`, `skills/motosan-ai/SKILL.md`.
+After the release PR merges, tag the merge commit. Tag `rust-vX.Y.Z` triggers `publish-rust.yml` → crates.io. Tag `python-vX.Y.Z` triggers `publish-python.yml` → PyPI. Tag `ts-vX.Y.Z` triggers `publish-typescript.yml` → npm. OAuth helper crates use per-crate tags (`motosan-ai-oauth-vX.Y.Z`, `codex-oauth-vX.Y.Z`, `anthropic-oauth-vX.Y.Z`). Publish `motosan-ai-oauth` before wrapper crates that depend on its new version.
+
+Every publish workflow authenticates with Trusted Publishing (OIDC) — no registry secrets — and verifies that the registry serves the exact artifact it built, which also makes a re-run of a half-finished release safe.
