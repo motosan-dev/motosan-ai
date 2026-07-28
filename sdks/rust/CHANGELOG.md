@@ -4,6 +4,14 @@ All notable changes to `motosan-ai` Rust SDK are documented in this file.
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-07-28
+
+### Changed
+- README install snippets use `cargo add motosan-ai --features <feature>` in
+  place of a version-pinned `[dependencies]` block, so the instructions shown
+  on crates.io cannot go stale between releases. Documentation only — no code
+  or API changes.
+
 ## [0.27.0] - 2026-07-28
 
 ### Changed

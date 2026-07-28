@@ -2,7 +2,7 @@
 
 > Multi-provider LLM SDK for Python and Rust. Unified API for Anthropic, OpenAI, Ollama, MiniMax, and Gemini — with streaming, tool use, retry, and ThinkStripper built in.
 
-- Python 0.19.0 · TypeScript 0.15.0 · Rust 0.27.0
+- Python 0.19.0 · TypeScript 0.15.0 · Rust 0.27.1
 - Python 0.13.0: CLI-runtime setters (`.cwd()`, `session_id` + `resume()`, `.env()/.envs()`, CLI tool-call stream events, `.timeout()/.no_timeout()`) and a **breaking** fallible stream — HTTP provider `stream()` raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 - Python 0.14.0 / TypeScript 0.11.0: **chatgpt-codex** provider — native ChatGPT-backend HTTP client over the OpenAI Responses API (`chatgpt.com/backend-api/codex/responses`; pre-obtained OAuth token + account id, no `api_key`). Python `Client.chatgpt_codex(...)`, TypeScript `Client.builder().chatgptCodex(...)`.
 - Rust 0.24.0 / Python 0.17.0 / TypeScript 0.14.0 (M3): **breaking** stream termination — EOF without the provider terminal event (OpenAI wire: `[DONE]` or a `finish_reason` chunk, either suffices) raises Rust `MotosanError::IncompleteStream` / Python `IncompleteStreamError(StreamError)` / TypeScript `IncompleteStreamError extends StreamError`; one timeout model (connect 10 s / read-idle 120 s / total opt-in) on all builders; Rust build-once shared `reqwest::Client`; TypeScript per-request `AbortSignal` + `CancelledError` (never retried); Python `Client.aclose()` / `async with`.
