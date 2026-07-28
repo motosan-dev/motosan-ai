@@ -179,3 +179,129 @@ export interface ChatResponse {
   usage: Usage
   stopReason: StopReason
 }
+
+// ---------------------------------------------------------------------------
+// Native model API (specs/types.md § Native Model API).
+//
+// A surface PARALLEL to ChatRequest/Tool/ToolCall/ChatResponse/StreamEvent,
+// for providers that expose OpenAI Responses-style ordered input items and
+// custom (freeform) tool calls. The legacy surface above stays
+// function-tool-only; nothing here widens it.
+//
+// Tag choice (milestone D2): ModelToolSpec / ModelToolCall / ModelToolOutput /
+// ModelContextItem are tagged on `kind` because the model shape and the wire
+// shape disagree (freeform <-> wire "custom", id <-> wire call_id) — the same
+// reason McpToolConfig above uses `kind`. ModelStreamDelta and
+// FunctionCallOutputContentItem are tagged on `type` because their tag VALUES
+// are exactly the wire values.
+//
+// Wire encoding lives in serialize/responses.ts, never here.
+// ---------------------------------------------------------------------------
+
+/** Grammar/format descriptor for a freeform tool. All three fields are mandatory. */
+export interface FreeformToolFormat {
+  type: string
+  syntax: string
+  definition: string
+}
+
+/** A freeform ("custom") tool definition. Serializes with a wire `type: "custom"`. */
+export interface FreeformTool {
+  name: string
+  description: string
+  format: FreeformToolFormat
+}
+
+/**
+ * A tool exposed to the model on the native surface. `function` wraps the
+ * existing `Tool` (wire `{type:"function", name, description, parameters}`);
+ * `freeform` wraps a `FreeformTool` (wire `{type:"custom", name, description,
+ * format}`).
+ */
+export type ModelToolSpec =
+  | { kind: 'function'; tool: Tool }
+  | { kind: 'freeform'; tool: FreeformTool }
+
+/** Image fidelity hint on a Responses `input_image` content item. */
+export type ImageDetail = 'auto' | 'low' | 'high' | 'original'
+
+/** One Responses-style content item inside a tool output payload. */
+export type FunctionCallOutputContentItem =
+  | { type: 'input_text'; text: string }
+  | { type: 'input_image'; imageUrl: string; detail?: ImageDetail }
+  | { type: 'encrypted_content'; encryptedContent: string }
+
+/** A tool output payload: plain text, or Responses-style content items. */
+export type FunctionCallOutputPayload = string | FunctionCallOutputContentItem[]
+
+/**
+ * A tool call the model produced. `id` is the caller-facing identity; it is
+ * written to (and read from) the wire key `call_id`. Freeform `input` is raw
+ * model text — preserved byte-for-byte, never parsed as JSON, never lowered
+ * into a function call's `arguments`.
+ */
+export type ModelToolCall =
+  | { kind: 'function'; id: string; name: string; arguments: string }
+  | { kind: 'freeform'; id: string; name: string; input: string }
+
+/** A tool result the caller returns to the model. */
+export type ModelToolOutput =
+  | { kind: 'function'; callId: string; output: FunctionCallOutputPayload }
+  | { kind: 'custom'; callId: string; name?: string; output: FunctionCallOutputPayload }
+
+/**
+ * One ordered history entry. Preserving message / tool-call / tool-output
+ * ORDER is what makes byte-exact replay of freeform inputs possible in
+ * multi-turn histories.
+ */
+export type ModelContextItem =
+  | { kind: 'message'; message: Message }
+  | { kind: 'toolCall'; call: ModelToolCall }
+  | { kind: 'toolOutput'; output: ModelToolOutput }
+
+/**
+ * A native model request. Deliberately carries NO thinking and NO MCP config
+ * (milestone D3): native requests reach provider-specific reasoning controls
+ * through `providerOptions`.
+ */
+export interface ModelChatRequest {
+  context: ModelContextItem[]
+  toolSpecs?: ModelToolSpec[]
+  model?: string
+  system?: string
+  systemBlocks?: SystemBlock[]
+  systemCache?: boolean
+  temperature?: number
+  /** Serialized to the Responses body key `max_output_tokens`. */
+  maxTokens?: number
+  toolChoice?: ToolChoice
+  stopSequences?: string[]
+  /** Shallow-merged into the request body root LAST — it overrides everything. */
+  providerOptions?: Record<string, unknown>
+}
+
+/** A native, non-streaming model response. */
+export interface ModelChatResponse {
+  content: string
+  thinking?: string
+  toolCalls: ModelToolCall[]
+  model: string
+  usage: Usage
+  stopReason: StopReason
+  sessionId?: string
+}
+
+/**
+ * One native stream delta. `tool_call_done` is AUTHORITATIVE for a completed
+ * call; accumulated `function_arguments` / `freeform_input` deltas are display
+ * bookkeeping only. Exactly one `done` per successfully completed stream.
+ */
+export type ModelStreamDelta =
+  | { type: 'text'; delta: string }
+  | { type: 'thinking_delta'; delta: string }
+  | { type: 'thinking_done'; thinking: string }
+  | { type: 'function_arguments'; callId: string; delta: string }
+  | { type: 'freeform_input'; callId: string; delta: string }
+  | { type: 'tool_call_done'; call: ModelToolCall }
+  | { type: 'usage'; usage: Usage }
+  | { type: 'done'; stopReason: StopReason }
