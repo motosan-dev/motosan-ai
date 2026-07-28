@@ -223,11 +223,11 @@ class OpenAIProvider:
 
         payload = resp.json()
         choice = (payload.get("choices") or [{}])[0]
-        message = choice.get("message") or {}
-        content = message.get("content") or ""
+        msg_obj = choice.get("message") or {}
+        content = msg_obj.get("content") or ""
 
         tool_calls: list[ToolCall] = []
-        for tc in message.get("tool_calls") or []:
+        for tc in msg_obj.get("tool_calls") or []:
             fn = tc.get("function") or {}
             try:
                 parsed_input = json.loads(fn.get("arguments") or "{}")

@@ -20,6 +20,7 @@ from motosan_ai.providers import (
     GeminiCodeAssistProvider,
     GeminiProvider,
     MinimaxProvider,
+    OllamaProvider,
     OpenAIProvider,
 )
 from motosan_ai.retry import RetryPolicy
@@ -96,6 +97,18 @@ class Client:
         )
         self._max_retries = self._retry_policy.max_retries
         self._total_timeout = total_timeout
+        self._provider: (
+            AnthropicProvider
+            | ChatGptCodexProvider
+            | ClaudeCodeClient
+            | CodexCliClient
+            | GeminiCliClient
+            | GeminiCodeAssistProvider
+            | GeminiProvider
+            | MinimaxProvider
+            | OllamaProvider
+            | OpenAIProvider
+        )
 
         if provider_value == Provider.gemini_code_assist:
             if not access_token:
@@ -144,9 +157,7 @@ class Client:
         elif provider_value == Provider.ollama:
             self.api_key = api_key or ""
             if ollama_native:
-                from motosan_ai.providers.ollama import OllamaProvider as NativeOllamaProvider
-
-                self._provider = NativeOllamaProvider(
+                self._provider = OllamaProvider(
                     model=model or "llama3.2",
                     base_url=base_url or "http://localhost:11434",
                     think=ollama_think,
@@ -164,9 +175,10 @@ class Client:
                     read_idle_timeout=read_idle_timeout,
                 )
         else:
-            self.api_key = api_key or self._load_api_key(provider_value)
-            if not self.api_key:
+            key = api_key or self._load_api_key(provider_value)
+            if not key:
                 raise ConfigError(f"Missing API key for provider: {provider_value.value}")
+            self.api_key = key
 
             if provider_value == Provider.anthropic:
                 self._provider = AnthropicProvider(

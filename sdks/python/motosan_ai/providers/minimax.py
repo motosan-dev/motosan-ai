@@ -283,10 +283,10 @@ class MinimaxProvider:
                         raise StreamError(f"malformed SSE chunk: {exc}") from exc
                     choice = (payload.get("choices") or [{}])[0]
                     delta = choice.get("delta") or {}
-                    text = delta.get("content") or ""
-                    if text:
+                    delta_text = delta.get("content") or ""
+                    if delta_text:
                         yielded = True
-                        yield StreamEvent(content=text, done=False)
+                        yield StreamEvent(content=delta_text, done=False)
 
                     for tc in delta.get("tool_calls") or []:
                         fn = tc.get("function") or {}

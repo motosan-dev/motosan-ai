@@ -15,6 +15,16 @@ All notable changes to `motosan-ai` Python SDK are documented in this file.
   "succeeded" with the image silently discarded now raise. (Matches the
   TypeScript SDK's declared Minimax capabilities.)
 
+### Added
+- PEP 561 `py.typed` marker: downstream type checkers now see motosan-ai's
+  annotations (previously the package was treated as untyped). `mypy
+  motosan_ai/` is now clean and enforced in CI.
+
+### Fixed
+- Internal type errors surfaced while enabling `py.typed` (20 mypy errors
+  across client.py, openai.py, minimax.py, anthropic.py, oauth/_flow.py) —
+  all renames/annotations/equivalent control flow, no behavior change.
+
 ## [0.18.0] - 2026-07-17
 
 ### Breaking
