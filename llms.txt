@@ -1014,12 +1014,15 @@ git add -A
 git commit -m "chore(release): rust-v0.28.0 and python-v0.20.0 (#<issue>)"
 gh pr create --title "chore(release): rust-v0.28.0 and python-v0.20.0"
 
-# 4. After the PR merges, tag the MERGE COMMIT on main and push the tags.
-#    Create them from a checkout of origin/main, not a stale branch.
-git tag -a rust-v0.28.0 -m "rust-v0.28.0 — summary"
-git tag -a python-v0.20.0 -m "python-v0.20.0 — summary"
-git push origin rust-v0.28.0 python-v0.20.0
+# 4. Tag. Label the release PR `release:rust` / `release:python` before
+#    merging and release-tag.yml does it, or dispatch that workflow by hand:
+gh workflow run release-tag.yml -f packages="rust python"
 ```
+
+`release-tag.yml` tags the merge commit, derives tag names from the manifests,
+refuses a tag that already exists, and starts each publish workflow. Tagging by
+hand still works, but create the tags from a checkout of `origin/main` — a
+stale branch carries a stale pre-push hook.
 
 `chore(release):` is the one place the `fix:` / `feat:` / `refactor:` commit-type
 rule does not apply — a release ships no new change of its own, so dressing it
