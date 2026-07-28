@@ -31,3 +31,8 @@ sdks/typescript/dist/
 
 # CodeGraph index (local, rebuilt via `codegraph init`)
 /.codegraph/
+
+# Stray repo-root node_modules. Only sdks/typescript has a real dependency
+# tree; anything at the root is a tool artefact (a Vite cache, typically) and
+# was showing up as untracked noise in every `git status`.
+/node_modules/
