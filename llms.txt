@@ -973,6 +973,18 @@ token.issued_at      // Unix timestamp of issue time
 
 Python, Rust, and TypeScript SDKs are versioned and released **independently**.
 
+The version bump itself is scripted — do not hand-edit the manifests, lockfiles,
+CHANGELOG headings, or doc version banners:
+
+```bash
+python3 scripts/bump-version.py --rust 0.28.0 --python 0.20.0   # add --dry-run to preview
+```
+
+It writes every derived location and then runs `scripts/check-versions.py`, which
+also gates CI (`ci-metadata`) and the pre-push hook. What stays manual: the root
+`CHANGELOG.md` entry, the AGENTS.md release paragraph, and tagging after merge.
+The per-SDK steps below describe what the script automates.
+
 ### Tag Convention
 
 | SDK              | Tag format                |

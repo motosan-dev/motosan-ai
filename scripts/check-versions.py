@@ -3,8 +3,8 @@
 
 Three manifests are the sources of truth:
 
-    sdks/rust/Cargo.toml        [package] version
-    sdks/python/pyproject.toml  [project] version
+    sdks/rust/Cargo.toml          [package] version
+    sdks/python/pyproject.toml    [project] version
     sdks/typescript/package.json  version
 
 Everything else that carries a version is derived and must agree: the two
@@ -17,18 +17,18 @@ It also forbids re-introducing version-pinned `motosan-ai` Cargo install
 snippets: docs teach `cargo add motosan-ai --features <feature>`, which
 resolves at run time and cannot go stale.
 
+The locations themselves live in `_release_sites.py`, shared with
+`bump-version.py`.
+
 Run: python3 scripts/check-versions.py   (stdlib only, needs Python >= 3.11)
 """
 
 from __future__ import annotations
 
-import json
 import re
 import sys
-import tomllib
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+import _release_sites as sites
 
 # Historical planning records legitimately quote the pinned snippets of past
 # releases; they document what was done, and must not be rewritten.
@@ -52,143 +52,86 @@ def fail(message: str) -> None:
     errors.append(message)
 
 
-def read_text(rel: str) -> str:
-    return (ROOT / rel).read_text(encoding="utf-8")
-
-
-def load_toml(rel: str) -> dict:
-    with (ROOT / rel).open("rb") as handle:
-        return tomllib.load(handle)
-
-
-def load_json(rel: str) -> dict:
-    return json.loads(read_text(rel))
-
-
-def manifest_versions() -> dict[str, str]:
-    rust = load_toml("sdks/rust/Cargo.toml")["package"]["version"]
-    python = load_toml("sdks/python/pyproject.toml")["project"]["version"]
-    ts = load_json("sdks/typescript/package.json")["version"]
-    return {"rust": rust, "python": python, "ts": ts}
-
-
 def check_lockfiles(v: dict[str, str]) -> None:
     """Both lockfiles record the workspace member's own version."""
-    uv_packages = [
-        pkg
-        for pkg in load_toml("uv.lock").get("package", [])
-        if pkg.get("name") == "motosan-ai" and "version" in pkg
-    ]
-    if len(uv_packages) != 1:
+    uv_version = sites.uv_lock_version()
+    if uv_version is None:
+        fail(f"{sites.UV_LOCK}: expected exactly one motosan-ai package entry")
+    elif uv_version != v["python"]:
         fail(
-            f"uv.lock: expected exactly one motosan-ai package entry, found {len(uv_packages)}"
-        )
-    elif uv_packages[0]["version"] != v["python"]:
-        fail(
-            f"uv.lock: motosan-ai is {uv_packages[0]['version']}, "
+            f"{sites.UV_LOCK}: motosan-ai is {uv_version}, "
             f"pyproject.toml is {v['python']} — run `uv sync --all-extras` in sdks/python/"
         )
 
-    lock = load_json("sdks/typescript/package-lock.json")
-    for label, found in (
-        ("top-level version", lock.get("version")),
-        ('packages[""].version', lock.get("packages", {}).get("", {}).get("version")),
-    ):
+    for label, found in sites.npm_lock_versions().items():
         if found != v["ts"]:
             fail(
-                f"sdks/typescript/package-lock.json: {label} is {found}, "
+                f"{sites.NPM_LOCK}: {label} is {found}, "
                 f"package.json is {v['ts']} — run `npm install` in sdks/typescript/"
             )
 
 
 def check_banners(v: dict[str, str]) -> None:
     """Each banner line is expected verbatim; the anchor locates near misses."""
-    expectations = [
-        (
-            "AGENTS.md",
-            f"Rust v{v['rust']} · Python v{v['python']} (PyPI) · TypeScript v{v['ts']} (npm)",
-            "(PyPI) · TypeScript v",
-        ),
-        (
-            "llms.txt",
-            f"- Python {v['python']} · TypeScript {v['ts']} · Rust {v['rust']}",
-            "- Python ",
-        ),
-        (
-            "skills/motosan-ai/SKILL.md",
-            f"Multi-provider LLM SDK — Python {v['python']} / Rust {v['rust']} / TypeScript {v['ts']}",
-            "Multi-provider LLM SDK — Python ",
-        ),
-        (
-            "README.md",
-            f"| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) | v{v['rust']} |",
-            "| Rust | [`motosan-ai`](https://crates.io/crates/motosan-ai) |",
-        ),
-        (
-            "README.md",
-            f"| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) | v{v['python']} |",
-            "| Python | [`motosan-ai`](https://pypi.org/project/motosan-ai/) |",
-        ),
-        (
-            "README.md",
-            f"| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) | v{v['ts']} |",
-            "| TypeScript | [`@motosan-ai/sdk`](https://www.npmjs.com/package/@motosan-ai/sdk) |",
-        ),
-    ]
+    for rel, template, anchor in sites.BANNERS:
+        expected = template.format(**v)
+        near = sites.anchor_matches(rel, anchor)
 
-    for rel, expected, anchor in expectations:
-        lines = read_text(rel).splitlines()
-        if expected in lines:
+        # An anchor that stops being unique silently weakens both this check
+        # and bump-version.py's rewrite, so treat it as a failure of its own.
+        if len(near) > 1:
+            fail(
+                f"{rel}: anchor {anchor!r} matches {len(near)} lines, expected 1 — "
+                f"choose a more specific anchor in scripts/_release_sites.py"
+            )
             continue
-        near = [line for line in lines if anchor in line]
+
+        if expected in sites.read_text(rel).splitlines():
+            continue
+
         if near:
             fail(
-                f"{rel}: version banner is stale\n    expected: {expected}\n    found:    {near[0]}"
+                f"{rel}: version banner is stale\n"
+                f"    expected: {expected}\n"
+                f"    found:    {near[0]}"
             )
         else:
             fail(
                 f"{rel}: version banner not found (was it reworded?)\n"
                 f"    expected: {expected}\n"
                 f"    no line contains the anchor {anchor!r} — "
-                f"update scripts/check-versions.py if the banner moved on purpose"
+                f"update scripts/_release_sites.py if the banner moved on purpose"
             )
 
 
 def check_changelogs(v: dict[str, str]) -> None:
     """The first released heading after [Unreleased] is the shipped version."""
     heading = re.compile(r"^## \[(?P<version>[^\]]+)\]")
-    for rel, key in (
-        ("sdks/rust/CHANGELOG.md", "rust"),
-        ("sdks/python/CHANGELOG.md", "python"),
-        ("sdks/typescript/CHANGELOG.md", "ts"),
-    ):
+    for sdk, rel in sites.CHANGELOGS.items():
         versions = [
             match.group("version")
-            for line in read_text(rel).splitlines()
+            for line in sites.read_text(rel).splitlines()
             if (match := heading.match(line)) and match.group("version") != "Unreleased"
         ]
         if not versions:
             fail(f"{rel}: no released version heading found")
-        elif versions[0] != v[key]:
+        elif versions[0] != v[sdk]:
             fail(
                 f"{rel}: first released heading is [{versions[0]}], "
-                f"manifest is {v[key]} — the release entry was not renamed from [Unreleased]"
+                f"manifest is {v[sdk]} — the release entry was not renamed from [Unreleased]"
             )
 
 
 def check_no_pinned_snippets() -> None:
     """Docs must teach `cargo add`, never a snippet that pins the version."""
-    for path in sorted(ROOT.rglob("*")):
+    for path in sorted(sites.ROOT.rglob("*")):
         if path.suffix not in SNIPPET_SCAN_SUFFIXES or not path.is_file():
             continue
-        rel = path.relative_to(ROOT).as_posix()
-        if any(
+        parts = path.relative_to(sites.ROOT).parts
+        rel = path.relative_to(sites.ROOT).as_posix()
+        if any(part in SNIPPET_SCAN_EXCLUDED_DIRS for part in parts) or any(
             rel == excluded or rel.startswith(f"{excluded}/")
             for excluded in SNIPPET_SCAN_EXCLUDED_DIRS
-        ):
-            continue
-        if any(
-            part in SNIPPET_SCAN_EXCLUDED_DIRS for part in path.relative_to(ROOT).parts
         ):
             continue
         for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -202,7 +145,7 @@ def check_no_pinned_snippets() -> None:
 
 
 def main() -> int:
-    versions = manifest_versions()
+    versions = sites.read_versions()
     check_lockfiles(versions)
     check_banners(versions)
     check_changelogs(versions)
