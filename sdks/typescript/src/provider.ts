@@ -6,49 +6,73 @@
  */
 
 import { StreamReadTimeoutError, UnsupportedFeatureError } from './error.js'
-import type { BoxStream } from './stream.js'
-import type { ChatRequest, ChatResponse, ContentBlock, StreamEvent } from './types.js'
+import type { BoxModelStream, BoxStream } from './stream.js'
+import type {
+  ChatRequest,
+  ChatResponse,
+  ContentBlock,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelStreamDelta,
+  StreamEvent,
+} from './types.js'
 
 /**
  * Describes what features a provider supports.
  *
- * Mirrors Rust `ProviderCapabilities` (types.rs:903-907) PLUS a TS-only
- * `supportsMcp` flag. Rust has no MCP capability — it achieves "no MCP on
- * OpenAI" by serializer omission. TS adds the flag so validateRequest can
- * reject MCP on non-Anthropic providers per the M4 Done-when requirement.
+ * Mirrors Rust `ProviderCapabilities` (types.rs:1518-1523) PLUS a TS-only
+ * `supportsMcp` flag — Rust has no MCP capability and achieves "no MCP on
+ * OpenAI" by serializer omission, while TS lets validateRequest reject it.
+ * `supportsFreeformTools` gates the NATIVE model surface only; it says nothing
+ * about the legacy function-tool surface.
  */
 export interface ProviderCapabilities {
   supportsImage: boolean
   supportsDocument: boolean
   /** TS-only divergence from Rust: whether the provider accepts MCP server/tool config. */
   supportsMcp: boolean
+  /** Whether the provider speaks native Freeform (custom) tools. */
+  supportsFreeformTools: boolean
 }
 
 /**
- * Provider with text only — no images, no documents.
- *
- * Mirrors Rust `ProviderCapabilities::text_only()` (types.rs:910-915).
+ * Provider with text only — no images, no documents, no freeform tools.
  */
 export function textOnly(): ProviderCapabilities {
-  return { supportsImage: false, supportsDocument: false, supportsMcp: false }
+  return {
+    supportsImage: false,
+    supportsDocument: false,
+    supportsMcp: false,
+    supportsFreeformTools: false,
+  }
 }
 
 /**
- * Provider with image support — images but no documents.
- *
- * Mirrors Rust `ProviderCapabilities::with_image()` (types.rs:917-922).
+ * Provider with image support — images but no documents, no freeform tools.
  */
 export function withImage(): ProviderCapabilities {
-  return { supportsImage: true, supportsDocument: false, supportsMcp: false }
+  return {
+    supportsImage: true,
+    supportsDocument: false,
+    supportsMcp: false,
+    supportsFreeformTools: false,
+  }
 }
 
 /**
- * Provider with full support — images and documents.
+ * Provider with full legacy support — images and documents.
  *
- * Mirrors Rust `ProviderCapabilities::full()` (types.rs:924-929).
+ * `supportsFreeformTools` stays FALSE on purpose, matching Rust
+ * `ProviderCapabilities::full()` (types.rs:1558-1564). A provider that flipped
+ * it here would silently claim native support it does not have.
  */
 export function fullCaps(): ProviderCapabilities {
-  return { supportsImage: true, supportsDocument: true, supportsMcp: true }
+  return {
+    supportsImage: true,
+    supportsDocument: true,
+    supportsMcp: true,
+    supportsFreeformTools: false,
+  }
 }
 
 /**
@@ -57,7 +81,39 @@ export function fullCaps(): ProviderCapabilities {
  * Distinct from `textOnly()` so MCP isn't blanket-blocked on the text-only path.
  */
 export function minimaxCaps(): ProviderCapabilities {
-  return { supportsImage: false, supportsDocument: false, supportsMcp: true }
+  return {
+    supportsImage: false,
+    supportsDocument: false,
+    supportsMcp: true,
+    supportsFreeformTools: false,
+  }
+}
+
+/**
+ * Text-only provider that speaks native Freeform tools (ChatGPT Codex).
+ * Mirrors Rust `ProviderCapabilities::with_freeform_tools()`.
+ */
+export function withFreeformTools(): ProviderCapabilities {
+  return {
+    supportsImage: false,
+    supportsDocument: false,
+    supportsMcp: false,
+    supportsFreeformTools: true,
+  }
+}
+
+/**
+ * Image-capable provider that speaks native Freeform tools (OpenAI with the
+ * Responses opt-in on). Mirrors Rust
+ * `ProviderCapabilities::with_image_and_freeform_tools()`.
+ */
+export function withImageAndFreeformTools(): ProviderCapabilities {
+  return {
+    supportsImage: true,
+    supportsDocument: false,
+    supportsMcp: false,
+    supportsFreeformTools: true,
+  }
 }
 
 /**
@@ -120,14 +176,19 @@ export interface ProviderRequestOptions extends RequestOptions {
 }
 
 /**
- * Minimal shape a provider must expose to be dispatched: a capability reshape
- * plus chat/stream. Concrete providers (AnthropicProvider/OpenAIProvider/
- * MinimaxProvider) structurally satisfy this.
+ * Minimal shape a provider must expose to be dispatched.
+ *
+ * `modelChat` / `modelStream` are OPTIONAL: this is a structural contract that
+ * third parties implement, so requiring the native surface would be a breaking
+ * change. Providers that omit them are rejected by dispatchModelChat /
+ * dispatchModelStream with UnsupportedFeatureError.
  */
 export interface ProviderImpl {
   capabilities(): ProviderCapabilities
   chat(req: ChatRequest, opts?: ProviderRequestOptions): Promise<ChatResponse>
   stream(req: ChatRequest, opts?: ProviderRequestOptions): BoxStream
+  modelChat?(req: ModelChatRequest, opts?: ProviderRequestOptions): Promise<ModelChatResponse>
+  modelStream?(req: ModelChatRequest, opts?: ProviderRequestOptions): BoxModelStream
 }
 
 /**
@@ -156,6 +217,73 @@ export function dispatchStream(
 ): BoxStream {
   validateRequest(req, provider.capabilities())
   return provider.stream(req, opts)
+}
+
+/**
+ * Validate a native model request against provider capabilities.
+ *
+ * Mirrors Rust `ProviderImpl::validate_model_request` (providers/mod.rs:82-140)
+ * MINUS the thinking and MCP arms: milestone D3 omits those request fields
+ * entirely, so a caller reaching for them gets a type error rather than a
+ * runtime UnsupportedFeatureError. Throws BEFORE any HTTP call.
+ */
+export function validateModelRequest(req: ModelChatRequest, caps: ProviderCapabilities): void {
+  const hasFreeformSpec = (req.toolSpecs ?? []).some((spec) => spec.kind === 'freeform')
+  const hasFreeformHistory = req.context.some(
+    (item) =>
+      (item.kind === 'toolCall' && item.call.kind === 'freeform') ||
+      (item.kind === 'toolOutput' && item.output.kind === 'custom'),
+  )
+  if ((hasFreeformSpec || hasFreeformHistory) && !caps.supportsFreeformTools) {
+    throw new UnsupportedFeatureError('provider does not support native freeform tools')
+  }
+
+  for (const item of req.context) {
+    if (item.kind !== 'message') continue
+    const blocks: ContentBlock[] = item.message.contentBlocks ?? []
+    for (const block of blocks) {
+      if (block.type === 'image' && !caps.supportsImage) {
+        throw new UnsupportedFeatureError('provider does not support image input')
+      }
+      if (block.type === 'document' && !caps.supportsDocument) {
+        throw new UnsupportedFeatureError('provider does not support document input')
+      }
+    }
+  }
+}
+
+/**
+ * Dispatch a native model request: validate BEFORE any HTTP call, then
+ * provider.modelChat (which owns its retry loop). Mirrors Rust
+ * client.rs dispatch_model_chat.
+ */
+export async function dispatchModelChat(
+  provider: ProviderImpl,
+  req: ModelChatRequest,
+  opts?: ProviderRequestOptions,
+): Promise<ModelChatResponse> {
+  validateModelRequest(req, provider.capabilities())
+  if (!provider.modelChat) {
+    throw new UnsupportedFeatureError('provider does not support native model requests')
+  }
+  return provider.modelChat(req, opts)
+}
+
+/**
+ * Dispatch a native model stream: validate BEFORE connecting, then
+ * provider.modelStream. Sync return, so a rejected request throws
+ * synchronously rather than on first iteration.
+ */
+export function dispatchModelStream(
+  provider: ProviderImpl,
+  req: ModelChatRequest,
+  opts?: ProviderRequestOptions,
+): BoxModelStream {
+  validateModelRequest(req, provider.capabilities())
+  if (!provider.modelStream) {
+    throw new UnsupportedFeatureError('provider does not support native model streams')
+  }
+  return provider.modelStream(req, opts)
 }
 
 /**
@@ -203,6 +331,68 @@ export async function* readTimeoutStream(inner: BoxStream, timeoutSecs: number):
         }
 
         const result = raced as IteratorResult<StreamEvent>
+        if (result.done) {
+          closed = true
+          return
+        }
+        yield result.value
+      } finally {
+        if (timer !== undefined) clearTimeout(timer)
+      }
+    }
+  } finally {
+    await closeInner()
+  }
+}
+
+/**
+ * Native-stream analogue of readTimeoutStream. THROWS StreamReadTimeoutError
+ * when no delta arrives within the deadline; the deadline resets on each
+ * yielded delta and the inner iterator is cancelled before throwing. Mirrors
+ * Rust `ReadTimeoutModelStream` (client.rs:1239-1259).
+ */
+export async function* readTimeoutModelStream(
+  inner: BoxModelStream,
+  timeoutSecs: number,
+): BoxModelStream {
+  const timeoutMs = timeoutSecs * 1000
+  const iterator = inner[Symbol.asyncIterator]()
+  let closed = false
+
+  async function closeInner(): Promise<void> {
+    if (!closed) {
+      closed = true
+      await iterator.return?.()
+    }
+  }
+
+  function cancelInnerWithoutWaiting(): void {
+    if (!closed) {
+      closed = true
+      void iterator.return?.().catch(() => {})
+    }
+  }
+
+  try {
+    while (true) {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const timeout = new Promise<'__timeout__'>((resolve) => {
+          timer = setTimeout(() => resolve('__timeout__'), timeoutMs)
+        })
+        const next = iterator.next()
+        const raced = await Promise.race([next, timeout])
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+
+        if (raced === '__timeout__') {
+          cancelInnerWithoutWaiting()
+          throw new StreamReadTimeoutError(timeoutSecs)
+        }
+
+        const result = raced as IteratorResult<ModelStreamDelta>
         if (result.done) {
           closed = true
           return

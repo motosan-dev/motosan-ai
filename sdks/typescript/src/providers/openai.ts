@@ -1,10 +1,21 @@
-import { IncompleteStreamError } from '../error.js'
+import { IncompleteStreamError, UnsupportedFeatureError } from '../error.js'
 import { postJson, postStream } from '../http/fetch.js'
 import { parseSse } from '../http/sse.js'
 import { DEFAULT_OPENAI_MODEL } from '../models.js'
-import { withImage, type ProviderCapabilities, type ProviderRequestOptions } from '../provider.js'
+import {
+  validateModelRequest,
+  withImage,
+  withImageAndFreeformTools,
+  type ProviderCapabilities,
+  type ProviderRequestOptions,
+} from '../provider.js'
 import { attemptWithCancellation, classifyForRetry, RetryPolicy, withRetry } from '../retry.js'
 import { serializeOpenAiRequest } from '../serialize/openai.js'
+import {
+  buildModelRequestBody,
+  modelChatResponseFromOutput,
+  modelStreamAdapter,
+} from '../serialize/responses.js'
 import {
   doneEvent,
   doneWithStopReason,
@@ -13,9 +24,18 @@ import {
   toolCallEndWithId,
   toolCallStart,
   usageEvent,
+  type BoxModelStream,
   type BoxStream,
 } from '../stream.js'
-import type { ChatRequest, ChatResponse, StopReason, ToolCall } from '../types.js'
+import type {
+  ChatRequest,
+  ChatResponse,
+  ModelChatRequest,
+  ModelChatResponse,
+  ModelStreamDelta,
+  StopReason,
+  ToolCall,
+} from '../types.js'
 
 /** OpenAI authentication style. Mirrors Rust `OpenAIAuthStyle`. */
 export type OpenAIAuthStyle =
@@ -43,6 +63,7 @@ export class OpenAIProvider {
   private chatUrl: string = DEFAULT_OPENAI_CHAT_URL
   private responsesUrl: string = DEFAULT_OPENAI_RESPONSES_URL
   private responsesFallback = false
+  private responsesApi = false
 
   constructor(
     private readonly apiKey: string,
@@ -75,6 +96,15 @@ export class OpenAIProvider {
 
   withResponsesFallback(enabled: boolean): this {
     this.responsesFallback = enabled
+    return this
+  }
+
+  /**
+   * Opt into the OpenAI Responses API for the native model surface.
+   * Distinct from withResponsesFallback, which is only legacy chat 404 recovery.
+   */
+  withResponsesApi(enabled: boolean): this {
+    this.responsesApi = enabled
     return this
   }
 
@@ -319,7 +349,7 @@ export class OpenAIProvider {
   }
 
   capabilities(): ProviderCapabilities {
-    return withImage()
+    return this.responsesApi ? withImageAndFreeformTools() : withImage()
   }
 
   private async *streamImpl(request: ChatRequest, opts?: ProviderRequestOptions) {
@@ -468,5 +498,70 @@ export class OpenAIProvider {
       }
       throw new IncompleteStreamError('incomplete stream: openai ended without a terminal event')
     }
+  }
+
+  /**
+   * Native, genuinely non-streaming model request against the Responses API.
+   * Validation runs before the opt-in gate so freeform capability errors win.
+   */
+  async modelChat(
+    request: ModelChatRequest,
+    opts?: ProviderRequestOptions,
+  ): Promise<ModelChatResponse> {
+    validateModelRequest(request, this.capabilities())
+    if (!this.responsesApi) {
+      throw new UnsupportedFeatureError(
+        'OpenAI Chat Completions does not support native model requests; enable OpenAI Responses API',
+      )
+    }
+
+    const body = buildModelRequestBody(request, this.model, false)
+    const payload = await withRetry(
+      this.retryPolicy,
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postJson<unknown>(this.responsesUrl, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
+      classifyForRetry,
+    )
+
+    return modelChatResponseFromOutput(payload, this.model)
+  }
+
+  /**
+   * Native model stream. Validation and opt-in gating are synchronous so no
+   * network request starts unless the returned iterable is valid to use.
+   */
+  modelStream(request: ModelChatRequest, opts?: ProviderRequestOptions): BoxModelStream {
+    validateModelRequest(request, this.capabilities())
+    if (!this.responsesApi) {
+      throw new UnsupportedFeatureError(
+        'OpenAI Chat Completions does not support native model streams; enable OpenAI Responses API',
+      )
+    }
+    return this.modelStreamImpl(request, opts)
+  }
+
+  private async *modelStreamImpl(
+    request: ModelChatRequest,
+    opts?: ProviderRequestOptions,
+  ): AsyncGenerator<ModelStreamDelta> {
+    const body = buildModelRequestBody(request, this.model, true)
+    const responseBody = await withRetry(
+      this.retryPolicy,
+      async () =>
+        attemptWithCancellation(opts?.callerSignal, () =>
+          postStream(this.responsesUrl, this.headers(), body, {
+            signal: opts?.signal,
+            preHeadersTimeoutMs: opts?.preHeadersTimeoutMs,
+          }),
+        ),
+      classifyForRetry,
+    )
+
+    yield* modelStreamAdapter(responseBody, 'openai')
   }
 }

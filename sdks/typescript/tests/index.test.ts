@@ -22,16 +22,19 @@ describe('index.ts public exports', () => {
       supportsImage: false,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
     expect(mod.withImage()).toEqual({
       supportsImage: true,
       supportsDocument: false,
       supportsMcp: false,
+      supportsFreeformTools: false,
     })
     expect(mod.fullCaps()).toEqual({
       supportsImage: true,
       supportsDocument: true,
       supportsMcp: true,
+      supportsFreeformTools: false,
     })
 
     expect(typeof mod.DEFAULT_ANTHROPIC_MODEL).toBe('string')
@@ -103,6 +106,56 @@ describe('ChatGPT-Codex public surface (index re-exports)', () => {
     expect(typeof sdk.ChatGptCodexProvider).toBe('function')
     expect(sdk.DEFAULT_CHATGPT_CODEX_MODEL).toBe('gpt-5.5')
     expect(sdk.CHATGPT_CODEX_MODELS).toContain('gpt-5.5')
+  })
+})
+
+describe('native model API public surface', () => {
+  it('re-exports the native capability factories and validator', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.withFreeformTools).toBe('function')
+    expect(typeof mod.withImageAndFreeformTools).toBe('function')
+    expect(typeof mod.validateModelRequest).toBe('function')
+    expect(mod.withFreeformTools()).toEqual({
+      supportsImage: false,
+      supportsDocument: false,
+      supportsMcp: false,
+      supportsFreeformTools: true,
+    })
+    expect(mod.withImageAndFreeformTools().supportsImage).toBe(true)
+  })
+
+  it('re-exports collectModelStream from the root', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.collectModelStream).toBe('function')
+  })
+
+  it('accepts the native types from the root entrypoint', async () => {
+    const mod = await import('../src/index.js')
+    const request: import('../src/index.js').ModelChatRequest = {
+      context: [{ kind: 'message', message: { role: 'user', content: 'hi' } }],
+      toolSpecs: [
+        {
+          kind: 'freeform',
+          tool: {
+            name: 'exec',
+            description: 'Run JavaScript',
+            format: { type: 'grammar', syntax: 'lark', definition: 'start: source' },
+          },
+        },
+      ],
+    }
+    expect(() => mod.validateModelRequest(request, mod.withFreeformTools())).not.toThrow()
+    expect(() => mod.validateModelRequest(request, mod.withImage())).toThrow(
+      'provider does not support native freeform tools',
+    )
+  })
+
+  it('exposes the native methods on Client and ClientBuilder', async () => {
+    const mod = await import('../src/index.js')
+    expect(typeof mod.Client.prototype.modelChat).toBe('function')
+    expect(typeof mod.Client.prototype.modelStream).toBe('function')
+    expect(typeof mod.Client.prototype.modelStreamCollect).toBe('function')
+    expect(typeof mod.ClientBuilder.prototype.openaiResponsesApi).toBe('function')
   })
 })
 
