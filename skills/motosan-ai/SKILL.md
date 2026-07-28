@@ -5,7 +5,7 @@ description: Help developers use the motosan-ai SDK (Python and Rust) and the co
 
 # motosan-ai SDK
 
-Multi-provider LLM SDK — Python 0.19.0 / Rust 0.27.0 / TypeScript 0.15.0
+Multi-provider LLM SDK — Python 0.19.0 / Rust 0.27.1 / TypeScript 0.15.0
 
 Providers: Anthropic, OpenAI (+ OpenAI-compatible: Groq, DeepSeek, Together, self-hosted proxies), MiniMax, Ollama, Gemini, Gemini Code Assist, Claude Code CLI, Codex CLI, Gemini CLI, ChatGPT Codex (Responses API)
 

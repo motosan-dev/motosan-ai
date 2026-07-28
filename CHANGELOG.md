@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [rust-0.27.1] — 2026-07-28
+
+Documentation-only patch for the Rust crate. No Python or TypeScript package
+version changed.
+
+### Changed
+
+- README install snippets use `cargo add motosan-ai --features <feature>` in
+  place of a version-pinned `[dependencies]` block, so the instructions
+  crates.io renders cannot go stale between releases. No code or API changes.
+
 ## [rust-0.27.0 / python-0.19.0] — 2026-07-28
 
 Correctness quick-wins batch. No TypeScript package version changed.

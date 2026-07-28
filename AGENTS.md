@@ -2,7 +2,7 @@
 
 Multi-provider AI SDK. Rust (`sdks/rust/`) + Python (`sdks/python/`) + TypeScript (`sdks/typescript/`). Independent idiomatic implementations — no shared runtime.
 
-Rust v0.27.0 · Python v0.19.0 (PyPI) · TypeScript v0.15.0 (npm)
+Rust v0.27.1 · Python v0.19.0 (PyPI) · TypeScript v0.15.0 (npm)
 
 Python 0.13.0 adds CLI-runtime setters (`.cwd()`, session continuity via `session_id` + `resume()`, per-run `.env()/.envs()`, CLI tool-call stream events, configurable `.timeout()/.no_timeout()`) and a **breaking** fallible stream: HTTP provider `stream()` now raises `motosan_ai.error.StreamError` mid-stream instead of swallowing transport/parse faults (`collect_stream` propagates it; `Client.stream_with` does not retry after a mid-stream raise).
 
