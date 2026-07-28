@@ -1,9 +1,9 @@
 name: ci-python-nightly
 
 on:
-  schedule:
-    # Daily at 08:00 UTC (16:00 Asia/Taipei)
-    - cron: "0 8 * * *"
+  # No schedule: live provider tests never run automatically in CI.
+  # Manual dispatch only, and only meaningful when the provider API-key
+  # secrets are configured (without them every live test silently skips).
   workflow_dispatch: {}
 
 jobs:
