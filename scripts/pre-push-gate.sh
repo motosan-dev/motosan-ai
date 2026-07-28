@@ -65,6 +65,14 @@ fi
 
 echo "=== Pre-push gate ==="
 
+# Version metadata: sub-second, and the banners/lockfiles it guards live
+# outside sdks/**, so it runs for every push — docs-only ones included.
+if command -v python3 &>/dev/null; then
+    python3 scripts/check-versions.py || block "version metadata is inconsistent"
+else
+    echo "ℹ️  python3 not found — skipping metadata check."
+fi
+
 if [ "$NEED_PYTHON$NEED_RUST$NEED_TS" = "000" ] && [ "${RUN_LIVE:-0}" != "1" ]; then
     echo "=== Pre-push gate PASSED (no SDK paths in pushed range — suites skipped) ==="
     exit 0

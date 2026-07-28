@@ -1,0 +1,20 @@
+name: ci-metadata
+
+# Deliberately NOT path-filtered: version banners, lockfiles, and CHANGELOG
+# headings live outside sdks/**, so the three per-SDK workflows would skip
+# exactly the changes this check exists to catch.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check version metadata
+        run: python3 scripts/check-versions.py

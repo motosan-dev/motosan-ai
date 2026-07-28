@@ -65,10 +65,19 @@
     echo "✅ Python checks passed."
   '';
 
-  # Full pre-push gate: Python + Rust (no live tests)
+  # Mirrors ci-metadata.yml: manifests vs lockfiles, doc banners, CHANGELOGs
+  check-metadata = writeShellScriptBin "check-metadata" ''
+    set -euo pipefail
+    REPO_ROOT="''${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+    echo "=== Version metadata ==="
+    python3 "$REPO_ROOT/scripts/check-versions.py"
+  '';
+
+  # Full pre-push gate: metadata + Python + Rust (no live tests)
   check-all = writeShellScriptBin "check-all" ''
     set -euo pipefail
     echo "=== motosan-ai full check ==="
+    check-metadata
     check-python
     check-rust
     echo "=== All checks passed ==="

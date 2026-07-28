@@ -18,6 +18,7 @@ pkgs.mkShell {
     scripts.lint
     scripts.check-rust
     scripts.check-python
+    scripts.check-metadata
     scripts.check-all
     scripts.test-live
   ];
