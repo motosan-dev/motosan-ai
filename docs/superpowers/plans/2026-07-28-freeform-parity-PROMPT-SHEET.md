@@ -166,7 +166,8 @@ Done when ALL hold:
 3. TypeScript gates and repo-wide gates green.
 4. Commit per the plan; push SHA-verified against refs/heads/feat/ts-freeform-conformance.
 5. PR open; `gh pr checks` shows `metadata` and `typescript` SUCCESS.
-6. Report the PR URL and list each mutation with the failure it produced. Do NOT merge.
+6. The suite's module docstring records the three mutations and the test each one fails, so the gate can be re-proven after a future refactor. A suite whose non-vacuity proof exists only in a chat log is unmaintainable.
+7. Report the PR URL and list each mutation with the failure it produced. Do NOT merge.
 
 Stop-loss: 3 consecutive failures on one step, or a mutation that does NOT make the suite fail → STOP and report verbatim. No --no-verify; no reset --hard.
 ```
@@ -185,7 +186,8 @@ Done when ALL hold:
 4. Repo-wide: `treefmt --fail-on-change`, `python3 scripts/check-versions.py` (versions must be untouched).
 5. Commit per the plan; push SHA-verified against refs/heads/feat/rust-freeform-conformance.
 6. PR open; `gh pr checks` shows `metadata`, `rust`, and `rust-msrv-no-features` SUCCESS.
-7. Report the PR URL and list each mutation with its failure. Do NOT merge.
+7. The suite's file-level doc comment records the three mutations and the test each one fails, so the gate can be re-proven after a future refactor.
+8. Report the PR URL and list each mutation with its failure. Do NOT merge.
 
 Stop-loss: 3 consecutive failures on one step, or any diff appearing under sdks/rust/src → STOP and report verbatim. No --no-verify; no reset --hard.
 ```
