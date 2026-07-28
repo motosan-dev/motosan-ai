@@ -45,18 +45,21 @@ def test_text_only_capabilities():
     caps = ProviderCapabilities.text_only()
     assert caps.supports_image is False
     assert caps.supports_document is False
+    assert caps.supports_freeform_tools is False
 
 
 def test_with_image_capabilities():
     caps = ProviderCapabilities.with_image()
     assert caps.supports_image is True
     assert caps.supports_document is False
+    assert caps.supports_freeform_tools is False
 
 
 def test_full_capabilities():
     caps = ProviderCapabilities.full()
     assert caps.supports_image is True
     assert caps.supports_document is True
+    assert caps.supports_freeform_tools is False
 
 
 def test_text_only_rejects_image():
