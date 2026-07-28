@@ -10,6 +10,7 @@ from types import TracebackType
 from typing import Any
 
 from motosan_ai.error import ConfigError, MotosanError, NetworkError, ProviderError, RateLimitError
+from motosan_ai.provider_base import validate_request as _validate_request
 from motosan_ai.providers import (
     AnthropicProvider,
     ChatGptCodexProvider,
@@ -459,6 +460,10 @@ class Client:
         if request.model is None and self.model is not None:
             request = replace(request, model=self.model)
 
+        caps = getattr(self._provider, "capabilities", None)
+        if caps is not None:
+            _validate_request(request, caps)
+
         if self._total_timeout is None:
             return await self._dispatch_chat(request)
         try:
@@ -505,6 +510,10 @@ class Client:
         """
         if request.model is None and self.model is not None:
             request = replace(request, model=self.model)
+
+        caps = getattr(self._provider, "capabilities", None)
+        if caps is not None:
+            _validate_request(request, caps)
 
         policy = self._retry_policy
         last_error: MotosanError | None = None

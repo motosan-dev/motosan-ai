@@ -40,7 +40,7 @@ def _http_error_kwargs(status: int, headers: httpx.Headers | None) -> dict[str, 
 
 
 class MinimaxProvider:
-    capabilities: ProviderCapabilities = ProviderCapabilities.with_image()
+    capabilities: ProviderCapabilities = ProviderCapabilities.text_only()
 
     def __init__(
         self,

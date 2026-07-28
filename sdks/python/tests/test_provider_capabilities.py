@@ -96,9 +96,9 @@ def test_openai_is_with_image():
     assert p.capabilities == ProviderCapabilities.with_image()
 
 
-def test_minimax_is_with_image():
+def test_minimax_is_text_only():
     p = MinimaxProvider(api_key="test")
-    assert p.capabilities == ProviderCapabilities.with_image()
+    assert p.capabilities == ProviderCapabilities.text_only()
 
 
 def test_ollama_native_is_text_only():
