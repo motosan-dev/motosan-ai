@@ -55,7 +55,7 @@ DocumentSource::Url    { url: string }
 |-------|------|-------|
 | `supports_image` | `bool` | Provider accepts `ContentBlock::Image` |
 | `supports_document` | `bool` | Provider accepts `ContentBlock::Document` |
-| `supports_freeform_tools` | `bool` | Provider accepts native Rust `ModelToolSpec::Freeform` / `ModelToolCall::Freeform` transport |
+| `supports_freeform_tools` | `bool` | Provider accepts native `ModelToolSpec::Freeform` / `ModelToolCall::Freeform` transport (Rust 0.26.0+; Python and TypeScript ports in progress — see #270) |
 
 Named constructors: `text_only()` / `with_image()` / `with_freeform_tools()` /
 `with_image_and_freeform_tools()` / `full()`.
@@ -104,12 +104,26 @@ network call.
 | `name` | `string` |
 | `input` | `object` (parsed JSON) |
 
-## Native Model API (Rust, v0.26.0+)
+## Native Model API
+
+> Implemented in Rust 0.26.0+. Python and TypeScript ports in progress — see #270.
 
 The legacy cross-SDK `ChatRequest`, `Tool`, `ToolCall`, `ChatResponse`, and
-`StreamEvent` APIs remain function-tool-only. Rust v0.26.0 adds a parallel
-native model API for providers that expose OpenAI Responses-style ordered input
-items and custom tool calls.
+`StreamEvent` APIs remain function-tool-only. Every SDK MUST expose a parallel
+native model API for providers that speak OpenAI Responses-style ordered input
+items and custom tool calls. The type shapes below are normative; each SDK
+models them in its own idiom (Rust enums, Python variant dataclasses behind a
+union alias, TypeScript discriminated unions), and each SDK's wire encoding
+MUST live outside its type module — Rust `providers/responses.rs`, Python
+`providers/responses.py`, TypeScript `serialize/responses.ts`.
+
+Wire keys deliberately differ from field names and MUST be honoured exactly:
+`ModelToolCall.id` ↔ wire `call_id` (deserialization accepts `call_id` **or**
+`id`); `ModelChatRequest.max_tokens` ↔ body `max_output_tokens`;
+`Tool.input_schema` ↔ tool-spec `parameters`. When building a request body,
+system messages carried inside `context` MUST be hoisted into `instructions`
+**and removed from `input`**, and `provider_options` MUST be shallow-merged
+**last**, so a caller can override anything the encoder produced.
 
 ### Tool definitions
 
@@ -167,6 +181,31 @@ Text(string)
 Content([InputText | InputImage | EncryptedContent])
 ```
 
+### Fields the native request does not carry
+
+`ModelChatRequest` MUST NOT accept extended thinking or MCP configuration.
+Rust models `thinking`, `mcp_servers`, and `mcp_tool_configs` as fields that
+exist only so validation can reject them; Python and TypeScript omit the
+fields entirely, so a caller who reaches for one gets an attribute or type
+error instead of a runtime rejection. Both spellings satisfy this contract.
+Provider-specific reasoning controls travel through `provider_options`.
+
+### Rejection error type
+
+Rejections that happen before any network I/O — an unsupported native
+Freeform spec or history, unsupported image or document content, a provider
+with no native path — surface as:
+
+| SDK | Spelling |
+|-----|----------|
+| Rust | `MotosanError::UnsupportedFeature(String)` |
+| Python | `class UnsupportedFeatureError(InvalidRequestError)` |
+| TypeScript | `export class UnsupportedFeatureError extends MotosanError` |
+
+Python subclasses `InvalidRequestError` deliberately, as a migration softener:
+existing `except InvalidRequestError` handlers keep working while callers that
+must distinguish match the subclass. It stays non-retryable by inheritance.
+
 ### Requests, responses, and streams
 
 ```
@@ -201,12 +240,28 @@ accumulate `FreeformInput` deltas for display, but must preserve the completed
 
 ### Provider support
 
-OpenAI supports the native API only when Rust callers opt into
-`ClientBuilder::openai_responses_api(true)` or
-`OpenAIProvider::with_responses_api(true)`. ChatGPT Codex supports native
-Freeform transport through its Responses endpoint by default. Unsupported
-providers reject native Freeform specs or history with
-`MotosanError::UnsupportedFeature` before network I/O.
+ChatGPT Codex supports native Freeform transport through its Responses
+endpoint by default. OpenAI supports the native API **only** when the caller
+opts in — Rust `ClientBuilder::openai_responses_api(true)` /
+`OpenAIProvider::with_responses_api(true)`, Python
+`Client(openai_responses_api=True)` / `Client.openai(openai_responses_api=True)`
+/ `OpenAIProvider(responses_api=True)`, TypeScript
+`ClientBuilder.openaiResponsesApi(true)` /
+`OpenAIProvider.withResponsesApi(true)`. TypeScript's pre-existing
+`withResponsesFallback` is a 404 recovery path and is **not** the native
+opt-in; the two MUST stay distinguishable.
+
+The ChatGPT Codex body overrides the caller: `store=false`,
+`include=["reasoning.encrypted_content"]`, `parallel_tool_calls=true`, and
+`tool_choice="auto"` **regardless of what the caller passed**. When a
+reasoning effort resolves — per-request `provider_options["reasoning_effort"]`
+first, provider default second, omitted if neither — the body carries
+`reasoning = {"effort": <value>, "summary": "auto"}` and any top-level
+`reasoning_effort` key MUST be removed, because the `provider_options`
+shallow merge will have injected the raw key onto the body.
+
+Every other provider rejects native Freeform specs or history before network
+I/O with the rejection error type above.
 
 ### Stream termination (native)
 
@@ -214,11 +269,31 @@ providers reject native Freeform specs or history with
 contract](#stream-termination-contract): exactly one `Done { stop_reason }`
 delta per successfully completed stream, emitted when the wire delivers a
 `response.completed` or `response.incomplete` terminal event. When the byte
-stream ends (EOF) without either terminal, the adapter yields
-`MotosanError::IncompleteStream` with the standard payload
-`<provider> ended without a terminal event` (provider names: `openai`,
-`chatgpt-codex`). `collect_model_stream` propagates that error; its
-`stop_reason` heuristic applies only to streams that did deliver a terminal.
+stream ends (EOF) without either terminal, the adapter yields or raises the
+`IncompleteStream` error (Rust `MotosanError::IncompleteStream`, Python
+`IncompleteStreamError`, TypeScript `IncompleteStreamError`) with the standard
+payload `<provider> ended without a terminal event`. The provider names on the
+native path are exactly `openai` and `chatgpt-codex` — note the hyphen, which
+differs from the underscore the legacy Python `chatgpt_codex` adapter uses.
+The exact native payloads are `openai ended without a terminal event` and
+`chatgpt-codex ended without a terminal event`.
+
+Six further rules are contract, not implementation detail, and every SDK's
+collector (`collect_model_stream` / `collectModelStream`) MUST reproduce them:
+
+- `ToolCallDone` is **authoritative**. Accumulated `FunctionArguments` /
+  `FreeformInput` deltas are display bookkeeping and MUST NOT be lowered into
+  the returned call.
+- Freeform `input` survives byte-for-byte: never parsed as JSON, never lowered
+  into function-call `arguments`.
+- `Usage` **replaces** rather than merges.
+- `ThinkingDone` wins over accumulated thinking deltas, and an explicitly
+  empty `ThinkingDone` payload resolves to no thinking at all.
+- Pending deltas drain before a stored stream error surfaces.
+- A read-idle timeout wraps the native stream on HTTP providers.
+
+The collector propagates an `IncompleteStream` error; its `stop_reason`
+heuristic applies only to streams that did deliver a terminal.
 
 ## Usage
 
