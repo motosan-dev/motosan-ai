@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Baseline is `origin/main`. Never push code straight to `main`; every task group below ships as its own PR.
-- Tracking issue is **#270**. Commit subjects use a bare conventional type — `feat:` / `fix:` / `refactor:` and nothing else, **no scope parentheses** — and end with `(#270)`. Documented in `AGENTS.md` § Commits. `docs:`, `test:`, `chore:` and `ci:` are **not** allowed here: a spec widening is a `feat:` because it extends the contract, and a new conformance suite is a `feat:` because it adds a gate that did not exist.
+- Tracking issue is **#270**. Commit subjects use a bare conventional type — `feat:` / `fix:` / `refactor:` and nothing else, **no scope parentheses** — and end with `(#270)`. Documented in `AGENTS.md` § Commits. `docs:`, `test:`, `chore:` and `ci:` are **not** allowed here: a spec widening is a `feat:` because it extends the contract, and a new conformance suite is a `feat:` because it adds a gate that did not exist. **PR titles follow the same rule as commit subjects** — a PR title is what a reviewer reads first, and letting it drift from the commit defeats the convention.
 - Every commit carries `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>` as a **second** `-m` argument.
 - Python gates, all run from `sdks/python/`: `uv run ruff check motosan_ai/`, `uv run ruff format --check motosan_ai/ tests/`, `uv run mypy motosan_ai/`, `uv run pytest tests/ -q --ignore=tests/integration/`. CI enforces mypy — the package is mypy-clean and must stay so.
 - Repo-wide gates, run from the repository root: `treefmt --fail-on-change` and `python3 scripts/check-versions.py`.
@@ -281,7 +281,7 @@ git commit -m "feat: widen the native model API spec to a cross-SDK contract (#2
 git push -u origin docs/freeform-spec-widen
 test "$(git ls-remote origin refs/heads/docs/freeform-spec-widen | cut -f1)" = "$(git rev-parse HEAD)"
 gh pr create --base main --head docs/freeform-spec-widen \
-  --title "docs: widen specs/types.md native model API to all SDKs (#270)" \
+  --title "feat: widen the native model API spec to a cross-SDK contract (#270)" \
   --body "PR S of #270. Widens the normative contract only; deliberately does not claim Python/TypeScript ship the native API — the REL PR rewrites the implementation-status line."
 ```
 
@@ -5563,7 +5563,7 @@ python3 scripts/check-versions.py
 git push -u origin test/freeform-python-conformance
 test "$(git ls-remote origin refs/heads/test/freeform-python-conformance | cut -f1)" = "$(git rev-parse HEAD)"
 gh pr create --base main --head test/freeform-python-conformance \
-  --title "test: add the Python freeform conformance suite (#270)" \
+  --title "feat: add the Python freeform conformance suite (#270)" \
   --body "Python half of PR C for #270, anchored to specs/types.md § Native Model API. The Rust and TypeScript halves ship alongside it."
 ```
 
